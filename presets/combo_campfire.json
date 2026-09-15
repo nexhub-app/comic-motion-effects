@@ -1,0 +1,52 @@
+{
+  "configVersion": "v1",
+  "effects": [
+    "parallax",
+    "breathing",
+    "embers",
+    "vignette",
+    "toneShift"
+  ],
+  "parallax": {
+    "amplitude": 0.012,
+    "periodSec": 6.0,
+    "directionDeg": 0.0,
+    "verticalRatio": 0.35
+  },
+  "breathing": {
+    "enabled": true,
+    "amplitude": 0.006,
+    "periodSec": 4.0,
+    "anchor": "center"
+  },
+  "ambient": {
+    "enabled": true,
+    "particleCount": 40,
+    "speed": 12.0,
+    "opacity": 0.16,
+    "mode": "dust"
+  },
+  "embers": {
+    "count": 36,
+    "riseCycles": 1,
+    "glowPx": 6.0,
+    "opacity": 0.75,
+    "color": "ff9a3c"
+  },
+  "toneShift": {
+    "shift": 0.045,
+    "warmthCycles": 1
+  },
+  "vignette": {
+    "strength": 0.3,
+    "cycles": 1
+  },
+  "fps": 12,
+  "durationSec": 3.0,
+  "depthMode": "autoLayers",
+  "layerCount": 3,
+  "outputFormat": "both",
+  "seed": 20260914,
+  "maxDimension": 640,
+  "maxFrames": 96
+}

@@ -1,0 +1,12 @@
+.dart_tool/
+.openclaw/
+build/
+data/ledger/
+*.log
+
+# internal docs (never upload)
+docs/
+DELIVERY/
+realtime/comparison.md
+realtime/readme.md
+presets/.json

@@ -1,0 +1,52 @@
+{
+  "configVersion": "v1",
+  "effects": [
+    "parallax",
+    "breathing",
+    "fog",
+    "lightning",
+    "vignette"
+  ],
+  "parallax": {
+    "amplitude": 0.012,
+    "periodSec": 6.0,
+    "directionDeg": 0.0,
+    "verticalRatio": 0.35
+  },
+  "breathing": {
+    "enabled": true,
+    "amplitude": 0.006,
+    "periodSec": 4.0,
+    "anchor": "center"
+  },
+  "ambient": {
+    "enabled": true,
+    "particleCount": 40,
+    "speed": 12.0,
+    "opacity": 0.16,
+    "mode": "dust"
+  },
+  "fog": {
+    "blobs": 6,
+    "driftCycles": 1,
+    "opacity": 0.08,
+    "color": "e8eef2"
+  },
+  "lightning": {
+    "strikes": 3,
+    "boltOpacity": 0.9,
+    "flashIntensity": 0.5
+  },
+  "vignette": {
+    "strength": 0.3,
+    "cycles": 1
+  },
+  "fps": 12,
+  "durationSec": 3.0,
+  "depthMode": "autoLayers",
+  "layerCount": 3,
+  "outputFormat": "both",
+  "seed": 20260914,
+  "maxDimension": 640,
+  "maxFrames": 96
+}

@@ -1,0 +1,44 @@
+{
+  "configVersion": "v1",
+  "effects": [
+    "parallax",
+    "breathing",
+    "sakura"
+  ],
+  "parallax": {
+    "amplitude": 0.012,
+    "periodSec": 6.0,
+    "directionDeg": 0.0,
+    "verticalRatio": 0.35
+  },
+  "breathing": {
+    "enabled": true,
+    "amplitude": 0.006,
+    "periodSec": 4.0,
+    "anchor": "center"
+  },
+  "ambient": {
+    "enabled": true,
+    "particleCount": 40,
+    "speed": 12.0,
+    "opacity": 0.16,
+    "mode": "dust"
+  },
+  "sakura": {
+    "count": 34,
+    "fallCycles": 1,
+    "sizePx": 4.2,
+    "swayPx": 22.0,
+    "spinTurns": 2,
+    "opacity": 0.9,
+    "color": "f6b8c8"
+  },
+  "fps": 12,
+  "durationSec": 3.0,
+  "depthMode": "autoLayers",
+  "layerCount": 3,
+  "outputFormat": "both",
+  "seed": 20260914,
+  "maxDimension": 640,
+  "maxFrames": 96
+}

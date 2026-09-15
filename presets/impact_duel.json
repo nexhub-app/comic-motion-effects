@@ -1,0 +1,40 @@
+{
+  "configVersion": "v1",
+  "effects": [
+    "parallax",
+    "breathing",
+    "impactFlash"
+  ],
+  "parallax": {
+    "amplitude": 0.012,
+    "periodSec": 6.0,
+    "directionDeg": 0.0,
+    "verticalRatio": 0.35
+  },
+  "breathing": {
+    "enabled": true,
+    "amplitude": 0.006,
+    "periodSec": 4.0,
+    "anchor": "center"
+  },
+  "ambient": {
+    "enabled": true,
+    "particleCount": 40,
+    "speed": 12.0,
+    "opacity": 0.16,
+    "mode": "dust"
+  },
+  "impactFlash": {
+    "flashes": 3,
+    "dutyFrac": 0.12,
+    "intensity": 0.55
+  },
+  "fps": 12,
+  "durationSec": 3.0,
+  "depthMode": "autoLayers",
+  "layerCount": 3,
+  "outputFormat": "both",
+  "seed": 20260914,
+  "maxDimension": 640,
+  "maxFrames": 96
+}

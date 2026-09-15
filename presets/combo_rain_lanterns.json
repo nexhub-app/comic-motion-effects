@@ -1,0 +1,58 @@
+{
+  "configVersion": "v1",
+  "effects": [
+    "parallax",
+    "breathing",
+    "rain",
+    "fireflies",
+    "heartbeat"
+  ],
+  "parallax": {
+    "amplitude": 0.012,
+    "periodSec": 6.0,
+    "directionDeg": 0.0,
+    "verticalRatio": 0.35
+  },
+  "breathing": {
+    "enabled": true,
+    "amplitude": 0.006,
+    "periodSec": 4.0,
+    "anchor": "center"
+  },
+  "ambient": {
+    "enabled": true,
+    "particleCount": 40,
+    "speed": 12.0,
+    "opacity": 0.16,
+    "mode": "dust"
+  },
+  "rain": {
+    "count": 80,
+    "fallCycles": 1,
+    "angleDeg": 12.0,
+    "lengthPx": 18.0,
+    "opacity": 0.36,
+    "color": "d8e2ee"
+  },
+  "fireflies": {
+    "count": 18,
+    "glowPx": 13.0,
+    "blinkCycles": 3,
+    "driftCycles": 2,
+    "opacity": 0.8,
+    "color": "ffe27a"
+  },
+  "heartbeat": {
+    "beats": 3,
+    "intensity": 0.01,
+    "doubleBeat": true
+  },
+  "fps": 12,
+  "durationSec": 3.0,
+  "depthMode": "autoLayers",
+  "layerCount": 3,
+  "outputFormat": "both",
+  "seed": 20260914,
+  "maxDimension": 640,
+  "maxFrames": 96
+}
