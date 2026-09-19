@@ -11,8 +11,9 @@ import 'image_model.dart';
 import 'json_compat.dart';
 import 'ledger.dart';
 import 'pipeline.dart';
-
-const String kVersion = '1.1.0';
+import 'render/quality.dart';
+import 'version.dart';
+import 'worker_pool.dart';
 
 Future<void> main(List<String> args) async {
   final parser = ArgParser()
@@ -23,7 +24,8 @@ Future<void> main(List<String> args) async {
     ..addCommand('samples')
     ..addOption('port', abbr: 'p', defaultsTo: '8787', help: 'HTTP 端口(serve)')
     ..addOption('data-dir', defaultsTo: 'data', help: '台账/上传/输出根目录')
-    ..addOption('out', abbr: 'o', defaultsTo: 'outputs', help: '输出目录(process/batch)')
+    ..addOption('out',
+        abbr: 'o', defaultsTo: 'outputs', help: '输出目录(process/batch)')
     ..addOption('input', abbr: 'i', help: '输入文件(process)或目录(batch)')
     ..addOption('config', abbr: 'c', help: '效果参数 JSON 文件路径')
     ..addOption('fps', defaultsTo: '24', help: '帧率')
@@ -36,12 +38,19 @@ Future<void> main(List<String> args) async {
     ..addOption('max-dimension', defaultsTo: '1600', help: '工作分辨率上限')
     ..addOption('effects', help: '逗号分隔效果列表，如 parallax,breathing,rain,snow')
     ..addFlag('reduced-motion', negatable: false, help: '减弱动态：输出单帧静态图')
-    ..addFlag('dither', negatable: true, defaultsTo: null, help: 'GIF 色带抖动（默认开）')
+    ..addFlag('dither',
+        negatable: true,
+        defaultsTo: null,
+        help: 'GIF 色带抖动（默认关；抖动核走配置 quality.ditherMode）')
+    ..addOption('quality', help: '渲染档 legacy|standard|rich（legacy 逐字节复现 v1.2）')
+    ..addOption('parallel',
+        defaultsTo: 'auto',
+        help: '帧渲染并行 isolate 数：auto 或正整数（1=串行）。只影响耗时，不影响输出字节')
     ..addFlag('version', negatable: false, help: '打印版本');
   final res = parser.parse(args);
 
   if (res['version'] == true) {
-    stdout.writeln('comic-motion-backend $kVersion');
+    stdout.writeln('comic-motion-backend $comicMotionVersion');
     return;
   }
 
@@ -55,9 +64,9 @@ Future<void> main(List<String> args) async {
     case 'serve':
       await _serve(int.parse(res['port'] as String), res['data-dir'] as String);
     case 'process':
-      _process(res);
+      await _process(res);
     case 'batch':
-      _batch(res);
+      await _batch(res);
     case 'job':
       _job(res);
     case 'samples':
@@ -97,25 +106,42 @@ EffectConfig _cfg(ArgResults res) {
         .split(',')
         .map((s) => s.trim())
         .where((s) => s.isNotEmpty)
-        .map((s) {
-      for (final k in EffectKind.values) {
-        if (k.name == s) return k;
-      }
-      throw ConfigException(
-          '未知效果名称: "$s"（可选: ${EffectKind.values.map((e) => e.name).join(',')}）');
-    }).toList();
+        .map(effectKindFromName)
+        .toList();
   }
   if (res['reduced-motion'] == true) {
     cfg.reducedMotion = true;
   }
   final ditherArg = res['dither'] as bool?;
   if (ditherArg != null) {
-    cfg.quality = QualityParams(dither: ditherArg);
+    cfg.quality = cfg.quality.copyWith(dither: ditherArg);
+  }
+  final qualityArg = res['quality'] as String?;
+  if (qualityArg != null) {
+    final hit = RenderTier.values.where((t) => t.name == qualityArg).toList();
+    if (hit.isEmpty) {
+      throw ConfigException(
+          '未知质量档: "$qualityArg"（可选: ${RenderTier.values.map((t) => t.name).join(',')}）');
+    }
+    cfg.quality = cfg.quality.copyWith(tier: hit.first);
   }
   return cfg;
 }
 
-void _process(ArgResults res) {
+/// `--parallel`：auto = 引擎默认（min(8, 核数)），数字 = 显式并行度。
+/// 执行期参数，绝不写进 EffectConfig —— 它不改变输出字节，写进配置会污染指纹。
+int? _parallelArg(ArgResults res) {
+  final v = (res['parallel'] as String? ?? 'auto').trim();
+  if (v == 'auto' || v.isEmpty) return null;
+  final n = int.tryParse(v);
+  if (n == null || n < 1) {
+    stderr.writeln('--parallel 需要正整数或 auto，收到: "$v"');
+    exit(64);
+  }
+  return n;
+}
+
+Future<void> _process(ArgResults res) async {
   final input = res['input'] as String?;
   if (input == null) {
     stderr.writeln('缺少 --input <图片文件>');
@@ -123,10 +149,10 @@ void _process(ArgResults res) {
   }
   final cfg = _cfg(res);
   final ledger = Ledger('${res['data-dir'] as String}/ledger');
-  final jobId =
-      'cli-${DateTime.now().millisecondsSinceEpoch}';
+  final jobId = 'cli-${DateTime.now().millisecondsSinceEpoch}';
   try {
-    final r = MotionPipeline(cfg).processFile(input, res['out'] as String);
+    final r = await MotionPipeline(cfg, parallel: _parallelArg(res))
+        .processFile(input, res['out'] as String);
     ledger.appendJob(
       jobId: jobId,
       input: input,
@@ -140,24 +166,45 @@ void _process(ArgResults res) {
       layerCount: r.layerCount,
       frameCount: r.frameCount,
       elapsedMs: r.elapsedMs,
+      parallel: r.parallel,
+      parallelFallback: r.parallelFallback ? true : null,
+      warnings: r.warnings,
     );
+    for (final w in r.warnings) {
+      stderr.writeln('警告: $w');
+    }
     stdout.writeln(jsonEncodeCompat(r.toJson()));
   } on ImageDecodeException catch (e) {
     ledger.appendJob(
-        jobId: jobId, input: input, configHash: cfg.configHash,
-        status: 'failed', error: e.toString());
+        jobId: jobId,
+        input: input,
+        configHash: cfg.configHash,
+        status: 'failed',
+        error: e.toString());
     stderr.writeln('解码失败: $e');
     exit(2);
   } on ImageTooLargeException catch (e) {
     ledger.appendJob(
-        jobId: jobId, input: input, configHash: cfg.configHash,
-        status: 'failed', error: e.toString());
+        jobId: jobId,
+        input: input,
+        configHash: cfg.configHash,
+        status: 'failed',
+        error: e.toString());
     stderr.writeln('图片过大: $e');
     exit(2);
+  } on EngineWorkerException catch (e) {
+    ledger.appendJob(
+        jobId: jobId,
+        input: input,
+        configHash: cfg.configHash,
+        status: 'failed',
+        error: '${EngineWorkerException.code}: $e');
+    stderr.writeln('${EngineWorkerException.code}: $e');
+    exit(4);
   }
 }
 
-void _batch(ArgResults res) {
+Future<void> _batch(ArgResults res) async {
   final input = res['input'] as String?;
   if (input == null) {
     stderr.writeln('缺少 --input <图片目录>');
@@ -166,11 +213,12 @@ void _batch(ArgResults res) {
   final cfg = _cfg(res);
   final ledger = Ledger('${res['data-dir'] as String}/ledger');
   final runner = BatchRunner(ledger);
-  final results = runner.runFolder(
+  final results = await runner.runFolder(
       inputDir: input,
       outputDir: res['out'] as String,
       config: cfg,
-      jobIdPrefix: 'batchcli');
+      jobIdPrefix: 'batchcli',
+      parallel: _parallelArg(res));
   final ok = results.where((r) => r.ok).length;
   final fail = results.where((r) => !r.ok).length;
   stdout.writeln(jsonEncodeCompat({
@@ -189,22 +237,21 @@ void _job(ArgResults res) {
     stderr.writeln('用法: job <jobId|all> [--data-dir ...]');
     exit(64);
   }
-  final entries = rest[0] == 'all'
-      ? ledger.query()
-      : ledger.query(jobId: rest[0]);
-  stdout.writeln(jsonEncodeCompat({'count': entries.length, 'entries': entries}));
+  final entries =
+      rest[0] == 'all' ? ledger.query() : ledger.query(jobId: rest[0]);
+  stdout
+      .writeln(jsonEncodeCompat({'count': entries.length, 'entries': entries}));
 }
 
 Future<void> _serve(int port, String dataDir) async {
   final ledger = Ledger('$dataDir/ledger');
-  final service =
-      MotionApiService(dataDir: dataDir, ledger: ledger);
+  final service = MotionApiService(dataDir: dataDir, ledger: ledger);
   final handler = const shelf.Pipeline()
       .addMiddleware(shelf.logRequests())
       .addHandler(service.router.call);
   final server = await shelf_io.serve(handler, '0.0.0.0', port);
   stdout.writeln(
-      'comic-motion-backend $kVersion listening on http://0.0.0.0:${server.port}');
+      'comic-motion-backend $comicMotionVersion listening on http://0.0.0.0:${server.port}');
   stdout.writeln('  GET  /health');
   stdout.writeln('  POST /api/v1/jobs   {inputPath|inputBase64, config{...}}');
   stdout.writeln('  GET  /api/v1/jobs/<id>');

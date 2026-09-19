@@ -5,6 +5,9 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'render/envelope.dart';
+import 'render/quality.dart';
+
 /// Which motion effects to render, with per-effect amplitude.
 /// v1.1 adds: rain, snow, sakura, fireflies, godRays, speedLines,
 /// impactFlash, heartbeat (all opt-in via [EffectConfig.effects]).
@@ -30,6 +33,27 @@ enum EffectKind {
   starlight,
   slowPush,
   shimmer,
+  focusLines,
+  screenTone,
+  mangaShake,
+  impactRings,
+  brushStreak,
+  flame,
+  smoke,
+  bubbles,
+  leaves,
+  meteors,
+  moodScript,
+}
+
+/// 效果名 → 枚举。未知名一律抛 [ConfigException]，不静默退化成某个效果：
+/// CLI 的 `--effects` 与配置文件里的 `effects` 数组共用这条校验。
+EffectKind effectKindFromName(Object? name) {
+  for (final k in EffectKind.values) {
+    if (k.name == name) return k;
+  }
+  throw ConfigException(
+      '未知效果名称: "$name"（可选: ${EffectKind.values.map((e) => e.name).join(',')}）');
 }
 
 enum DepthMode { autoLayers, singleLayer }
@@ -474,8 +498,7 @@ class LightningParams {
         'flashIntensity': flashIntensity,
       };
 
-  static LightningParams fromJson(Map<String, dynamic> j) =>
-      LightningParams(
+  static LightningParams fromJson(Map<String, dynamic> j) => LightningParams(
         strikes: (j['strikes'] as num?)?.toInt() ?? 2,
         boltOpacity: (j['boltOpacity'] as num?)?.toDouble() ?? 0.9,
         flashIntensity: (j['flashIntensity'] as num?)?.toDouble() ?? 0.45,
@@ -598,18 +621,522 @@ class ShimmerParams {
       );
 }
 
-/// 渲染质量参数（v1.2）。
-class QualityParams {
-  const QualityParams({this.dither = false});
+/// ---- v1.3 新增动效参数 ----
+/// 漫画动势语言：集中线 / 网点纸 / 震屏 / 冲击波环 / 飞白笔触。
 
-  /// Floyd–Steinberg 误差扩散抖动：显著减轻 GIF 256 色渐变色带。
+class FocusLinesParams {
+  const FocusLinesParams({
+    this.lines = 28,
+    this.focalX = 0.5,
+    this.focalY = 0.45,
+    this.innerFrac = 0.26,
+    this.wedgeDeg = 2.4,
+    this.turnCycles = 1,
+    this.opacity = 0.34,
+    this.mode = 'black',
+  });
+
+  final int lines; // 楔形条数
+  final double focalX, focalY; // 汇聚点（归一化）
+  final double innerFrac; // 内圈留空半径 / 半对角，中心区域不画线
+  final double wedgeDeg; // 单条楔形半顶角（度）
+  final int turnCycles; // 每循环整圈旋转数（整数 → 无缝）
+  final double opacity;
+  final String mode; // black | white | both
+
+  Map<String, dynamic> toJson() => {
+        'lines': lines,
+        'focalX': focalX,
+        'focalY': focalY,
+        'innerFrac': innerFrac,
+        'wedgeDeg': wedgeDeg,
+        'turnCycles': turnCycles,
+        'opacity': opacity,
+        'mode': mode,
+      };
+
+  static FocusLinesParams fromJson(Map<String, dynamic> j) {
+    final m = (j['mode'] as String?) ?? 'black';
+    return FocusLinesParams(
+      lines: (j['lines'] as num?)?.toInt() ?? 28,
+      focalX: (j['focalX'] as num?)?.toDouble() ?? 0.5,
+      focalY: (j['focalY'] as num?)?.toDouble() ?? 0.45,
+      innerFrac: (j['innerFrac'] as num?)?.toDouble() ?? 0.26,
+      wedgeDeg: (j['wedgeDeg'] as num?)?.toDouble() ?? 2.4,
+      turnCycles: (j['turnCycles'] as num?)?.toInt() ?? 1,
+      opacity: (j['opacity'] as num?)?.toDouble() ?? 0.34,
+      mode: (m == 'white' || m == 'both') ? m : 'black',
+    );
+  }
+}
+
+/// 网点纸：旋转方格网点/线网/十字网，按整数 tile 漂移 + 疏密呼吸。
+class ScreenToneParams {
+  const ScreenToneParams({
+    this.spacingPx = 8.0,
+    this.density = 0.34,
+    this.driftTilesX = 2,
+    this.driftTilesY = 1,
+    this.densityCycles = 1,
+    this.angleDeg = 30.0,
+    this.opacity = 0.16,
+    this.mode = 'dot',
+  });
+
+  final double spacingPx; // 网格间距（也是图案周期）
+  final double density; // 网点占空比（0-1）：点面积 / 格面积
+  final int driftTilesX; // 每循环沿旋转轴漂移的整格数（整数 → 无缝）
+  final int driftTilesY;
+  final int densityCycles; // 每循环疏密往复次数
+  final double angleDeg; // 网点旋转角
+  final double opacity;
+  final String mode; // dot | line | cross
+
+  Map<String, dynamic> toJson() => {
+        'spacingPx': spacingPx,
+        'density': density,
+        'driftTilesX': driftTilesX,
+        'driftTilesY': driftTilesY,
+        'densityCycles': densityCycles,
+        'angleDeg': angleDeg,
+        'opacity': opacity,
+        'mode': mode,
+      };
+
+  static ScreenToneParams fromJson(Map<String, dynamic> j) {
+    final m = (j['mode'] as String?) ?? 'dot';
+    return ScreenToneParams(
+      spacingPx: (j['spacingPx'] as num?)?.toDouble() ?? 8.0,
+      density: (j['density'] as num?)?.toDouble() ?? 0.34,
+      driftTilesX: (j['driftTilesX'] as num?)?.toInt() ?? 2,
+      driftTilesY: (j['driftTilesY'] as num?)?.toInt() ?? 1,
+      densityCycles: (j['densityCycles'] as num?)?.toInt() ?? 1,
+      angleDeg: (j['angleDeg'] as num?)?.toDouble() ?? 30.0,
+      opacity: (j['opacity'] as num?)?.toDouble() ?? 0.16,
+      mode: (m == 'line' || m == 'cross') ? m : 'dot',
+    );
+  }
+}
+
+/// 震屏：每个爆点一次衰减抖动，方向均分圆周 + 手绘角抖动。
+class MangaShakeParams {
+  const MangaShakeParams({
+    this.shakes = 6,
+    this.amplitude = 0.006,
+    this.decay = 0.72,
+    this.rotJitDeg = 0.12,
+  });
+
+  final int shakes; // 每循环爆点数（整数 → 无缝）
+  final double amplitude; // 峰值位移占图宽比例
+  final double decay; // 爆点内衰减（env = (1-ph)^(2·decay)）
+  final double rotJitDeg; // 逐爆点方向抖动（度）
+
+  Map<String, dynamic> toJson() => {
+        'shakes': shakes,
+        'amplitude': amplitude,
+        'decay': decay,
+        'rotJitDeg': rotJitDeg,
+      };
+
+  static MangaShakeParams fromJson(Map<String, dynamic> j) => MangaShakeParams(
+        shakes: (j['shakes'] as num?)?.toInt() ?? 6,
+        amplitude: (j['amplitude'] as num?)?.toDouble() ?? 0.006,
+        decay: (j['decay'] as num?)?.toDouble() ?? 0.72,
+        rotJitDeg: (j['rotJitDeg'] as num?)?.toDouble() ?? 0.12,
+      );
+}
+
+/// 冲击波环：自焦点外扩的漫画描边环，多环错相；`shock` 另加一道内侧暗边。
+class ImpactRingsParams {
+  const ImpactRingsParams({
+    this.rings = 3,
+    this.focalX = 0.5,
+    this.focalY = 0.5,
+    this.innerFrac = 0.05,
+    this.outerFrac = 0.55,
+    this.thicknessPx = 3.4,
+    this.pulses = 2,
+    this.opacity = 0.5,
+    this.mode = 'ring',
+  });
+
+  final int rings; // 同屏环数（错相排列）
+  final double focalX, focalY; // 焦点（归一化）
+  final double innerFrac; // 起始半径占半对角线
+  final double outerFrac; // 终止半径占半对角线
+  final double thicknessPx;
+  final int pulses; // 每循环扩散轮数（整数 → 无缝）
+  final double opacity;
+  final String mode; // ring | shock
+
+  Map<String, dynamic> toJson() => {
+        'rings': rings,
+        'focalX': focalX,
+        'focalY': focalY,
+        'innerFrac': innerFrac,
+        'outerFrac': outerFrac,
+        'thicknessPx': thicknessPx,
+        'pulses': pulses,
+        'opacity': opacity,
+        'mode': mode,
+      };
+
+  static ImpactRingsParams fromJson(Map<String, dynamic> j) {
+    final m = (j['mode'] as String?) ?? 'ring';
+    return ImpactRingsParams(
+      rings: (j['rings'] as num?)?.toInt() ?? 3,
+      focalX: (j['focalX'] as num?)?.toDouble() ?? 0.5,
+      focalY: (j['focalY'] as num?)?.toDouble() ?? 0.5,
+      innerFrac: (j['innerFrac'] as num?)?.toDouble() ?? 0.05,
+      outerFrac: (j['outerFrac'] as num?)?.toDouble() ?? 0.55,
+      thicknessPx: (j['thicknessPx'] as num?)?.toDouble() ?? 3.4,
+      pulses: (j['pulses'] as num?)?.toInt() ?? 2,
+      opacity: (j['opacity'] as num?)?.toDouble() ?? 0.5,
+      mode: m == 'shock' ? m : 'ring',
+    );
+  }
+}
+
+/// 飞白笔触：沿固定方向的干笔，一维噪声啃出缺口，运笔→停留→淡出。
+class BrushStreakParams {
+  const BrushStreakParams({
+    this.streaks = 12,
+    this.lengthFrac = 0.42,
+    this.thicknessPx = 7.0,
+    this.angleDeg = 8.0,
+    this.pulses = 2,
+    this.gapFreq = 0.11,
+    this.opacity = 0.40,
+  });
+
+  final int streaks; // 笔触条数
+  final double lengthFrac; // 长度占短边比例
+  final double thicknessPx;
+  final double angleDeg; // 主运笔方向
+  final int pulses; // 每循环运笔轮数（整数 → 无缝）
+  final double gapFreq; // 缺口频率（周/像素）；渲染内夹到 ≤0.25 以免与 2px 段长混叠
+  final double opacity;
+
+  Map<String, dynamic> toJson() => {
+        'streaks': streaks,
+        'lengthFrac': lengthFrac,
+        'thicknessPx': thicknessPx,
+        'angleDeg': angleDeg,
+        'pulses': pulses,
+        'gapFreq': gapFreq,
+        'opacity': opacity,
+      };
+
+  static BrushStreakParams fromJson(Map<String, dynamic> j) =>
+      BrushStreakParams(
+        streaks: (j['streaks'] as num?)?.toInt() ?? 12,
+        lengthFrac: (j['lengthFrac'] as num?)?.toDouble() ?? 0.42,
+        thicknessPx: (j['thicknessPx'] as num?)?.toDouble() ?? 7.0,
+        angleDeg: (j['angleDeg'] as num?)?.toDouble() ?? 8.0,
+        pulses: (j['pulses'] as num?)?.toInt() ?? 2,
+        gapFreq: (j['gapFreq'] as num?)?.toDouble() ?? 0.11,
+        opacity: (j['opacity'] as num?)?.toDouble() ?? 0.40,
+      );
+}
+
+/// 火焰：底部一排火苗，节点自下而上堆叠，颜色由根部热色过渡到尖端冷色。
+class FlameParams {
+  const FlameParams({
+    this.tongues = 14,
+    this.riseCycles = 2,
+    this.heightFrac = 0.18,
+    this.flickerCycles = 6,
+    this.hot = 'fff3b0',
+    this.cold = 'ff5a1e',
+    this.opacity = 0.72,
+  });
+
+  final int tongues; // 火苗条数
+  final int riseCycles; // 每循环摆动轮数（整数 → 无缝）
+  final double heightFrac; // 苗高占画高比例
+  final int flickerCycles; // 每循环闪烁轮数
+  final String hot; // 根部（热）色
+  final String cold; // 尖端（冷）色
+  final double opacity;
+
+  Map<String, dynamic> toJson() => {
+        'tongues': tongues,
+        'riseCycles': riseCycles,
+        'heightFrac': heightFrac,
+        'flickerCycles': flickerCycles,
+        'hot': hot,
+        'cold': cold,
+        'opacity': opacity,
+      };
+
+  static FlameParams fromJson(Map<String, dynamic> j) => FlameParams(
+        tongues: (j['tongues'] as num?)?.toInt() ?? 14,
+        riseCycles: (j['riseCycles'] as num?)?.toInt() ?? 2,
+        heightFrac: (j['heightFrac'] as num?)?.toDouble() ?? 0.18,
+        flickerCycles: (j['flickerCycles'] as num?)?.toInt() ?? 6,
+        hot: _normHex(j['hot'] as String?) ?? 'fff3b0',
+        cold: _normHex(j['cold'] as String?) ?? 'ff5a1e',
+        opacity: (j['opacity'] as num?)?.toDouble() ?? 0.72,
+      );
+}
+
+/// 烟雾：雾团上升而非横漂，三频叠加扰动 + 半径随高度放大（扩散感）。
+class SmokeParams {
+  const SmokeParams({
+    this.puffs = 16,
+    this.riseCycles = 1,
+    this.sizePx = 26.0,
+    this.turbulence = 0.35,
+    this.opacity = 0.14,
+    this.color = 'c9ccd4',
+  });
+
+  final int puffs; // 雾团数
+  final int riseCycles; // 每循环上升轮数（整数 → 无缝）
+  final double sizePx; // 起始半径
+  final double turbulence; // 扰动幅度（相对起始半径）
+  final double opacity;
+  final String color;
+
+  Map<String, dynamic> toJson() => {
+        'puffs': puffs,
+        'riseCycles': riseCycles,
+        'sizePx': sizePx,
+        'turbulence': turbulence,
+        'opacity': opacity,
+        'color': color,
+      };
+
+  static SmokeParams fromJson(Map<String, dynamic> j) => SmokeParams(
+        puffs: (j['puffs'] as num?)?.toInt() ?? 16,
+        riseCycles: (j['riseCycles'] as num?)?.toInt() ?? 1,
+        sizePx: (j['sizePx'] as num?)?.toDouble() ?? 26.0,
+        turbulence: (j['turbulence'] as num?)?.toDouble() ?? 0.35,
+        opacity: (j['opacity'] as num?)?.toDouble() ?? 0.14,
+        color: _normHex(j['color'] as String?) ?? 'c9ccd4',
+      );
+}
+
+/// 气泡：描边圆环 + 内部弱填充 + 左上高光，边升边左右摆。
+class BubblesParams {
+  const BubblesParams({
+    this.count = 18,
+    this.riseCycles = 1,
+    this.sizePx = 6.5,
+    this.wobblePx = 10.0,
+    this.opacity = 0.5,
+    this.color = 'dff2ff',
+  });
+
+  final int count;
+  final int riseCycles; // 每循环上升轮数（整数 → 无缝）
+  final double sizePx; // 半径
+  final double wobblePx; // 横向摆动幅度
+  final double opacity;
+  final String color;
+
+  Map<String, dynamic> toJson() => {
+        'count': count,
+        'riseCycles': riseCycles,
+        'sizePx': sizePx,
+        'wobblePx': wobblePx,
+        'opacity': opacity,
+        'color': color,
+      };
+
+  static BubblesParams fromJson(Map<String, dynamic> j) => BubblesParams(
+        count: (j['count'] as num?)?.toInt() ?? 18,
+        riseCycles: (j['riseCycles'] as num?)?.toInt() ?? 1,
+        sizePx: (j['sizePx'] as num?)?.toDouble() ?? 6.5,
+        wobblePx: (j['wobblePx'] as num?)?.toDouble() ?? 10.0,
+        opacity: (j['opacity'] as num?)?.toDouble() ?? 0.5,
+        color: _normHex(j['color'] as String?) ?? 'dff2ff',
+      );
+}
+
+/// 落叶：与樱花同族的下落骨架，把自转换成「翻面」——宽度按 |cos| 收拢，
+/// 侧立的瞬间切深色，两片面因此看起来不同。
+class LeavesParams {
+  const LeavesParams({
+    this.count = 22,
+    this.fallCycles = 1,
+    this.sizePx = 6.8,
+    this.flipTurns = 2,
+    this.swayPx = 26.0,
+    this.opacity = 0.88,
+    this.palette = 'autumn',
+  });
+
+  final int count;
+  final int fallCycles; // 每循环下落轮数（整数 → 无缝）
+  final double sizePx; // 叶长的一半
+  final int flipTurns; // 每循环翻面圈数（整数 → 无缝）
+  final double swayPx;
+  final double opacity;
+  final String palette; // autumn | spring | summer
+
+  /// 三组色：[0] 叶面、[1] 叶背、[2] 侧立深色。
+  List<int> paletteRgb() => _leafPalettes[palette] ?? _leafPalettes['autumn']!;
+
+  Map<String, dynamic> toJson() => {
+        'count': count,
+        'fallCycles': fallCycles,
+        'sizePx': sizePx,
+        'flipTurns': flipTurns,
+        'swayPx': swayPx,
+        'opacity': opacity,
+        'palette': palette,
+      };
+
+  static LeavesParams fromJson(Map<String, dynamic> j) {
+    final pal = (j['palette'] as String?) ?? 'autumn';
+    return LeavesParams(
+      count: (j['count'] as num?)?.toInt() ?? 22,
+      fallCycles: (j['fallCycles'] as num?)?.toInt() ?? 1,
+      sizePx: (j['sizePx'] as num?)?.toDouble() ?? 6.8,
+      flipTurns: (j['flipTurns'] as num?)?.toInt() ?? 2,
+      swayPx: (j['swayPx'] as num?)?.toDouble() ?? 26.0,
+      opacity: (j['opacity'] as num?)?.toDouble() ?? 0.88,
+      palette: _leafPalettes.containsKey(pal) ? pal : 'autumn',
+    );
+  }
+}
+
+/// 落叶配色表：每档 3 组色（叶面 / 叶背 / 侧立深色）。
+const Map<String, List<int>> _leafPalettes = {
+  'autumn': [0xc1a470, 0xd98b4a, 0xa8542f],
+  'spring': [0x9fc97a, 0x74ab55, 0x4c7a3a],
+  'summer': [0x6fae7c, 0x4f8a5f, 0x2f5b3f],
+};
+
+/// 流星雨：与闪电同族的窗口式设计，短窗口内沿固定角度划出亮头透明尾。
+class MeteorsParams {
+  const MeteorsParams({
+    this.count = 5,
+    this.streakCycles = 2,
+    // 屏幕坐标 y 轴向下，正值 = 向右下划落。
+    this.angleDeg = 32.0,
+    this.lengthFrac = 0.22,
+    this.windowFrac = 0.18,
+    this.opacity = 0.85,
+  });
+
+  final int count;
+  final int streakCycles; // 每循环流星轮数（整数 → 无缝）
+  final double angleDeg; // 划落方向
+  final double lengthFrac; // 尾迹长度占短边比例
+  final double windowFrac; // 单颗可见窗口占本轮比例
+  final double opacity;
+
+  Map<String, dynamic> toJson() => {
+        'count': count,
+        'streakCycles': streakCycles,
+        'angleDeg': angleDeg,
+        'lengthFrac': lengthFrac,
+        'windowFrac': windowFrac,
+        'opacity': opacity,
+      };
+
+  static MeteorsParams fromJson(Map<String, dynamic> j) => MeteorsParams(
+        count: (j['count'] as num?)?.toInt() ?? 5,
+        streakCycles: (j['streakCycles'] as num?)?.toInt() ?? 2,
+        angleDeg: (j['angleDeg'] as num?)?.toDouble() ?? 32.0,
+        lengthFrac: (j['lengthFrac'] as num?)?.toDouble() ?? 0.22,
+        windowFrac: (j['windowFrac'] as num?)?.toDouble() ?? 0.18,
+        opacity: (j['opacity'] as num?)?.toDouble() ?? 0.85,
+      );
+}
+
+/// moodScript 情绪包络：自身不绘制任何东西，只按整循环曲线缩放已有动效的
+/// 振幅/浓度/曝光，并给 toneShift 与 vignette 叠加增量（见 render/envelope.dart）。
+class MoodScriptParams {
+  const MoodScriptParams({
+    this.mood = 'tension',
+    this.cycles = 1,
+    this.strength = 1.0,
+  });
+
+  final String mood; // tension | calm | eerie | burst
+  final int cycles; // 每条循环重复的包络轮数（整数 → 无缝）
+  final double strength; // 与恒等因子的混合比：0 = 完全不调制
+
+  Map<String, dynamic> toJson() => {
+        'mood': mood,
+        'cycles': cycles,
+        'strength': strength,
+      };
+
+  static MoodScriptParams fromJson(Map<String, dynamic> j) => MoodScriptParams(
+        mood: (j['mood'] as String?) ?? 'tension',
+        cycles: (j['cycles'] as num?)?.toInt() ?? 1,
+        strength: (j['strength'] as num?)?.toDouble() ?? 1.0,
+      );
+}
+
+/// 渲染质量参数（v1.2 引入抖动，v1.3 引入分级）。
+class QualityParams {
+  const QualityParams({
+    this.dither = false,
+    this.ditherMode = 'floyd',
+    this.tier = RenderTier.legacy,
+    this.mipLevels = 2,
+    this.edgeStretchPx = 6,
+  });
+
+  /// 误差扩散抖动：显著减轻 GIF 256 色渐变色带。
   /// 关闭后回退到最近色映射（v1.1 行为）。
   final bool dither;
 
-  Map<String, dynamic> toJson() => {'dither': dither};
+  /// 抖动核：floyd（v1.2 行为）| sierra（更柔和，standard+ 才有意义）。
+  final String ditherMode;
+
+  /// 渲染档位；legacy 保证与 v1.2 逐字节一致。
+  final RenderTier tier;
+
+  /// 层栅格预建的 mipmap 级数（1..2），供 scale<1 的面积平均取样。
+  final int mipLevels;
+
+  /// 层边缘色外扩像素（0..16），消除视差位移时的露底双边。
+  final int edgeStretchPx;
+
+  /// v1.2 兼容：全默认时整段不序列化，保经典配置指纹不变。
+  bool get isDefault =>
+      !dither &&
+      ditherMode == 'floyd' &&
+      tier == RenderTier.legacy &&
+      mipLevels == 2 &&
+      edgeStretchPx == 6;
+
+  QualityParams copyWith(
+          {bool? dither,
+          String? ditherMode,
+          RenderTier? tier,
+          int? mipLevels,
+          int? edgeStretchPx}) =>
+      QualityParams(
+        dither: dither ?? this.dither,
+        ditherMode: ditherMode ?? this.ditherMode,
+        tier: tier ?? this.tier,
+        mipLevels: mipLevels ?? this.mipLevels,
+        edgeStretchPx: edgeStretchPx ?? this.edgeStretchPx,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'dither': dither,
+        if (ditherMode != 'floyd') 'ditherMode': ditherMode,
+        if (tier != RenderTier.legacy) 'tier': tier.name,
+        if (mipLevels != 2) 'mipLevels': mipLevels,
+        if (edgeStretchPx != 6) 'edgeStretchPx': edgeStretchPx,
+      };
 
   static QualityParams fromJson(Map<String, dynamic> j) => QualityParams(
-        dither: j['dither'] as bool? ?? true,
+        dither: j['dither'] as bool? ?? false,
+        ditherMode: (j['ditherMode'] == 'sierra') ? 'sierra' : 'floyd',
+        tier: RenderTier.parse(j['tier'] as String?),
+        mipLevels: ((j['mipLevels'] as num?)?.toInt() ?? 2).clamp(1, 2),
+        edgeStretchPx:
+            ((j['edgeStretchPx'] as num?)?.toInt() ?? 6).clamp(0, 16),
       );
 }
 
@@ -639,6 +1166,17 @@ class EffectConfig {
     StarlightParams? starlight,
     SlowPushParams? slowPush,
     ShimmerParams? shimmer,
+    FocusLinesParams? focusLines,
+    ScreenToneParams? screenTone,
+    MangaShakeParams? mangaShake,
+    ImpactRingsParams? impactRings,
+    BrushStreakParams? brushStreak,
+    FlameParams? flame,
+    SmokeParams? smoke,
+    BubblesParams? bubbles,
+    LeavesParams? leaves,
+    MeteorsParams? meteors,
+    MoodScriptParams? moodScript,
     QualityParams? quality,
     this.fps = 24,
     this.durationSec = 4.0,
@@ -668,6 +1206,17 @@ class EffectConfig {
         starlight = starlight ?? StarlightParams(),
         slowPush = slowPush ?? SlowPushParams(),
         shimmer = shimmer ?? ShimmerParams(),
+        focusLines = focusLines ?? FocusLinesParams(),
+        screenTone = screenTone ?? ScreenToneParams(),
+        mangaShake = mangaShake ?? MangaShakeParams(),
+        impactRings = impactRings ?? ImpactRingsParams(),
+        brushStreak = brushStreak ?? BrushStreakParams(),
+        flame = flame ?? FlameParams(),
+        smoke = smoke ?? SmokeParams(),
+        bubbles = bubbles ?? BubblesParams(),
+        leaves = leaves ?? LeavesParams(),
+        meteors = meteors ?? MeteorsParams(),
+        moodScript = moodScript ?? MoodScriptParams(),
         quality = quality ?? QualityParams();
 
   List<EffectKind> effects;
@@ -690,8 +1239,22 @@ class EffectConfig {
   StarlightParams starlight;
   SlowPushParams slowPush;
   ShimmerParams shimmer;
+  FocusLinesParams focusLines;
+  ScreenToneParams screenTone;
+  MangaShakeParams mangaShake;
+  ImpactRingsParams impactRings;
+  BrushStreakParams brushStreak;
+  FlameParams flame;
+  SmokeParams smoke;
+  BubblesParams bubbles;
+  LeavesParams leaves;
+  MeteorsParams meteors;
 
-  /// 渲染质量（v1.2：GIF 抖动等）。默认 dither=true。
+  /// 情绪包络（v1.3）：仅当 `effects` 含 moodScript 时生效并序列化。
+  MoodScriptParams moodScript;
+
+  /// 渲染质量（v1.2 引入 GIF 抖动）。默认 dither=false + tier=legacy，
+  /// 即「与 v1.2 逐字节一致」的那一档；JSON 读回时也走同一套默认。
   QualityParams quality;
 
   final int fps;
@@ -710,6 +1273,16 @@ class EffectConfig {
       reducedMotion ? 1 : (fps * durationSec).round().clamp(2, maxFrames);
 
   String get version => 'v1';
+
+  /// 配置层面的可见告警（写进台账，不参与 configHash）。
+  /// 目前只有 moodScript 的未知 mood 回落会报：效果参数越界在取样处静默 clamp，
+  /// 而 fps/layerCount 这类结构性整型不夹紧（越界按各自通路的退化行为出图）。
+  List<String> get warnings {
+    if (!effects.contains(EffectKind.moodScript)) return const [];
+    final m = moodScript.mood.trim().toLowerCase();
+    if (MotionEnvelope.knownMoods.contains(m)) return const [];
+    return ['moodScript: 未知 mood "${moodScript.mood}"，已回落 calm'];
+  }
 
   Map<String, dynamic> toJson() => {
         'configVersion': version,
@@ -743,8 +1316,26 @@ class EffectConfig {
         if (effects.contains(EffectKind.slowPush))
           'slowPush': slowPush.toJson(),
         if (effects.contains(EffectKind.shimmer)) 'shimmer': shimmer.toJson(),
-        // v1.2 质量段：仅在 dither=true（非默认）时序列化，保经典指纹不变
-        if (quality.dither) 'quality': quality.toJson(),
+        // v1.3 新效果：同样只在启用时序列化
+        if (effects.contains(EffectKind.focusLines))
+          'focusLines': focusLines.toJson(),
+        if (effects.contains(EffectKind.screenTone))
+          'screenTone': screenTone.toJson(),
+        if (effects.contains(EffectKind.mangaShake))
+          'mangaShake': mangaShake.toJson(),
+        if (effects.contains(EffectKind.impactRings))
+          'impactRings': impactRings.toJson(),
+        if (effects.contains(EffectKind.brushStreak))
+          'brushStreak': brushStreak.toJson(),
+        if (effects.contains(EffectKind.flame)) 'flame': flame.toJson(),
+        if (effects.contains(EffectKind.smoke)) 'smoke': smoke.toJson(),
+        if (effects.contains(EffectKind.bubbles)) 'bubbles': bubbles.toJson(),
+        if (effects.contains(EffectKind.leaves)) 'leaves': leaves.toJson(),
+        if (effects.contains(EffectKind.meteors)) 'meteors': meteors.toJson(),
+        if (effects.contains(EffectKind.moodScript))
+          'moodScript': moodScript.toJson(),
+        // v1.2 质量段：仅非默认时序列化，保经典指纹不变
+        if (!quality.isDefault) 'quality': quality.toJson(),
         'fps': fps,
         'durationSec': durationSec,
         'depthMode': depthMode.name,
@@ -756,8 +1347,7 @@ class EffectConfig {
         if (reducedMotion) 'reducedMotion': true,
       };
 
-  String toJsonString() =>
-      const JsonEncoder.withIndent('  ').convert(toJson());
+  String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
 
   /// CLI override helper (mutates nested param objects in place).
   void applyOverrides({double? amplitude, double? directionDeg}) {
@@ -793,19 +1383,18 @@ class EffectConfig {
   }
 
   static EffectConfig fromJson(Map<String, dynamic> j) {
-    final effects = ((j['effects'] as List?) ?? const ['parallax', 'breathing', 'ambient'])
-        .map((e) => EffectKind.values
-            .firstWhere((k) => k.name == e, orElse: () => EffectKind.parallax))
+    final effects = ((j['effects'] as List?) ??
+            const ['parallax', 'breathing', 'ambient'])
+        .map((e) => effectKindFromName(e))
         .toList();
     var depthMode = DepthMode.autoLayers;
     if (j['depthMode'] != null) {
-      depthMode =
-          DepthMode.values.firstWhere((d) => d.name == j['depthMode']);
+      depthMode = DepthMode.values.firstWhere((d) => d.name == j['depthMode']);
     }
     var outputFormat = OutputFormat.both;
     if (j['outputFormat'] != null) {
-      outputFormat = OutputFormat.values
-          .firstWhere((f) => f.name == j['outputFormat']);
+      outputFormat =
+          OutputFormat.values.firstWhere((f) => f.name == j['outputFormat']);
     }
     return EffectConfig(
       effects: effects,
@@ -829,8 +1418,7 @@ class EffectConfig {
           : SnowParams.fromJson((j['snow'] as Map).cast<String, dynamic>()),
       sakura: j['sakura'] == null
           ? null
-          : SakuraParams.fromJson(
-              (j['sakura'] as Map).cast<String, dynamic>()),
+          : SakuraParams.fromJson((j['sakura'] as Map).cast<String, dynamic>()),
       fireflies: j['fireflies'] == null
           ? null
           : FirefliesParams.fromJson(
@@ -856,8 +1444,7 @@ class EffectConfig {
           : FogParams.fromJson((j['fog'] as Map).cast<String, dynamic>()),
       embers: j['embers'] == null
           ? null
-          : EmbersParams.fromJson(
-              (j['embers'] as Map).cast<String, dynamic>()),
+          : EmbersParams.fromJson((j['embers'] as Map).cast<String, dynamic>()),
       lightning: j['lightning'] == null
           ? null
           : LightningParams.fromJson(
@@ -882,6 +1469,47 @@ class EffectConfig {
           ? null
           : ShimmerParams.fromJson(
               (j['shimmer'] as Map).cast<String, dynamic>()),
+      focusLines: j['focusLines'] == null
+          ? null
+          : FocusLinesParams.fromJson(
+              (j['focusLines'] as Map).cast<String, dynamic>()),
+      screenTone: j['screenTone'] == null
+          ? null
+          : ScreenToneParams.fromJson(
+              (j['screenTone'] as Map).cast<String, dynamic>()),
+      mangaShake: j['mangaShake'] == null
+          ? null
+          : MangaShakeParams.fromJson(
+              (j['mangaShake'] as Map).cast<String, dynamic>()),
+      impactRings: j['impactRings'] == null
+          ? null
+          : ImpactRingsParams.fromJson(
+              (j['impactRings'] as Map).cast<String, dynamic>()),
+      brushStreak: j['brushStreak'] == null
+          ? null
+          : BrushStreakParams.fromJson(
+              (j['brushStreak'] as Map).cast<String, dynamic>()),
+      flame: j['flame'] == null
+          ? null
+          : FlameParams.fromJson((j['flame'] as Map).cast<String, dynamic>()),
+      smoke: j['smoke'] == null
+          ? null
+          : SmokeParams.fromJson((j['smoke'] as Map).cast<String, dynamic>()),
+      bubbles: j['bubbles'] == null
+          ? null
+          : BubblesParams.fromJson(
+              (j['bubbles'] as Map).cast<String, dynamic>()),
+      leaves: j['leaves'] == null
+          ? null
+          : LeavesParams.fromJson((j['leaves'] as Map).cast<String, dynamic>()),
+      meteors: j['meteors'] == null
+          ? null
+          : MeteorsParams.fromJson(
+              (j['meteors'] as Map).cast<String, dynamic>()),
+      moodScript: j['moodScript'] == null
+          ? null
+          : MoodScriptParams.fromJson(
+              (j['moodScript'] as Map).cast<String, dynamic>()),
       quality: j['quality'] == null
           ? null
           : QualityParams.fromJson(

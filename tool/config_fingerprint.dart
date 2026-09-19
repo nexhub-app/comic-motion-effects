@@ -5,8 +5,7 @@ import 'package:comic_motion/comic_motion.dart';
 void main() {
   final cases = <String, EffectConfig>{
     'default': EffectConfig(),
-    'demo_640': EffectConfig(
-        fps: 12, durationSec: 3.0, maxDimension: 640),
+    'demo_640': EffectConfig(fps: 12, durationSec: 3.0, maxDimension: 640),
   };
   for (final e in cases.entries) {
     print('== ${e.key} ==');

@@ -14,6 +14,9 @@ export 'src/image_model.dart';
 export 'src/motion_math.dart';
 export 'src/ledger.dart';
 export 'src/pipeline.dart';
-
-/// CLI version constant re-exported for tooling.
-const String comicMotionVersion = '1.0.0';
+export 'src/render/envelope.dart';
+export 'src/render/quality.dart';
+export 'src/render/raster.dart';
+export 'src/render/resampler.dart';
+export 'src/version.dart';
+export 'src/worker_pool.dart';

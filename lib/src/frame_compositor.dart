@@ -5,6 +5,13 @@ import 'depth_splitter.dart';
 import 'effect_config.dart';
 import 'image_model.dart';
 import 'motion_math.dart';
+import 'render/envelope.dart';
+import 'render/quality.dart';
+import 'render/raster.dart';
+import 'render/resampler.dart';
+
+part 'effects/comic_pass.dart';
+part 'effects/particle_raster_pass.dart';
 
 /// Renders animated frames by compositing depth layers with per-layer parallax
 /// offsets, a global breathing zoom, and optional ambient particles.
@@ -14,19 +21,43 @@ import 'motion_math.dart';
 class FrameCompositor {
   FrameCompositor(this.layers, this.base, this.config)
       : w = base.width,
-        h = base.height {
+        h = base.height,
+        _envelope = config.effects.contains(EffectKind.moodScript)
+            ? MotionEnvelope.of(config.moodScript.mood,
+                strength: config.moodScript.strength,
+                cycles: config.moodScript.cycles)
+            : null {
     _mult = List<double>.generate(
         layers.length,
         (i) => layers.isEmpty
             ? 1.0
             : 0.25 + 0.75 * i / math.max(1, layers.length - 1));
     _rng = DeterministicRandom(config.seed);
-    // Cache rasters once — the per-frame hot path must not copy layers.
-    _basePixels = Uint8List.fromList(base.data);
-    _layerPixels =
-        layers.map((l) => Uint8List.fromList(l.image.data)).toList();
+    // Reference the rasters directly — they are read-only for the whole
+    // animation (frames render into fresh buffers), so copying would just
+    // duplicate (layerCount + 1) full-resolution buffers per job.
+    _basePixels = base.data;
+    _layerPixels = layers.map((l) => l.image.data).toList();
     _initParticles();
     _initNewEffects();
+  }
+
+  /// worker 路径：只凭栅格字节重建合成器，跳过解码/深度估算/切层。
+  /// 底图与层必须与主 isolate 下发的栅格同尺寸，这样重建出的合成器与
+  /// [FrameCompositor.new] 对同一帧产出逐字节相同的像素。
+  factory FrameCompositor.fromRasters({
+    required Uint8List base,
+    required List<Uint8List> layers,
+    required int w,
+    required int h,
+    required EffectConfig config,
+  }) {
+    final ls = [
+      for (var i = 0; i < layers.length; i++)
+        LayerImage(RgbaImage.fromBytes(width: w, height: h, data: layers[i]), i)
+    ];
+    return FrameCompositor(
+        ls, RgbaImage.fromBytes(width: w, height: h, data: base), config);
   }
 
   // ---- v1.1 新动效状态（各自独立随机流，不扰动经典路径的 _rng 序列）----
@@ -41,11 +72,21 @@ class FrameCompositor {
   late List<_Ember> _embers;
   late List<List<_BoltSeg>> _lightningBolts;
   late List<_Star> _stars;
-  late List<List<int>> _starSamples; // 星星位置预采样亮度用
+  late List<List<int>> _starSamples; // 星星亮区位置表（构造期填充）
+  // ---- v1.3 新动效状态 ----
+  late List<_FocusWedge> _focusWedges;
+  late List<_ShakeBurst> _shakeBursts;
+  late List<_ShockRing> _shockRings;
+  late List<_BrushStroke> _brushStreaks;
+  late List<_Tongue> _tongues;
+  late List<_Puff> _puffs;
+  late List<_Bubble> _bubbles;
+  late List<_Leaf> _leaves;
+  late List<_Meteor> _meteors;
 
   void _initNewEffects() {
     final fx = config.effects;
-    _starSamples = []; // 星光亮度预采样表（首次渲染时填充）
+    _starSamples = [];
     if (fx.contains(EffectKind.rain)) {
       final r = DeterministicRandom(config.seed ^ 0x51A1);
       final p = config.rain;
@@ -182,7 +223,8 @@ class FrameCompositor {
     }
     if (fx.contains(EffectKind.lightning)) {
       final r = DeterministicRandom(config.seed ^ 0x52B3);
-      _lightningBolts = List.generate(config.lightning.strikes.clamp(1, 8), (_) {
+      _lightningBolts =
+          List.generate(config.lightning.strikes.clamp(1, 8), (_) {
         return _genBolt(r);
       });
     } else {
@@ -192,7 +234,6 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x52B6);
       final p = config.starlight;
       _stars = List.generate(p.count.clamp(0, 120), (_) {
-        // 星星只在亮区：渲染时采样亮度，先随机挑候选点并记录索引
         return _Star(
           x0: 0.05 + r.nextDouble() * 0.9,
           y0: 0.05 + r.nextDouble() * 0.9,
@@ -201,10 +242,181 @@ class FrameCompositor {
           brightJit: 0.7 + r.nextDouble() * 0.3,
         );
       });
+      // 亮区表必须在构造期填好：并行渲染会乱序提交帧，首帧懒加载会让帧顺序
+      // 影响状态（采样只看底图，所以构造期与首帧结果一致，但构造期最省心）。
+      for (final st in _stars) {
+        final sx = (st.x0 * w).clamp(0, w - 1).toInt();
+        final sy = (st.y0 * h).clamp(0, h - 1).toInt();
+        if (base.luminance(sy * w + sx) > 165) _starSamples.add([sx, sy]);
+      }
     } else {
       _stars = const [];
     }
+    // ---- v1.3 新动效状态 ----
+    if (fx.contains(EffectKind.focusLines)) {
+      final r = DeterministicRandom(config.seed ^ 0x53C1);
+      _focusWedges = List.generate(config.focusLines.lines.clamp(4, 160), (i) {
+        return _FocusWedge(
+          lenJit: 0.80 + r.nextDouble() * 0.35,
+          widthJit: 0.65 + r.nextDouble() * 0.9,
+          alphaJit: 0.6 + r.nextDouble() * 0.4,
+          // 打破等角间隔的手绘偏差，上限半格间距以免两条线交叉打架
+          phaseJit: (r.nextDouble() - 0.5) * (math.pi / 40),
+        );
+      });
+    } else {
+      _focusWedges = const [];
+    }
+    if (fx.contains(EffectKind.mangaShake)) {
+      final r = DeterministicRandom(config.seed ^ 0x53C3);
+      final p = config.mangaShake;
+      final n = p.shakes.clamp(1, 24);
+      final jit = p.rotJitDeg.clamp(0.0, 15.0) * math.pi / 180.0;
+      // 方向均分圆周 + 逐爆点抖动：抖动只在位移为 0 的爆点边界切换，
+      // 所以不会在循环首尾留下不连续。
+      _shakeBursts = List.generate(n, (i) {
+        final theta = 2 * math.pi * i / n + (r.nextDouble() - 0.5) * 2 * jit;
+        return _ShakeBurst(math.cos(theta), math.sin(theta));
+      });
+    } else {
+      _shakeBursts = const [];
+    }
+    if (fx.contains(EffectKind.impactRings)) {
+      final r = DeterministicRandom(config.seed ^ 0x53C4);
+      final p = config.impactRings;
+      _shockRings = List.generate(p.rings.clamp(1, 12), (_) {
+        return _ShockRing(
+          radJit: 0.94 + r.nextDouble() * 0.12,
+          widthJit: 0.75 + r.nextDouble() * 0.5,
+          alphaJit: 0.8 + r.nextDouble() * 0.2,
+        );
+      });
+    } else {
+      _shockRings = const [];
+    }
+    if (fx.contains(EffectKind.brushStreak)) {
+      final r = DeterministicRandom(config.seed ^ 0x53C5);
+      final p = config.brushStreak;
+      _brushStreaks = List.generate(p.streaks.clamp(1, 60), (_) {
+        return _BrushStroke(
+          x0: 0.06 + r.nextDouble() * 0.88,
+          y0: 0.06 + r.nextDouble() * 0.88,
+          lenJit: 0.7 + r.nextDouble() * 0.45,
+          thickJit: 0.7 + r.nextDouble() * 0.6,
+          angleJit: (r.nextDouble() - 0.5) * (math.pi / 36),
+          gapPhase: r.nextDouble() * 2 * math.pi,
+        );
+      });
+    } else {
+      _brushStreaks = const [];
+    }
+    // ---- v1.3 自然氛围状态（随机流 0x54D1..0x54D5）----
+    if (fx.contains(EffectKind.flame)) {
+      final r = DeterministicRandom(config.seed ^ 0x54D1);
+      final p = config.flame;
+      final n = p.tongues.clamp(1, 40);
+      _tongues = List.generate(n, (i) {
+        return _Tongue(
+          // 等距铺底 + 半格内的抖动：既有节奏又不像栅栏
+          x0: (i + 0.15 + r.nextDouble() * 0.7) / n,
+          phase: r.nextDouble() * 2 * math.pi,
+          widthJit: 0.75 + r.nextDouble() * 0.55,
+          heightJit: 0.7 + r.nextDouble() * 0.6,
+          lean: (r.nextDouble() - 0.5) * 0.5,
+        );
+      });
+    } else {
+      _tongues = const [];
+    }
+    if (fx.contains(EffectKind.smoke)) {
+      final r = DeterministicRandom(config.seed ^ 0x54D2);
+      final p = config.smoke;
+      _puffs = List.generate(p.puffs.clamp(0, 40), (_) {
+        return _Puff(
+          x0: 0.12 + r.nextDouble() * 0.76,
+          y0: r.nextDouble(),
+          sizeJit: 0.8 + r.nextDouble() * 0.5,
+          alphaJit: 0.7 + r.nextDouble() * 0.4,
+          ph1: r.nextDouble() * 2 * math.pi,
+          ph2: r.nextDouble() * 2 * math.pi,
+          ph4: r.nextDouble() * 2 * math.pi,
+        );
+      });
+    } else {
+      _puffs = const [];
+    }
+    if (fx.contains(EffectKind.bubbles)) {
+      final r = DeterministicRandom(config.seed ^ 0x54D3);
+      final p = config.bubbles;
+      _bubbles = List.generate(p.count.clamp(0, 120), (_) {
+        return _Bubble(
+          x0: 0.04 + r.nextDouble() * 0.92,
+          y0: r.nextDouble(),
+          sizeJit: 0.6 + r.nextDouble() * 0.9,
+          alphaJit: 0.7 + r.nextDouble() * 0.4,
+          wobPhase: r.nextDouble() * 2 * math.pi,
+          wobFreq: r.nextInt(2) + 1,
+        );
+      });
+    } else {
+      _bubbles = const [];
+    }
+    if (fx.contains(EffectKind.leaves)) {
+      final r = DeterministicRandom(config.seed ^ 0x54D4);
+      final p = config.leaves;
+      _leaves = List.generate(p.count.clamp(0, 300), (_) {
+        return _Leaf(
+          x0: r.nextDouble(),
+          y0: r.nextDouble(),
+          sizeJit: 0.7 + r.nextDouble() * 0.6,
+          rot0: r.nextDouble() * 2 * math.pi,
+          flipPhase: r.nextDouble() * 2 * math.pi,
+          swayPhase: r.nextDouble() * 2 * math.pi,
+          swayFreq: r.nextDouble() < 0.5 ? 1 : 2,
+          toneIdx: r.nextInt(2),
+        );
+      });
+    } else {
+      _leaves = const [];
+    }
+    if (fx.contains(EffectKind.meteors)) {
+      final r = DeterministicRandom(config.seed ^ 0x54D5);
+      final p = config.meteors;
+      _meteors = List.generate(p.count.clamp(1, 20), (_) {
+        return _Meteor(
+          x0: 0.1 + r.nextDouble() * 0.8,
+          y0: 0.05 + r.nextDouble() * 0.55,
+          lenJit: 0.7 + r.nextDouble() * 0.7,
+          alphaJit: 0.75 + r.nextDouble() * 0.25,
+          thick: 1.2 + r.nextDouble() * 1.4,
+        );
+      });
+    } else {
+      _meteors = const [];
+    }
   }
+
+  /// 震屏本帧位移（像素）。每个爆点内做 [_shakeRattle] 次完整往返，
+  /// 幅度按 `(1-ph)^(2·decay)` 衰减 → 起手最猛、收尾归零。
+  (double, double) _shakeOffset(double tSec) {
+    final bursts = _shakeBursts;
+    if (bursts.isEmpty) return (0.0, 0.0);
+    final p = config.mangaShake;
+    final u = _loopU(tSec);
+    final pos = u * bursts.length;
+    final k = pos.floor().clamp(0, bursts.length - 1);
+    final ph = pos - k;
+    final env = math.pow(1.0 - ph, p.decay.clamp(0.05, 3.0) * 2).toDouble();
+    final amp = p.amplitude.clamp(0.0, 0.05) *
+        w *
+        env *
+        math.sin(2 * math.pi * _shakeRattle * pos);
+    final b = bursts[k];
+    return (b.dirX * amp, b.dirY * amp);
+  }
+
+  /// 每个爆点内的高频 rattles 次数；必须是整数，否则循环有接缝。
+  static const int _shakeRattle = 3;
 
   /// 生成一条分形闪电主干（带 1-2 条分支）。
   List<_BoltSeg> _genBolt(DeterministicRandom r) {
@@ -240,10 +452,22 @@ class FrameCompositor {
 
   final int w;
   final int h;
+
+  /// standard+ 档才走 AA 光栅原语；legacy 分支逐字保留 v1.2 的取整画点。
+  bool get _aa => config.quality.tier.atLeastStandard;
+
+  /// v1.3 情绪包络：未启用 moodScript 时为 null，[_env] 恒为 identity
+  /// （乘 1.0 / 加 0.0 都不改变任何一位浮点结果，legacy 路径逐字节不变）。
+  final MotionEnvelope? _envelope;
+
+  /// 本帧生效的包络因子，由 [renderFrame] 在入口处刷新一次。
+  EnvelopeFactors _env = EnvelopeFactors.identity;
+
   late List<double> _mult;
   late DeterministicRandom _rng;
   late List<_Particle> _particles;
-  late List<Uint8List> _layerPixels; // per-layer cached raster (no per-frame copy)
+  late List<Uint8List>
+      _layerPixels; // per-layer cached raster (no per-frame copy)
   late Uint8List _basePixels;
 
   void _initParticles() {
@@ -265,6 +489,11 @@ class FrameCompositor {
   /// Render frame at normalized time t in [0, duration).
   RgbaImage renderFrame(double tSec) {
     final frame = RgbaImage(width: w, height: h);
+    final tier = config.quality.tier;
+    // 情绪包络每帧只取一次因子，后面各 pass 直接读 [_env]。
+    final envelope = _envelope;
+    _env =
+        envelope == null ? EnvelopeFactors.identity : envelope.at(_loopU(tSec));
     final dirRad = config.parallax.directionDeg * math.pi / 180.0;
     final dxDir = math.cos(dirRad);
     final dyDir = math.sin(dirRad);
@@ -275,6 +504,7 @@ class FrameCompositor {
         config.breathing.enabled) {
       zoom = 1.0 +
           config.breathing.amplitude *
+              _env.motion *
               MotionMath.wave(tSec,
                   periodSec: config.breathing.periodSec, phase: 0);
     }
@@ -290,23 +520,35 @@ class FrameCompositor {
     // 减弱动态降级：单帧静态底图，无任何动效。
     if (config.reducedMotion) {
       _drawLayer(frame, _basePixels, base.width, base.height, 0, 0, 1.0,
-          _anchorY());
+          _anchorY(), tier);
       return frame;
     }
 
+    // v1.3 震屏：整体平移底图与层（减弱动态分支已在上面 return，不受影响）。
+    var shakeX = 0.0, shakeY = 0.0;
+    if (config.effects.contains(EffectKind.mangaShake)) {
+      final s = _shakeOffset(tSec);
+      shakeX = s.$1;
+      shakeY = s.$2;
+    }
+
     // Base with breathing zoom only.
-    _drawLayer(frame, _basePixels, base.width, base.height, 0, 0, zoom,
-        _anchorY());
+    // 平移会露出画布外的空白，所以底图也按位移量略微放大覆盖（无抖时系数
+    // 恰为 1.0，legacy 路径逐字节不变）。
+    final baseCover =
+        1.0 + (shakeX.abs() + shakeY.abs()) * 2.0 / math.min(w, h);
+    _drawLayer(frame, _basePixels, base.width, base.height, shakeX, shakeY,
+        zoom * baseCover, _anchorY(), tier);
 
     // Layers far-to-near with parallax offsets.
     final p = config.effects.contains(EffectKind.parallax);
     for (var li = 0; li < layers.length; li++) {
-      var dx = 0.0, dy = 0.0;
+      var dx = shakeX, dy = shakeY;
       if (p) {
-        final ampPx = config.parallax.amplitude * w * _mult[li];
+        final ampPx = config.parallax.amplitude * _env.motion * w * _mult[li];
         final phase = 2 * math.pi * tSec / config.parallax.periodSec;
-        dx = math.sin(phase + li * 0.35) * ampPx * dxDir;
-        dy = math.sin(phase * 0.8 + li * 0.5 + 0.9) *
+        dx += math.sin(phase + li * 0.35) * ampPx * dxDir;
+        dy += math.sin(phase * 0.8 + li * 0.5 + 0.9) *
             ampPx *
             config.parallax.verticalRatio *
             dyDir;
@@ -314,11 +556,10 @@ class FrameCompositor {
       // Scale slightly beyond 1 so shifted layers still cover the canvas.
       final cover = 1.0 + 2 * (dx.abs() + dy.abs()) / math.min(w, h);
       _drawLayer(frame, _layerPixels[li], layers[li].image.width,
-          layers[li].image.height, dx, dy, zoom * cover, _anchorY());
+          layers[li].image.height, dx, dy, zoom * cover, _anchorY(), tier);
     }
 
-    if (config.effects.contains(EffectKind.ambient) &&
-        config.ambient.enabled) {
+    if (config.effects.contains(EffectKind.ambient) && config.ambient.enabled) {
       _drawParticles(frame, tSec);
     }
     if (config.effects.contains(EffectKind.lightSweep)) {
@@ -362,6 +603,35 @@ class FrameCompositor {
     if (config.effects.contains(EffectKind.lightning)) {
       _applyLightning(frame, tSec);
     }
+    // ---- v1.3 自然氛围渲染（氛围层在漫画叠加层之前）----
+    if (config.effects.contains(EffectKind.flame)) {
+      _renderFlame(this, frame, tSec);
+    }
+    if (config.effects.contains(EffectKind.smoke)) {
+      _renderSmoke(this, frame, tSec);
+    }
+    if (config.effects.contains(EffectKind.bubbles)) {
+      _renderBubbles(this, frame, tSec);
+    }
+    if (config.effects.contains(EffectKind.leaves)) {
+      _renderLeaves(this, frame, tSec);
+    }
+    if (config.effects.contains(EffectKind.meteors)) {
+      _renderMeteors(this, frame, tSec);
+    }
+    // ---- v1.3 漫画动势渲染 ----
+    if (config.effects.contains(EffectKind.screenTone)) {
+      _renderScreenTone(this, frame, tSec);
+    }
+    if (config.effects.contains(EffectKind.focusLines)) {
+      _renderFocusLines(this, frame, tSec);
+    }
+    if (config.effects.contains(EffectKind.impactRings)) {
+      _renderImpactRings(this, frame, tSec);
+    }
+    if (config.effects.contains(EffectKind.brushStreak)) {
+      _renderBrushStreak(this, frame, tSec);
+    }
     if (config.effects.contains(EffectKind.toneShift)) {
       _applyToneShift(frame, tSec);
     }
@@ -382,88 +652,19 @@ class FrameCompositor {
     }
   }
 
-  /// Inverse-mapped bilinear layer draw with alpha blending.
-  /// Hot path; operates directly on the cached raster.
-  static void _drawLayer(RgbaImage dst, Uint8List srcData, int sw, int sh,
-      double dx, double dy, double scale, double anchorY) {
-    if (scale <= 0) return;
-    final w = dst.width, h = dst.height;
-    final cx = sw / 2.0, cy = sh * anchorY;
-    final inv = 1.0 / scale;
-    final dstData = dst.data;
-    final sxStep = inv;
-    for (var y = 0; y < h; y++) {
-      final sy = (y + 0.5 - (h * anchorY)) * inv + cy + dy - 0.5;
-      final sy0 = sy.floor();
-      final ty = sy - sy0;
-      final y0_ok = sy0 >= 0 && sy0 < sh;
-      final y1 = sy0 + 1;
-      final y1_ok = y1 >= 0 && y1 < sh;
-      if (!y0_ok && !y1_ok) continue;
-      var sx = (0 + 0.5 - (w * 0.5)) * inv + cx + dx - 0.5;
-      for (var x = 0; x < w; x++, sx += sxStep) {
-        final sx0 = sx.floor();
-        final tx = sx - sx0;
-        final x1 = sx0 + 1;
-        final x0_ok = sx0 >= 0 && sx0 < sw;
-        final x1_ok = x1 >= 0 && x1 < sw;
-        if (!x0_ok && !x1_ok) continue;
-        final dOff = (y * w + x) * 4;
-        // Gather 4 taps (out-of-range taps are skipped via weight 0).
-        var r = 0.0, g = 0.0, b = 0.0, a = 0.0;
-        if (x0_ok && y0_ok) {
-          final o = (sy0 * sw + sx0) * 4;
-          final wgt = (1 - tx) * (1 - ty);
-          r += srcData[o] * wgt;
-          g += srcData[o + 1] * wgt;
-          b += srcData[o + 2] * wgt;
-          a += srcData[o + 3] * wgt;
-        }
-        if (x1_ok && y0_ok) {
-          final o = (sy0 * sw + x1) * 4;
-          final wgt = tx * (1 - ty);
-          r += srcData[o] * wgt;
-          g += srcData[o + 1] * wgt;
-          b += srcData[o + 2] * wgt;
-          a += srcData[o + 3] * wgt;
-        }
-        if (x0_ok && y1_ok) {
-          final o = (y1 * sw + sx0) * 4;
-          final wgt = (1 - tx) * ty;
-          r += srcData[o] * wgt;
-          g += srcData[o + 1] * wgt;
-          b += srcData[o + 2] * wgt;
-          a += srcData[o + 3] * wgt;
-        }
-        if (x1_ok && y1_ok) {
-          final o = (y1 * sw + x1) * 4;
-          final wgt = tx * ty;
-          r += srcData[o] * wgt;
-          g += srcData[o + 1] * wgt;
-          b += srcData[o + 2] * wgt;
-          a += srcData[o + 3] * wgt;
-        }
-        final sa = a / 255.0;
-        if (sa <= 0.004) continue;
-        if (sa >= 0.996) {
-          dstData[dOff] = r.round().clamp(0, 255);
-          dstData[dOff + 1] = g.round().clamp(0, 255);
-          dstData[dOff + 2] = b.round().clamp(0, 255);
-          dstData[dOff + 3] = 255;
-        } else {
-          final da = dstData[dOff + 3] / 255.0;
-          final outA = sa + da * (1 - sa);
-          dstData[dOff] =
-              ((r * sa + dstData[dOff] * da * (1 - sa)) / outA).round().clamp(0, 255);
-          dstData[dOff + 1] =
-              ((g * sa + dstData[dOff + 1] * da * (1 - sa)) / outA).round().clamp(0, 255);
-          dstData[dOff + 2] =
-              ((b * sa + dstData[dOff + 2] * da * (1 - sa)) / outA).round().clamp(0, 255);
-          dstData[dOff + 3] = (outA * 255).round().clamp(0, 255);
-        }
-      }
-    }
-  }
+  /// 层贴图：重采样按质量档分派（legacy=逐字节双线性，standard+=Catmull-Rom），
+  /// 实现见 `render/resampler.dart`。
+  static void _drawLayer(
+          RgbaImage dst,
+          Uint8List srcData,
+          int sw,
+          int sh,
+          double dx,
+          double dy,
+          double scale,
+          double anchorY,
+          RenderTier tier) =>
+      drawLayer(dst, srcData, sw, sh, dx, dy, scale, anchorY, tier: tier);
 
   void _drawParticles(RgbaImage frame, double tSec) {
     final amb = config.ambient;
@@ -472,10 +673,10 @@ class FrameCompositor {
       // Slow upward drift + gentle horizontal sway, wrapping vertically.
       var py = (p.py - (speedPx / h) * p.drift) % 1.0;
       if (py < 0) py += 1.0;
-      final px =
-          (p.px + 0.01 * math.sin(tSec + p.phase)) % 1.0;
+      final px = (p.px + 0.01 * math.sin(tSec + p.phase)) % 1.0;
       final cx = px * w, cy = py * h;
-      final alpha = (amb.opacity * p.alpha * 255).round().clamp(0, 255);
+      final alpha =
+          (amb.opacity * _env.particles * p.alpha * 255).round().clamp(0, 255);
       final rad = p.r;
       final x0 = (cx - rad).floor(), x1 = (cx + rad).ceil();
       final y0 = (cy - rad).floor(), y1 = (cy + rad).ceil();
@@ -483,15 +684,14 @@ class FrameCompositor {
         if (y < 0 || y >= h) continue;
         for (var x = x0; x <= x1; x++) {
           if (x < 0 || x >= w) continue;
-          final dist = math
-              .sqrt((x + 0.5 - cx) * (x + 0.5 - cx) + (y + 0.5 - cy) * (y + 0.5 - cy));
+          final dist = math.sqrt((x + 0.5 - cx) * (x + 0.5 - cx) +
+              (y + 0.5 - cy) * (y + 0.5 - cy));
           if (dist > rad) continue;
           final fall = 1 - dist / rad;
           final a = (alpha * fall).round().clamp(0, 255);
           final o = (y * w + x) * 4;
           final bright = amb.mode == 'sparkle' ? 255 : 245;
-          frame.data[o] =
-              ((bright * a) + frame.data[o] * (255 - a)) ~/ 255;
+          frame.data[o] = ((bright * a) + frame.data[o] * (255 - a)) ~/ 255;
           frame.data[o + 1] =
               ((bright * a) + frame.data[o + 1] * (255 - a)) ~/ 255;
           frame.data[o + 2] =
@@ -508,12 +708,10 @@ class FrameCompositor {
       for (var x = 0; x < w; x++) {
         final d = (x + y * 0.35 - bandCenter).abs();
         if (d > 80) continue;
-        final add = (60 * math.exp(-d * d / (2 * 30 * 30))).round();
+        final add =
+            (60 * _env.exposure * math.exp(-d * d / (2 * 30 * 30))).round();
         if (add == 0) continue;
-        final o = (y * w + x) * 4;
-        for (var c = 0; c < 3; c++) {
-          frame.data[o + c] = math.min(255, frame.data[o + c] + add);
-        }
+        _blendAddPx(frame, x, y, 255, 255, 255, add);
       }
     }
   }
@@ -527,8 +725,7 @@ class FrameCompositor {
 
   static int _hexRgb(String hex) => int.parse(hex, radix: 16);
 
-  void _blendPx(
-      RgbaImage f, int x, int y, int r, int g, int b, int a) {
+  void _blendPx(RgbaImage f, int x, int y, int r, int g, int b, int a) {
     if (a <= 0 || x < 0 || y < 0 || x >= w || y >= h) return;
     if (a > 255) a = 255;
     final o = (y * w + x) * 4;
@@ -538,14 +735,12 @@ class FrameCompositor {
     f.data[o + 2] = (b * a + f.data[o + 2] * inv) ~/ 255;
   }
 
-  void _blendAddPx(
-      RgbaImage f, int x, int y, int r, int g, int b, int add) {
-    if (add <= 0 || x < 0 || y < 0 || x >= w || y >= h) return;
-    final o = (y * w + x) * 4;
-    f.data[o] = math.min(255, f.data[o] + (r * add) ~/ 255);
-    f.data[o + 1] = math.min(255, f.data[o + 1] + (g * add) ~/ 255);
-    f.data[o + 2] = math.min(255, f.data[o + 2] + (b * add) ~/ 255);
-  }
+  /// 光效提亮。legacy 档逐字沿用 v1.2 的截断加法；standard+ 改走 screen，
+  /// 近白高光不再一起撞死在 255（Q5）。r=g=b=255 时 additive 分支等价于
+  /// v1.2 内联写的 `min(255, d + add)`，所以扫光这类纯白光可直接复用本函数。
+  void _blendAddPx(RgbaImage f, int x, int y, int r, int g, int b, int add) =>
+      blendPixel(f, x, y, r, g, b, add,
+          op: _aa ? BlendOp.screen : BlendOp.additive);
 
   /// 雨丝：竖直循环下落 + 固定倾角线段。
   void _drawRain(RgbaImage frame, double tSec) {
@@ -560,12 +755,19 @@ class FrameCompositor {
     for (final d in _rain) {
       final py = ((d.y0 + cycles * u) % 1.0) * h;
       final px = d.x0 * w;
-      final a = (p.opacity * d.alphaJit * 255).round().clamp(0, 255);
+      final a =
+          (p.opacity * _env.particles * d.alphaJit * 255).round().clamp(0, 255);
       final steps = (len * d.lenJit).round().clamp(2, 220);
+      if (_aa) {
+        drawSegmentAA(
+            frame, px, py, px + dx * steps, py + dy * steps, r0, g0, b0, a, 1.0,
+            tailFade: 0.6);
+        continue;
+      }
       for (var s = 0; s < steps; s++) {
         final fade = 1 - 0.6 * s / steps;
-        _blendPx(frame, (px + dx * s).round(), (py + dy * s).round(), r0,
-            g0, b0, (a * fade).round());
+        _blendPx(frame, (px + dx * s).round(), (py + dy * s).round(), r0, g0,
+            b0, (a * fade).round());
       }
     }
   }
@@ -579,12 +781,11 @@ class FrameCompositor {
     for (final f in _snow) {
       final py = ((f.y0 + cycles * u) % 1.0) * h;
       final px = (f.x0 * w +
-              p.swayPx *
-                  math.sin(w2pi * (f.swayFreqMul * u) + f.swayPhase)) %
+              p.swayPx * math.sin(w2pi * (f.swayFreqMul * u) + f.swayPhase)) %
           w;
       final rad = (p.sizePx * f.sizeJit).clamp(0.8, 12.0);
       final twk = 0.78 + 0.22 * math.sin(w2pi * u * 2 + f.twkPhase);
-      final a = (p.opacity * twk * 255).round().clamp(0, 255);
+      final a = (p.opacity * _env.particles * twk * 255).round().clamp(0, 255);
       _drawSoftDisc(frame, px, py, rad, 250, 252, 255, a);
     }
   }
@@ -613,15 +814,15 @@ class FrameCompositor {
       final rr = (r0 * tone[0]).round();
       final gg = (g0 * tone[1]).round();
       final bb = (b0 * tone[2]).round();
-      final a = (p.opacity * 255).round().clamp(0, 255);
+      final a = (p.opacity * _env.particles * 255).round().clamp(0, 255);
       final ca = math.cos(rot), sa = math.sin(rot);
       for (var s = -half; s <= half; s++) {
         final cxp = px + ca * s;
         final cyp = py + sa * s;
         final width = half * 0.55 * (1 - (s.abs() / half) * 0.55);
         for (var t2 = -width; t2 <= width; t2 += 1.0) {
-          _blendPx(frame, (cxp - sa * t2).round(), (cyp + ca * t2).round(),
-              rr, gg, bb, a);
+          _blendPx(frame, (cxp - sa * t2).round(), (cyp + ca * t2).round(), rr,
+              gg, bb, a);
         }
       }
     }
@@ -637,16 +838,19 @@ class FrameCompositor {
     final blink = p.blinkCycles.clamp(1, 12);
     final drift = p.driftCycles.clamp(1, 8);
     for (final f in _fireflies) {
-      final px = (f.x0 +
-              f.ampX * math.sin(w2pi * (drift * f.freqX * u) + f.phaseX)) *
-          w;
-      final py = (f.y0 +
-              f.ampY * math.cos(w2pi * (drift * f.freqY * u) + f.phaseY)) *
-          h;
-      final blinkV =
-          0.30 + 0.70 * math.pow(0.5 + 0.5 * math.sin(w2pi * blink * u + f.blinkPhase), 2.0);
+      final px =
+          (f.x0 + f.ampX * math.sin(w2pi * (drift * f.freqX * u) + f.phaseX)) *
+              w;
+      final py =
+          (f.y0 + f.ampY * math.cos(w2pi * (drift * f.freqY * u) + f.phaseY)) *
+              h;
+      final blinkV = 0.30 +
+          0.70 *
+              math.pow(
+                  0.5 + 0.5 * math.sin(w2pi * blink * u + f.blinkPhase), 2.0);
       final rad = (p.glowPx * f.sizeJit).clamp(3.0, 80.0);
-      final aBase = (p.opacity * blinkV * 255).round().clamp(0, 255);
+      final aBase =
+          (p.opacity * _env.particles * blinkV * 255).round().clamp(0, 255);
       final x0 = (px - rad).floor(), x1 = (px + rad).ceil();
       final y0 = (py - rad).floor(), y1 = (py + rad).ceil();
       for (var y = y0; y <= y1; y++) {
@@ -677,13 +881,14 @@ class FrameCompositor {
     final sway = p.swayCycles.clamp(1, 8);
     final baseTan = math.tan(p.angleDeg * math.pi / 180.0);
     for (final ray in _godRays) {
-      final ang =
-          p.angleDeg + 4.0 * math.sin(w2pi * sway * u + ray.phase);
+      final ang = p.angleDeg + 4.0 * math.sin(w2pi * sway * u + ray.phase);
       final tanA = math.tan(ang * math.pi / 180.0);
       final sigma = (p.widthFrac * w * ray.widthJit).clamp(8.0, w * 0.3);
-      final inten =
-          (p.intensity * ray.intenJit * (0.8 + 0.2 * math.sin(w2pi * u + ray.phase)))
-              .clamp(0.0, 1.0);
+      final inten = (p.intensity *
+              _env.exposure *
+              ray.intenJit *
+              (0.8 + 0.2 * math.sin(w2pi * u + ray.phase)))
+          .clamp(0.0, 1.0);
       final band = 2.5 * sigma;
       // 半分辨率：步长 2
       for (var y = 0; y < h; y += 2) {
@@ -726,6 +931,11 @@ class FrameCompositor {
       final sx = cx + ux * diag * l.r0;
       final sy = cy + uy * diag * l.r0;
       final steps = (len * l.lenJit).round().clamp(2, 400);
+      if (_aa) {
+        drawSegmentAA(frame, sx, sy, sx - ux * steps, sy - uy * steps, 255, 255,
+            255, a, p.thickness < 1 ? 1.0 : p.thickness.toDouble());
+        continue;
+      }
       for (var s = 0; s < steps; s++) {
         final x = (sx - ux * s).round();
         final y = (sy - uy * s).round();
@@ -746,7 +956,7 @@ class FrameCompositor {
     final phase = (u * flashes) % 1.0;
     if (phase >= duty) return; // 大多数帧直接跳过
     final env = math.sin(math.pi * phase / duty); // 0→1→0
-    final k = (env * p.intensity * 256).round().clamp(0, 256);
+    final k = (env * p.intensity * _env.exposure * 256).round().clamp(0, 256);
     if (k <= 0) return;
     final data = frame.data;
     for (var i = 0; i < data.length; i += 4) {
@@ -776,8 +986,7 @@ class FrameCompositor {
     final u = _loopU(tSec);
     final cyc = p.cycles.clamp(1, 4);
     final wv = math.sin(2 * math.pi * cyc * u - math.pi / 2); // -1→1→-1
-    return 1.0 +
-        p.pushFrac.clamp(0.002, 0.08) * (wv * 0.5 + 0.5); // 0→1→0
+    return 1.0 + p.pushFrac.clamp(0.002, 0.08) * (wv * 0.5 + 0.5); // 0→1→0
   }
 
   /// 流雾：大半透明雾团横向缓移 + 浓淡起伏。
@@ -793,7 +1002,8 @@ class FrameCompositor {
       final py = (b.y0 + 0.01 * math.sin(w2pi * u + b.phase)) * h;
       final rx = b.rx * w, ry = b.ry * h;
       // 半分辨率渲染（软渐变无精度损失）
-      final aBase = (p.opacity * b.alphaJit * 255).round().clamp(0, 255);
+      final aBase =
+          (p.opacity * _env.particles * b.alphaJit * 255).round().clamp(0, 255);
       for (var y = (py - ry).floor(); y <= (py + ry).ceil(); y += 2) {
         if (y < 0 || y >= h) continue;
         final ty = (y - py) / ry;
@@ -823,13 +1033,22 @@ class FrameCompositor {
     final w2pi = 2 * math.pi;
     for (final e in _embers) {
       final py = ((e.y0 - rise * u) % 1.0 + 1.0) % 1.0 * h;
-      final px = (e.x0 * w +
-              12 * math.sin(w2pi * (e.swayFreqMul * u) + e.swayPhase)) %
-          w;
+      final px =
+          (e.x0 * w + 12 * math.sin(w2pi * (e.swayFreqMul * u) + e.swayPhase)) %
+              w;
       final blink = 0.45 +
-          0.55 * math.pow(0.5 + 0.5 * math.sin(w2pi * u * 3 + e.blinkPhase), 2.0);
+          0.55 *
+              math.pow(0.5 + 0.5 * math.sin(w2pi * u * 3 + e.blinkPhase), 2.0);
       final rad = (p.glowPx * e.sizeJit).clamp(1.2, 20.0);
-      final a = (p.opacity * e.alphaJit * blink * 255).round().clamp(0, 255);
+      final a = (p.opacity * _env.particles * e.alphaJit * blink * 255)
+          .round()
+          .clamp(0, 255);
+      if (_aa) {
+        // 余烬是自发光：screen 让火星叠在亮部时仍提亮而不是糊成一块白斑，
+        // 衰减式与 legacy 的 0.35+0.65·fall 同形，只多了边缘覆盖度。
+        drawDiscAA(frame, px, py, rad, r0, g0, b0, a, op: BlendOp.screen);
+        continue;
+      }
       _drawSoftDisc(frame, px, py, rad, r0, g0, b0, a);
     }
   }
@@ -845,9 +1064,10 @@ class FrameCompositor {
     if (phase >= win) return;
     final local = phase / win; // 0..1
     // 全屏瞬亮：快速起衰
-    final flashK = (math.exp(-local * 7.0) * p.flashIntensity * 256)
-        .round()
-        .clamp(0, 256);
+    final flashK =
+        (math.exp(-local * 7.0) * p.flashIntensity * _env.exposure * 256)
+            .round()
+            .clamp(0, 256);
     if (flashK > 0) {
       final data = frame.data;
       for (var i = 0; i < data.length; i += 4) {
@@ -870,8 +1090,13 @@ class FrameCompositor {
 
   void _drawFogLine(RgbaImage f, _BoltSeg s, int a) {
     final x0 = s.x0 * w, y0 = s.y0 * h, x1 = s.x1 * w, y1 = s.y1 * h;
-    final steps =
-        math.max(2, ((x1 - x0).abs() + (y1 - y0).abs()).round());
+    if (_aa) {
+      // 主干 2px + 冷色柔光晕：对应 legacy 的「主点 + 右邻 + 下邻」三笔。
+      drawSegmentAA(f, x0, y0, x1, y1, 240, 244, 255, (a * 0.4).round(), 4.0);
+      drawSegmentAA(f, x0, y0, x1, y1, 255, 255, 255, a, 2.0);
+      return;
+    }
+    final steps = math.max(2, ((x1 - x0).abs() + (y1 - y0).abs()).round());
     for (var i = 0; i <= steps; i++) {
       final t = i / steps;
       final x = (x0 + (x1 - x0) * t).round();
@@ -889,15 +1114,17 @@ class FrameCompositor {
     final u = _loopU(tSec);
     final cyc = p.warmthCycles.clamp(1, 4);
     final s = math.sin(2 * math.pi * cyc * u); // -1..1
-    final warm = (p.shift.clamp(0.0, 0.15) * s * 255).round();
+    final warm = (((p.shift.clamp(0.0, 0.15) * s) + _env.warmth) * 255).round();
     if (warm == 0) return;
     final addR = warm > 0 ? warm : (warm * 0.4).round();
     final addB = warm > 0 ? (-warm * 0.6).round() : -warm;
     final subR = warm > 0 ? 0 : warm;
     final subB = warm > 0 ? warm : 0;
     // 预计算 LUT：r LUT 与 b LUT 各 256 项
-    final lutR = List<int>.generate(256, (v) => (v + addR - subR).clamp(0, 255));
-    final lutB = List<int>.generate(256, (v) => (v + addB - subB).clamp(0, 255));
+    final lutR =
+        List<int>.generate(256, (v) => (v + addR - subR).clamp(0, 255));
+    final lutB =
+        List<int>.generate(256, (v) => (v + addB - subB).clamp(0, 255));
     final data = frame.data;
     for (var i = 0; i < data.length; i += 4) {
       data[i] = lutR[data[i]];
@@ -910,8 +1137,9 @@ class FrameCompositor {
     final p = config.vignette;
     final u = _loopU(tSec);
     final cyc = p.cycles.clamp(1, 4);
-    final strength =
-        p.strength.clamp(0.0, 0.8) * (0.5 + 0.5 * math.sin(2 * math.pi * cyc * u - math.pi / 2));
+    final strength = p.strength.clamp(0.0, 0.8) *
+        (0.5 + 0.5 * math.sin(2 * math.pi * cyc * u - math.pi / 2)) *
+        (1.0 + _env.vignette);
     if (strength < 0.005) return;
     final cx = w / 2.0, cy = h / 2.0;
     final maxD = math.sqrt(cx * cx + cy * cy);
@@ -940,26 +1168,32 @@ class FrameCompositor {
     final u = _loopU(tSec);
     final blink = p.blinkCycles.clamp(1, 8);
     final w2pi = 2 * math.pi;
-    if (_starSamples.isEmpty) {
-      // 首帧：预采样亮度，保留亮度 > 170 的候选点
-      _starSamples = [];
-      for (final st in _stars) {
-        final sx = (st.x0 * w).clamp(0, w - 1).toInt();
-        final sy = (st.y0 * h).clamp(0, h - 1).toInt();
-        final lum = base.luminance(sy * w + sx);
-        if (lum > 165) _starSamples.add([sx, sy]);
-      }
-    }
     for (var i = 0; i < _starSamples.length; i++) {
       final st = _stars[i];
       final blinkV = math
           .pow(0.5 + 0.5 * math.sin(w2pi * blink * u + st.blinkPhase), 2.0)
           .toDouble();
       if (blinkV < 0.06) continue;
-      final a = (p.intensity * st.brightJit * blinkV * 255).round().clamp(0, 255);
+      final a = (p.intensity * _env.particles * st.brightJit * blinkV * 255)
+          .round()
+          .clamp(0, 255);
       final arm = (p.sizePx * st.sizeJit).clamp(2.0, 30.0);
       final sx = _starSamples[i][0].toDouble();
       final sy = _starSamples[i][1].toDouble();
+      if (_aa) {
+        // 四臂各自从中心外扩，fade² 与 legacy 一致（中心被四笔叠成亮核）。
+        for (final dir in const [
+          [1.0, 0.0],
+          [-1.0, 0.0],
+          [0.0, 1.0],
+          [0.0, -1.0]
+        ]) {
+          drawSegmentAA(frame, sx, sy, sx + dir[0] * arm, sy + dir[1] * arm,
+              255, 250, 230, a, 1.0,
+              op: BlendOp.screen, tailFade: 1.0, tailPow: 2);
+        }
+        continue;
+      }
       for (var d = 0; d < arm; d++) {
         final fade = 1 - d / arm;
         final aa = (a * fade * fade).round();
@@ -990,7 +1224,7 @@ class FrameCompositor {
         var fall = 1 - t * t;
         if (fall <= 0) continue;
         fall *= fall;
-        final add = (p.intensity * fall * 120).round();
+        final add = (p.intensity * _env.exposure * fall * 120).round();
         if (add <= 0) continue;
         for (var x = 0; x < w; x += 2) {
           _blendAddPx(frame, x, y, 220, 235, 255, add);
@@ -1000,8 +1234,8 @@ class FrameCompositor {
     }
   }
 
-  void _drawSoftDisc(
-      RgbaImage f, double cx, double cy, double rad, int r, int g, int b, int a) {
+  void _drawSoftDisc(RgbaImage f, double cx, double cy, double rad, int r,
+      int g, int b, int a) {
     final x0 = (cx - rad).floor(), x1 = (cx + rad).ceil();
     final y0 = (cy - rad).floor(), y1 = (cy + rad).ceil();
     for (var y = y0; y <= y1; y++) {

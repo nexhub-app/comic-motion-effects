@@ -48,27 +48,33 @@ class ImageIO {
   }
 
   static RgbaImage _fromPackage(img.Image im) {
-    final out = RgbaImage(width: im.width, height: im.height);
-    for (var y = 0; y < im.height; y++) {
-      for (var x = 0; x < im.width; x++) {
-        final p = im.getPixel(x, y);
-        out.setPixel(x, y, p.r.toInt(), p.g.toInt(), p.b.toInt(), p.a.toInt());
-      }
-    }
-    return out;
+    return RgbaImage.fromBytes(
+        width: im.width,
+        height: im.height,
+        data: im.getBytes(order: img.ChannelOrder.rgba));
   }
 
   static img.Image _toPackage(RgbaImage frame) {
-    final im =
-        img.Image(width: frame.width, height: frame.height, numChannels: 3);
-    final data = frame.data;
-    for (var y = 0; y < frame.height; y++) {
-      for (var x = 0; x < frame.width; x++) {
-        final i = (y * frame.width + x) * 4;
-        im.setPixelRgb(x, y, data[i], data[i + 1], data[i + 2]);
-      }
+    final rgb = _toRgbBuffer(frame);
+    return img.Image.fromBytes(
+        width: frame.width,
+        height: frame.height,
+        bytes: rgb.buffer,
+        numChannels: 3);
+  }
+
+  /// 引擎内部栅格是 RGBA，但对外产物（PNG 帧序列 / GIF 帧）一律丢 alpha 走
+  /// RGB —— v1.2 即如此，改通道数会让帧序列字节发生变化、破坏可复现契约。
+  static Uint8List _toRgbBuffer(RgbaImage frame) {
+    final n = frame.pixelCount;
+    final out = Uint8List(n * 3);
+    final d = frame.data;
+    for (var i = 0, s = 0, o = 0; i < n; i++, s += 4, o += 3) {
+      out[o] = d[s];
+      out[o + 1] = d[s + 1];
+      out[o + 2] = d[s + 2];
     }
-    return im;
+    return out;
   }
 
   /// Encode full frame list to an animated GIF.
@@ -76,15 +82,10 @@ class ImageIO {
       {int delayCentisecs = 4}) {
     if (frames.isEmpty) throw StateError('没有帧可编码');
     final first = _toPackage(frames.first);
-    final anim = img.Image(
-        width: first.width, height: first.height, numChannels: 3);
+    final anim =
+        img.Image(width: first.width, height: first.height, numChannels: 3);
     for (final f in frames) {
-      final fr = _toPackage(f);
-      final frameImg = img.copyResize(fr,
-          width: fr.width,
-          height: fr.height,
-          interpolation: img.Interpolation.nearest);
-      final added = anim.addFrame(frameImg);
+      final added = anim.addFrame(_toPackage(f));
       added.frameDuration = delayCentisecs * 10; // ms
     }
     return img.encodeGif(anim).toList();
@@ -93,6 +94,17 @@ class ImageIO {
   /// Encode one frame as PNG bytes (used by streaming frame writer).
   static List<int> encodePngFrame(RgbaImage frame) {
     return img.encodePng(_toPackage(frame)).toList();
+  }
+
+  /// 帧序列的统一命名：串行、worker、调色板探针三条路径必须写同一个路径，
+  /// 否则并行会产出不同文件名。
+  static String pngPathFor(String dir, int index) =>
+      '$dir\\frame_${index.toString().padLeft(4, '0')}.png';
+
+  static String writePngFrame(String dir, int index, RgbaImage frame) {
+    final p = pngPathFor(dir, index);
+    io.File(p).writeAsBytesSync(encodePngFrame(frame));
+    return p;
   }
 
   /// Write frames as a PNG sequence; returns file paths written.

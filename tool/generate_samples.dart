@@ -107,17 +107,25 @@ void _action(String dir, int W, int H) {
     final a = rnd.nextDouble() * 2 * math.pi;
     final r0 = 240.0 + rnd.nextDouble() * 60;
     const r1 = 900.0;
-    _ink(im, (cx + r0 * math.cos(a)).toInt(), (cy + r0 * math.sin(a)).toInt(),
-        (cx + r1 * math.cos(a)).toInt(), (cy + r1 * math.sin(a)).toInt(),
+    _ink(
+        im,
+        (cx + r0 * math.cos(a)).toInt(),
+        (cy + r0 * math.sin(a)).toInt(),
+        (cx + r1 * math.cos(a)).toInt(),
+        (cy + r1 * math.sin(a)).toInt(),
         2 + rnd.nextInt(4));
   }
   final ink = img.ColorRgb8(28, 26, 34);
   _ellipse(im, cx, cy - 160, 46, 50, ink); // head
   _ellipse(im, cx + 5, cy - 30, 75, 90, ink); // torso
-  img.fillRect(im, x1: cx - 60, y1: cy + 40, x2: cx - 10, y2: cy + 240, color: ink);
-  img.fillRect(im, x1: cx + 10, y1: cy + 40, x2: cx + 90, y2: cy + 220, color: ink);
-  img.fillRect(im, x1: cx - 130, y1: cy - 90, x2: cx - 40, y2: cy - 30, color: ink);
-  img.fillRect(im, x1: cx + 40, y1: cy - 100, x2: cx + 150, y2: cy - 20, color: ink);
+  img.fillRect(im,
+      x1: cx - 60, y1: cy + 40, x2: cx - 10, y2: cy + 240, color: ink);
+  img.fillRect(im,
+      x1: cx + 10, y1: cy + 40, x2: cx + 90, y2: cy + 220, color: ink);
+  img.fillRect(im,
+      x1: cx - 130, y1: cy - 90, x2: cx - 40, y2: cy - 30, color: ink);
+  img.fillRect(im,
+      x1: cx + 40, y1: cy - 100, x2: cx + 150, y2: cy - 20, color: ink);
   File('$dir\\02_action.png').writeAsBytesSync(img.encodePng(im));
 }
 
@@ -163,16 +171,12 @@ void _twoPanel(String dir, int W, int H) {
 void _landscape(String dir, int W, int H) {
   final im = _canvas(W, H, 200, 224, 238);
   _ellipse(im, W - 190, 160, 50, 50, img.ColorRgb8(252, 236, 170));
-  img.fillPolygon(im, vertices: [
-    img.Point(0, 700),
-    img.Point(220, 380),
-    img.Point(430, 700)
-  ], color: img.ColorRgb8(150, 170, 190));
-  img.fillPolygon(im, vertices: [
-    img.Point(300, 700),
-    img.Point(600, 300),
-    img.Point(900, 700)
-  ], color: img.ColorRgb8(120, 146, 172));
+  img.fillPolygon(im,
+      vertices: [img.Point(0, 700), img.Point(220, 380), img.Point(430, 700)],
+      color: img.ColorRgb8(150, 170, 190));
+  img.fillPolygon(im,
+      vertices: [img.Point(300, 700), img.Point(600, 300), img.Point(900, 700)],
+      color: img.ColorRgb8(120, 146, 172));
   img.fillRect(im,
       x1: 0, y1: 700, x2: W, y2: H, color: img.ColorRgb8(170, 190, 150));
   final ink = img.ColorRgb8(30, 28, 36);
@@ -204,8 +208,10 @@ void _closeup(String dir, int W, int H) {
 
 void _crowd(String dir, int W, int H) {
   final im = _canvas(W, H, 214, 200, 188);
-  img.fillRect(im, x1: 0, y1: 0, x2: 140, y2: H, color: img.ColorRgb8(150, 138, 128));
-  img.fillRect(im, x1: W - 140, y1: 0, x2: W, y2: H, color: img.ColorRgb8(150, 138, 128));
+  img.fillRect(im,
+      x1: 0, y1: 0, x2: 140, y2: H, color: img.ColorRgb8(150, 138, 128));
+  img.fillRect(im,
+      x1: W - 140, y1: 0, x2: W, y2: H, color: img.ColorRgb8(150, 138, 128));
   final rnd = math.Random(21);
   for (var row = 0; row < 4; row++) {
     final y = 480 + row * 200;
@@ -230,4 +236,3 @@ void _crowd(String dir, int W, int H) {
   }
   File('$dir\\06_crowd.png').writeAsBytesSync(img.encodePng(im));
 }
-

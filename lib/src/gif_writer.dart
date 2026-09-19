@@ -1,156 +1,203 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'effect_config.dart';
 import 'image_model.dart';
+import 'render/quality.dart';
 
-/// Streaming GIF89a writer: builds ONE palette via median-cut from the first
-/// frame, then quantizes + LZW-encodes each frame on the fly and discards it.
-/// Memory stays O(one frame) instead of O(all frames).
+/// 单帧 GIF 编码器：调色板定板后即为一颗纯函数（帧栅格 → 该帧的 GIF body
+/// 片段），不依赖任何跨帧状态。因此可以整份复制进 worker isolate 并行执行，
+/// 主 isolate 只按帧序拼接字节。
 ///
-/// Deterministic: no randomness; identical frames produce identical bytes.
-class StreamingGifBuilder {
-  StreamingGifBuilder(this.width, this.height,
-      {required int fps, bool loopForever = true, bool dither = false})
-      : delayCs = (100 / fps).round().clamp(2, 100),
-        loopForever = loopForever,
-        dither = dither;
+/// 确定性：无随机数；相同帧 + 相同调色板 ⇒ 逐字节相同。
+class GifFrameEncoder {
+  GifFrameEncoder({
+    required this.width,
+    required this.height,
+    required this.delayCs,
+    required List<int> palette,
+    required this.dither,
+    required this.sierra,
+    required this.useLut,
+  }) : palette = _toBytes(palette);
 
   final int width;
   final int height;
   final int delayCs;
-  final bool loopForever;
 
-  /// v1.2：Floyd–Steinberg 误差扩散抖动（逐帧、确定性，减轻 256 色色带）。
+  /// 256 色 × 3 通道。
+  final Uint8List palette;
+
+  /// 误差扩散抖动（减轻 256 色渐变色带）。
   final bool dither;
 
-  final BytesBuilder _body = BytesBuilder();
-  List<int>? _palette; // 256*3 ints
-  Map<int, int> _indexCache = {};
-  int _frames = 0;
+  /// sierra 风格核（水平 reach 更远、权重更平缓）取代 floyd；仅 standard+。
+  final bool sierra;
 
-  int get frameCount => _frames;
+  /// standard+ 用 5-5-5 桶惰性 LUT 代替无界 Map 缓存（固定 64KB）。
+  final bool useLut;
 
-  /// Median-cut palette from a deterministic subsample of the first frame.
-  void _buildPalette(RgbaImage frame) {
-    // Histogram at 5-5-5 granularity over a strided sample.
-    final hist = <int, int>{};
-    final total = frame.pixelCount;
-    final stride = math.max(1, total ~/ 30000);
-    for (var i = 0; i < total; i += stride) {
-      final o = i * 4;
-      final key = (frame.data[o] >> 3) << 10 |
-          (frame.data[o + 1] >> 3) << 5 |
-          (frame.data[o + 2] >> 3);
-      hist[key] = (hist[key] ?? 0) + 1;
+  final Map<int, int> _indexCache = {};
+  final Uint8List _bucketLut = Uint8List(32768);
+  final Uint8List _bucketBuilt = Uint8List(32768);
+
+  /// 256 个打包 int（0xRRGGBB）→ 768 字节。
+  static Uint8List _toBytes(List<int> packed) {
+    final b = Uint8List(256 * 3);
+    for (var i = 0; i < 256 && i < packed.length; i++) {
+      final o = i * 3;
+      b[o] = (packed[i] >> 16) & 0xff;
+      b[o + 1] = (packed[i] >> 8) & 0xff;
+      b[o + 2] = packed[i] & 0xff;
     }
-    // Boxes of 15-bit color keys; split on longest axis at weighted median.
-    var boxes = <_Box>[_Box(hist.keys.toList())];
-    while (boxes.length < 256) {
-      // pick box with largest volume*count to split
-      _Box? best;
-      var bestScore = -1;
-      var bestIdx = -1;
-      for (var bi = 0; bi < boxes.length; bi++) {
-        final b = boxes[bi];
-        if (b.keys.length < 2) continue;
-        final score = b.score(hist);
-        if (score > bestScore) {
-          bestScore = score;
-          best = b;
-          bestIdx = bi;
-        }
-      }
-      if (best == null) break;
-      final halves = best.split(hist);
-      boxes[bestIdx] = halves[0];
-      boxes.add(halves[1]);
-    }
-    final pal = <int>[];
-    for (final b in boxes) {
-      pal.add(b.avgColor(hist));
-    }
-    while (pal.length < 256) {
-      pal.add(0);
-    }
-    _palette = pal;
+    return b;
   }
 
-  int _nearest(int r, int g, int b) {
-    final key = (r << 16) | (g << 8) | b;
-    final cached = _indexCache[key];
-    if (cached != null) return cached;
-    final pal = _palette!;
+  /// 该帧在 GIF 数据流中的完整片段：图形控制扩展 + 图像描述符 + LZW 子块。
+  Uint8List encodeFrameBody(RgbaImage frame) {
+    if (frame.width != width || frame.height != height) {
+      throw ArgumentError(
+          '帧尺寸 ${frame.width}x${frame.height} 与编码器 ${width}x$height 不一致');
+    }
+    final indexed = dither ? _quantizeDithered(frame) : _quantizeNearest(frame);
+    final body = BytesBuilder();
+    // Graphic control extension
+    body.add([
+      0x21,
+      0xF9,
+      0x04,
+      0x00,
+      delayCs & 0xff,
+      (delayCs >> 8) & 0xff,
+      0x00,
+      0x00,
+    ]);
+    // Image descriptor: separator, left(2), top(2), width(2), height(2), packed
+    body.add([
+      0x2C,
+      0x00, 0x00, // left = 0
+      0x00, 0x00, // top = 0
+      width & 0xff, (width >> 8) & 0xff,
+      height & 0xff, (height >> 8) & 0xff,
+      0x00, // no local color table, not interlaced
+    ]);
+    const minCodeSize = 8;
+    body.add([minCodeSize]);
+    final lzw = encodeLzw(indexed, minCodeSize);
+    var off = 0;
+    while (off < lzw.length) {
+      final n = math.min(255, lzw.length - off);
+      body.add([n]);
+      body.add(Uint8List.sublistView(lzw, off, off + n));
+      off += n;
+    }
+    body.add([0x00]); // block terminator
+    return body.takeBytes();
+  }
+
+  int _searchExact(int r, int g, int b) {
+    final pal = palette;
     var best = 0, bestDist = 1 << 30;
-    for (var i = 0; i < pal.length; i++) {
-      final pr = pal[i] >> 16 & 0xff;
-      final pg = pal[i] >> 8 & 0xff;
-      final pb = pal[i] & 0xff;
-      final dr = pr - r, dg = pg - g, db = pb - b;
+    for (var i = 0; i < 256; i++) {
+      final o = i * 3;
+      final dr = pal[o] - r, dg = pal[o + 1] - g, db = pal[o + 2] - b;
       final d = dr * dr + dg * dg + db * db;
       if (d < bestDist) {
         bestDist = d;
         best = i;
       }
     }
+    return best;
+  }
+
+  /// legacy 路径：按精确 RGB 键的 Map 缓存（与 v1.2 一致）。
+  int _nearestExact(int r, int g, int b) {
+    final key = (r << 16) | (g << 8) | b;
+    final cached = _indexCache[key];
+    if (cached != null) return cached;
+    final best = _searchExact(r, g, b);
     if (_indexCache.length < 200000) _indexCache[key] = best;
     return best;
   }
 
-  /// 最近色量化（原 v1.1 路径，dither=false 时使用）。
+  /// standard+ 路径：5-5-5 桶惰性 LUT。同桶像素共享一次搜索（取桶中心色），
+  /// 最多 32768 次搜索后全部命中定长表，无 Map 装箱与无界增长。
+  int _nearestLut(int r, int g, int b) {
+    final key = (r >> 3) << 10 | (g >> 3) << 5 | (b >> 3);
+    if (_bucketBuilt[key] == 0) {
+      _bucketBuilt[key] = 1;
+      _bucketLut[key] =
+          _searchExact((r & 0xf8) | 4, (g & 0xf8) | 4, (b & 0xf8) | 4);
+    }
+    return _bucketLut[key];
+  }
+
+  /// 最近色量化（dither=false 时使用）。
   Uint8List _quantizeNearest(RgbaImage frame) {
+    final nearest = useLut ? _nearestLut : _nearestExact;
     final indexed = Uint8List(frame.pixelCount);
     final d = frame.data;
     for (var i = 0; i < frame.pixelCount; i++) {
       final o = i * 4;
-      indexed[i] = _nearest(d[o], d[o + 1], d[o + 2]);
+      indexed[i] = nearest(d[o], d[o + 1], d[o + 2]);
     }
     return indexed;
   }
 
-  /// Floyd–Steinberg 误差扩散量化（确定性：误差传播不含随机数）。
+  /// 误差扩散核：`[dx, dy, 权重]` 三元组，分母固定 16（整数运算，无浮点漂移）。
+  /// Floyd–Steinberg 与 v1.2 的手写展开逐字节一致。
+  static const List<int> _floydTaps = [1, 0, 7, -1, 1, 3, 0, 1, 5, 1, 1, 1];
+
+  /// 两行 Sierra 风格核：水平 reach 到 +2 列、权重更平缓，色带更柔和（standard+）。
+  static const List<int> _sierraTaps = [
+    1, 0, 4, //
+    2, 0, 3, //
+    -1, 1, 2, //
+    0, 1, 4, //
+    1, 1, 2, //
+    2, 1, 1, //
+  ];
+
+  /// 误差扩散抖动量化（确定性：误差传播不含随机数）。
   /// 内存 O(两行)，逐帧独立无跨帧污染。
   Uint8List _quantizeDithered(RgbaImage frame) {
     final wd = width, ht = height;
-    // 两行误差缓冲（当前行 cur，下一行 nxt），每通道 int
-    var cur = List<int>.filled((wd + 2) * 3, 0);
-    var nxt = List<int>.filled((wd + 2) * 3, 0);
+    final taps = sierra ? _sierraTaps : _floydTaps;
+    final nTaps = taps.length ~/ 3;
+    final nearest = useLut ? _nearestLut : _nearestExact;
+    final pal = palette;
     final indexed = Uint8List(frame.pixelCount);
     final d = frame.data;
+    // 两行误差缓冲（当前行 cur，下一行 nxt），每通道 int。基址偏移 2 格、右侧
+    // 留 5 格余量，使 dx=-1 与 reach 到 +2 列的核都不越界。
+    var cur = List<int>.filled((wd + 5) * 3, 0);
+    var nxt = List<int>.filled((wd + 5) * 3, 0);
     for (var y = 0; y < ht; y++) {
+      final rowBase = y * wd * 4;
+      final lastRow = y + 1 >= ht;
       for (var x = 0; x < wd; x++) {
-        final o = (y * wd + x) * 4;
-        final bi = (x + 1) * 3;
+        final o = rowBase + x * 4;
+        final bi = (x + 2) * 3;
         final r0 = (d[o] + cur[bi]).clamp(0, 255);
         final g0 = (d[o + 1] + cur[bi + 1]).clamp(0, 255);
         final b0 = (d[o + 2] + cur[bi + 2]).clamp(0, 255);
-        final idx = _nearest(r0, g0, b0);
+        final idx = nearest(r0, g0, b0);
         indexed[y * wd + x] = idx;
         // 反量化回色值，计算误差
-        final pal = _palette!;
-        final pr = pal[idx] >> 16 & 0xff;
-        final pg = pal[idx] >> 8 & 0xff;
-        final pb = pal[idx] & 0xff;
-        final er = r0 - pr, eg = g0 - pg, eb = b0 - pb;
-        // Floyd–Steinberg 分布：右 7/16，左下 3/16，下 5/16，右下 1/16
-        if (x + 1 < wd) {
-          cur[bi + 3] += er * 7 ~/ 16;
-          cur[bi + 4] += eg * 7 ~/ 16;
-          cur[bi + 5] += eb * 7 ~/ 16;
-        }
-        if (y + 1 < ht) {
-          if (x > 0) {
-            nxt[bi - 3] += er * 3 ~/ 16;
-            nxt[bi - 2] += eg * 3 ~/ 16;
-            nxt[bi - 1] += eb * 3 ~/ 16;
-          }
-          nxt[bi] += er * 5 ~/ 16;
-          nxt[bi + 1] += eg * 5 ~/ 16;
-          nxt[bi + 2] += eb * 5 ~/ 16;
-          if (x + 1 < wd) {
-            nxt[bi + 3] += er ~/ 16;
-            nxt[bi + 4] += eg ~/ 16;
-            nxt[bi + 5] += eb ~/ 16;
-          }
+        final po = idx * 3;
+        final er = r0 - pal[po];
+        final eg = g0 - pal[po + 1];
+        final eb = b0 - pal[po + 2];
+        for (var k = 0; k < nTaps; k++) {
+          final dx = taps[k * 3], dy = taps[k * 3 + 1], wgt = taps[k * 3 + 2];
+          final tx = x + dx;
+          if (tx < 0 || tx >= wd) continue;
+          if (dy != 0 && lastRow) continue;
+          final buf = dy == 0 ? cur : nxt;
+          final to = (tx + 2) * 3;
+          buf[to] += er * wgt ~/ 16;
+          buf[to + 1] += eg * wgt ~/ 16;
+          buf[to + 2] += eb * wgt ~/ 16;
         }
       }
       final tmp = cur;
@@ -161,64 +208,8 @@ class StreamingGifBuilder {
     return indexed;
   }
 
-  void addFrame(RgbaImage frame) {
-    if (frame.width != width || frame.height != height) {
-      throw ArgumentError(
-          '帧尺寸 ${frame.width}x${frame.height} 与编码器 ${width}x${height} 不一致');
-    }
-    if (_palette == null) {
-      _buildPalette(frame);
-    }
-    final indexed = dither
-        ? _quantizeDithered(frame)
-        : _quantizeNearest(frame);
-    // Graphic control extension
-    _body.add([0x21, 0xF9, 0x04, 0x00, delayCs & 0xff, (delayCs >> 8) & 0xff, 0x00, 0x00]);
-    // Image descriptor: separator, left(2), top(2), width(2), height(2), packed
-    _body.add([
-      0x2C,
-      0x00, 0x00, // left = 0
-      0x00, 0x00, // top = 0
-      width & 0xff, (width >> 8) & 0xff,
-      height & 0xff, (height >> 8) & 0xff,
-      0x00, // no local color table, not interlaced
-    ]);
-    final minCodeSize = 8;
-    _body.add([minCodeSize]);
-    final lzw = _lzw(indexed, minCodeSize);
-    // sub-block chunking
-    var off = 0;
-    while (off < lzw.length) {
-      final n = math.min(255, lzw.length - off);
-      _body.add([n]);
-      _body.add(Uint8List.sublistView(lzw, off, off + n));
-      off += n;
-    }
-    _body.add([0x00]); // block terminator
-    _frames++;
-  }
-
-  List<int> finish() {
-    if (_frames == 0) throw StateError('没有帧可编码');
-    final out = BytesBuilder();
-    out.add([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]); // GIF89a
-    out.add([width & 0xff, (width >> 8) & 0xff, height & 0xff, (height >> 8) & 0xff]);
-    out.add([0xF7, 0x00, 0x00]); // GCT, 256 colors, bg=0, aspect=0
-    for (final c in _palette!) {
-      out.add([(c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff]);
-    }
-    if (loopForever) {
-      out.add([0x21, 0xFF, 0x0B]);
-      out.add('NETSCAPE2.0'.codeUnits);
-      out.add([0x03, 0x01, 0x00, 0x00, 0x00]);
-    }
-    out.add(_body.takeBytes());
-    out.add([0x3B]); // trailer
-    return out.takeBytes();
-  }
-
   /// Standard variable-width GIF LZW over a Uint8List of indices.
-  static Uint8List _lzw(Uint8List pixels, int minCodeSize) {
+  static Uint8List encodeLzw(Uint8List pixels, int minCodeSize) {
     final clearCode = 1 << minCodeSize;
     final eoiCode = clearCode + 1;
     var codeSize = minCodeSize + 1;
@@ -269,6 +260,171 @@ class StreamingGifBuilder {
     if (prefixCode >= 0) emit(prefixCode);
     emit(eoiCode);
     if (bitCount > 0) out.addByte(bitBuf & 0xff);
+    return out.takeBytes();
+  }
+}
+
+/// Streaming GIF89a writer: builds ONE palette via median-cut, then quantizes +
+/// LZW-encodes each frame on the fly and discards it.
+/// Memory stays O(one frame) instead of O(all frames).
+///
+/// Determinism: no randomness; identical frames produce identical bytes.
+/// [RenderTier.legacy] reproduces the v1.2 path byte-for-byte (first-frame
+/// palette + exact nearest colour with a Map cache + Floyd–Steinberg).
+class StreamingGifBuilder {
+  StreamingGifBuilder(this.width, this.height,
+      {required int fps,
+      bool loopForever = true,
+      bool dither = false,
+      String ditherMode = 'floyd',
+      RenderTier tier = RenderTier.legacy})
+      : delayCs = (100 / fps).round().clamp(2, 100),
+        loopForever = loopForever,
+        dither = dither,
+        sierra = dither && ditherMode == 'sierra' && tier.atLeastStandard,
+        tier = tier;
+
+  factory StreamingGifBuilder.fromConfig(
+          EffectConfig config, int width, int height) =>
+      StreamingGifBuilder(width, height,
+          fps: config.fps,
+          dither: config.quality.dither,
+          ditherMode: config.quality.ditherMode,
+          tier: config.quality.tier);
+
+  final int width;
+  final int height;
+  final int delayCs;
+  final bool loopForever;
+
+  /// 误差扩散抖动（减轻 256 色渐变色带）。
+  final bool dither;
+
+  /// sierra 核（更柔和）取代 floyd 的 4 抽点；仅 standard+ 生效。
+  final bool sierra;
+
+  final RenderTier tier;
+
+  /// 管线用：standard+ 档在流式提交前先给三帧探针建调色板。
+  bool get wantsProbes => tier.atLeastStandard;
+
+  final BytesBuilder _body = BytesBuilder();
+  List<int>? _palette; // 256 个打包 0xRRGGBB
+  GifFrameEncoder? _enc;
+  int _frames = 0;
+
+  int get frameCount => _frames;
+  bool get hasPalette => _palette != null;
+
+  /// 定板后的 256 色打包调色板（0xRRGGBB），供 worker 侧重建单帧编码器。
+  List<int>? get palettePacked => _palette;
+
+  /// 多帧探针建板（standard+）：直方图跨帧累加，避免首帧以外的动效亮色挤不进
+  /// 256 色。单探针时与 v1.2 逐字节一致。
+  void primePalette(List<RgbaImage> probes) {
+    if (_palette != null || probes.isEmpty) return;
+    _buildPaletteFrom(probes);
+  }
+
+  /// Median-cut palette from a deterministic subsample of the given frames.
+  void _buildPaletteFrom(List<RgbaImage> frames) {
+    // Histogram at 5-5-5 granularity over a strided sample.
+    final hist = <int, int>{};
+    for (final frame in frames) {
+      final total = frame.pixelCount;
+      final stride = math.max(1, total ~/ 30000);
+      for (var i = 0; i < total; i += stride) {
+        final o = i * 4;
+        final key = (frame.data[o] >> 3) << 10 |
+            (frame.data[o + 1] >> 3) << 5 |
+            (frame.data[o + 2] >> 3);
+        hist[key] = (hist[key] ?? 0) + 1;
+      }
+    }
+    // Boxes of 15-bit color keys; split on longest axis at weighted median.
+    var boxes = <_Box>[_Box(hist.keys.toList())];
+    while (boxes.length < 256) {
+      // pick box with largest volume*count to split
+      _Box? best;
+      var bestScore = -1;
+      var bestIdx = -1;
+      for (var bi = 0; bi < boxes.length; bi++) {
+        final b = boxes[bi];
+        if (b.keys.length < 2) continue;
+        final score = b.score(hist);
+        if (score > bestScore) {
+          bestScore = score;
+          best = b;
+          bestIdx = bi;
+        }
+      }
+      if (best == null) break;
+      final halves = best.split(hist);
+      boxes[bestIdx] = halves[0];
+      boxes.add(halves[1]);
+    }
+    final pal = <int>[];
+    for (final b in boxes) {
+      pal.add(b.avgColor(hist));
+    }
+    while (pal.length < 256) {
+      pal.add(0);
+    }
+    _palette = pal;
+  }
+
+  /// 定板后导出单帧编码器：主 isolate 与每个 worker 各持一份（各自的缓存只
+  /// 影响速度，不影响字节）。
+  GifFrameEncoder newFrameEncoder() {
+    final existing = _enc;
+    if (existing != null) return existing;
+    final pal = _palette;
+    if (pal == null) throw StateError('调色板尚未建立');
+    return _enc = GifFrameEncoder(
+      width: width,
+      height: height,
+      delayCs: delayCs,
+      palette: pal,
+      dither: dither,
+      sierra: sierra,
+      useLut: tier.atLeastStandard,
+    );
+  }
+
+  void addFrame(RgbaImage frame) {
+    if (_palette == null) primePalette([frame]);
+    _body.add(newFrameEncoder().encodeFrameBody(frame));
+    _frames++;
+  }
+
+  /// 按序拼接 worker 产出的帧片段（与 [addFrame] 的字节完全一致）。
+  void addEncodedBody(Uint8List body) {
+    if (!hasPalette) throw StateError('调色板尚未建立');
+    _body.add(body);
+    _frames++;
+  }
+
+  List<int> finish() {
+    if (_frames == 0) throw StateError('没有帧可编码');
+    final out = BytesBuilder();
+    out.add([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]); // GIF89a
+    out.add([
+      width & 0xff,
+      (width >> 8) & 0xff,
+      height & 0xff,
+      (height >> 8) & 0xff,
+    ]);
+    out.add([0xF7, 0x00, 0x00]); // GCT, 256 colors, bg=0, aspect=0
+    for (final c in _palette!) {
+      out.add([(c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff]);
+    }
+    if (loopForever) {
+      out.add([0x21, 0xFF, 0x0B]);
+      out.add('NETSCAPE2.0'.codeUnits);
+      out.add([0x03, 0x01, 0x00, 0x00, 0x00]);
+    }
+    out.add(_body.takeBytes());
+    out.add([0x3B]); // trailer
     return out.takeBytes();
   }
 }

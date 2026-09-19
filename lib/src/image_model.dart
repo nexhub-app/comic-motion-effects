@@ -1,19 +1,30 @@
 /// Core image model: an 8-bit RGBA raster used across the engine.
 library;
 
+import 'dart:typed_data';
+
 /// RGBA image with row-major storage. Alpha is 255 (opaque) for normal pixels.
 class RgbaImage {
   RgbaImage({required this.width, required this.height})
-      : data = List<int>.filled(width * height * 4, 0, growable: false);
+      : data = Uint8List(width * height * 4);
+
+  /// Wrap an existing RGBA raster (4 bytes per pixel, no copy).
+  RgbaImage.fromBytes(
+      {required this.width, required this.height, required this.data})
+      : assert(data.length == width * height * 4,
+            '栅格长度 ${data.length} 与尺寸 ${width}x$height 不一致');
 
   final int width;
   final int height;
-  final List<int> data; // RGBA, 4 bytes per pixel
+  final Uint8List data; // RGBA, 4 bytes per pixel
 
   int get pixelCount => width * height;
 
   bool get isValidSize =>
-      width > 0 && height > 0 && width <= maxDimension && height <= maxDimension;
+      width > 0 &&
+      height > 0 &&
+      width <= maxDimension &&
+      height <= maxDimension;
 
   static const int maxDimension = 12000;
 
@@ -37,7 +48,7 @@ class RgbaImage {
 
   RgbaImage clone() {
     final img = RgbaImage(width: width, height: height);
-    img.data.setAll(0, data);
+    img.data.setRange(0, data.length, data);
     return img;
   }
 

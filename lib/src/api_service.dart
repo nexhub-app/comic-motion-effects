@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert' as convert;
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:shelf/shelf.dart';
 import 'package:shelf_router/shelf_router.dart';
@@ -9,13 +10,18 @@ import 'effect_config.dart';
 import 'json_compat.dart';
 import 'ledger.dart';
 import 'pipeline.dart';
+import 'version.dart';
+import 'worker_pool.dart';
 
 /// In-memory job record for the async HTTP API.
 class _HttpJob {
-  _HttpJob(this.id, this.inputPath, this.config);
+  _HttpJob(this.id, this.inputPath, this.config, {this.parallel});
   final String id;
   final String inputPath;
   final EffectConfig config;
+
+  /// 执行期并行度（null = 默认）。不进 config，因此不影响 configHash。
+  final int? parallel;
   String status = 'queued'; // queued | running | success | failed
   Map<String, dynamic>? result;
   String? error;
@@ -45,13 +51,19 @@ class MotionApiService {
   final int concurrency;
 
   final String _outputsDir;
+
+  /// 单任务并行度上限：服务会同时跑 [concurrency] 个任务，按并发数分摊默认值，
+  /// 避免 worker isolate 数 = concurrency × 8 造成 CPU/内存过订。
+  int get _parallelPerJob =>
+      math.max(1, kDefaultParallel ~/ math.max(1, concurrency));
+
   final Map<String, _HttpJob> _jobs = {};
   final List<String> _queue = [];
   var _active = 0;
   var _seq = 0;
   final _completers = <String, Completer<void>>{};
 
-  String get version => '1.0.0';
+  String get version => comicMotionVersion;
 
   Router get router {
     final r = Router();
@@ -83,7 +95,8 @@ class MotionApiService {
       } catch (e) {
         return _json({
           'error': 'E_BAD_CONFIG',
-          'message': '配置字段不正确: ${e.toString().substring(0, e.toString().length.clamp(0, 200))}'
+          'message':
+              '配置字段不正确: ${e.toString().substring(0, e.toString().length.clamp(0, 200))}'
         }, 400);
       }
       String? inputPath = j['inputPath'] as String?;
@@ -97,19 +110,23 @@ class MotionApiService {
           inputPath = tmp;
         } on FormatException {
           return _json(
-              {'error': 'E_BAD_INPUT', 'message': 'inputBase64 不是合法 Base64'}, 400);
+              {'error': 'E_BAD_INPUT', 'message': 'inputBase64 不是合法 Base64'},
+              400);
         }
       }
       if (inputPath == null || inputPath.isEmpty) {
         return _json(
-            {'error': 'E_NO_INPUT', 'message': '缺少 inputPath 或 inputBase64'}, 400);
+            {'error': 'E_NO_INPUT', 'message': '缺少 inputPath 或 inputBase64'},
+            400);
       }
       if (!File(inputPath).existsSync()) {
-        return _json({'error': 'E_NO_INPUT', 'message': '文件不存在: $inputPath'}, 400);
+        return _json(
+            {'error': 'E_NO_INPUT', 'message': '文件不存在: $inputPath'}, 400);
       }
 
       final jobId = 'job-${DateTime.now().millisecondsSinceEpoch}-${++_seq}';
-      _jobs[jobId] = _HttpJob(jobId, inputPath, config);
+      _jobs[jobId] = _HttpJob(jobId, inputPath, config,
+          parallel: (j['parallel'] as num?)?.toInt());
       _queue.add(jobId);
       _pump();
       return _json({'jobId': jobId, 'status': 'queued'}, 202);
@@ -165,8 +182,7 @@ class MotionApiService {
               : normalized.endsWith('.json')
                   ? 'application/json'
                   : 'application/octet-stream';
-      return Response.ok(f.readAsBytesSync(),
-          headers: {'Content-Type': mime});
+      return Response.ok(f.readAsBytesSync(), headers: {'Content-Type': mime});
     });
 
     return r;
@@ -188,9 +204,10 @@ class MotionApiService {
       if (job == null) continue;
       _active++;
       job.status = 'running';
-      Future(() {
-        final r = MotionPipeline(job.config).processFile(
-            job.inputPath, _outputsDir);
+      Future(() async {
+        final r = await MotionPipeline(job.config,
+                parallel: job.parallel ?? _parallelPerJob)
+            .processFile(job.inputPath, _outputsDir);
         job.result = {
           'input': r.inputPath,
           'gif': r.outputGif,
@@ -201,6 +218,9 @@ class MotionApiService {
           'frameCount': r.frameCount,
           'elapsedMs': r.elapsedMs,
           'configHash': r.configHash,
+          'parallel': r.parallel,
+          if (r.parallelFallback) 'parallelFallback': true,
+          if (r.warnings.isNotEmpty) 'warnings': r.warnings,
         };
         job.status = 'success';
         ledger.appendJob(
@@ -216,10 +236,15 @@ class MotionApiService {
           layerCount: r.layerCount,
           frameCount: r.frameCount,
           elapsedMs: r.elapsedMs,
+          parallel: r.parallel,
+          parallelFallback: r.parallelFallback ? true : null,
+          warnings: r.warnings,
         );
       }).catchError((Object e) {
         job.status = 'failed';
-        job.error = e.toString();
+        job.error = e is EngineWorkerException
+            ? '${EngineWorkerException.code}: $e'
+            : e.toString();
         ledger.appendJob(
           jobId: job.id,
           input: job.inputPath,

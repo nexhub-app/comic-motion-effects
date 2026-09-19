@@ -28,6 +28,9 @@ class Ledger {
     int? layerCount,
     int? frameCount,
     int? elapsedMs,
+    int? parallel,
+    bool? parallelFallback,
+    List<String>? warnings,
     String? error,
   }) {
     final rec = <String, dynamic>{
@@ -44,6 +47,9 @@ class Ledger {
       if (layerCount != null) 'layerCount': layerCount,
       if (frameCount != null) 'frameCount': frameCount,
       if (elapsedMs != null) 'elapsedMs': elapsedMs,
+      if (parallel != null) 'parallel': parallel,
+      if (parallelFallback != null) 'parallelFallback': parallelFallback,
+      if (warnings != null && warnings.isNotEmpty) 'warnings': warnings,
       if (error != null) 'error': error,
     };
     final line = _jsonEncode(rec);
@@ -86,12 +92,20 @@ class Ledger {
 }
 
 // Minimal JSON helpers to avoid importing dart:convert in the public API.
+String _quote(String v) =>
+    '"${v.replaceAll('\\', r'\\').replaceAll('"', r'\"')}"';
+
 String _jsonEncode(Map<String, dynamic> m) {
   final parts = <String>[];
   m.forEach((k, v) {
-    final s = v is String
-        ? '"${v.replaceAll('\\', r'\\').replaceAll('"', r'\"')}"'
-        : v.toString();
+    final String s;
+    if (v is String) {
+      s = _quote(v);
+    } else if (v is List) {
+      s = '[${v.map((e) => _quote('$e')).join(',')}]';
+    } else {
+      s = v.toString();
+    }
     parts.add('"$k":$s');
   });
   return '{${parts.join(',')}}';

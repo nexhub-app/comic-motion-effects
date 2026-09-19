@@ -4,6 +4,7 @@ import 'effect_config.dart';
 import 'image_model.dart';
 import 'ledger.dart';
 import 'pipeline.dart';
+import 'worker_pool.dart';
 
 /// One batch item outcome.
 class BatchItemResult {
@@ -60,20 +61,39 @@ class BatchRunner {
       ..sort();
   }
 
-  List<BatchItemResult> runFolder({
+  /// 批量处理一个目录：单文件失败不中断整批，原因记进台账。
+  ///
+  /// [parallel] 覆盖单文件并行度（null = 用 [kDefaultParallel]，1 = 串行）。
+  Future<List<BatchItemResult>> runFolder({
     required String inputDir,
     required String outputDir,
     required EffectConfig config,
     String? jobIdPrefix,
+    int? parallel,
   }) {
+    // 目录校验留在同步段：v1.2 的调用方直接 catch ConfigException。
     final files = listImages(inputDir);
+    return _runAll(files,
+        outputDir: outputDir,
+        config: config,
+        prefix: jobIdPrefix ?? 'batch',
+        parallel: parallel);
+  }
+
+  Future<List<BatchItemResult>> _runAll(
+    List<String> files, {
+    required String outputDir,
+    required EffectConfig config,
+    required String prefix,
+    int? parallel,
+  }) async {
     final results = <BatchItemResult>[];
-    final prefix = jobIdPrefix ?? 'batch';
     for (final f in files) {
       final jobId = '$prefix-${DateTime.now().millisecondsSinceEpoch}-'
           '${results.length + 1}';
       try {
-        final r = MotionPipeline(config).processFile(f, outputDir);
+        final r = await MotionPipeline(config, parallel: parallel)
+            .processFile(f, outputDir);
         ledger.appendJob(
           jobId: jobId,
           input: f,
@@ -87,6 +107,9 @@ class BatchRunner {
           layerCount: r.layerCount,
           frameCount: r.frameCount,
           elapsedMs: r.elapsedMs,
+          parallel: r.parallel,
+          parallelFallback: r.parallelFallback ? true : null,
+          warnings: r.warnings,
         );
         results.add(BatchItemResult(
           input: f,
@@ -100,6 +123,9 @@ class BatchRunner {
         results.add(_fail(f, jobId, config, e.toString(), outputDir));
       } on ImageTooLargeException catch (e) {
         results.add(_fail(f, jobId, config, e.toString(), outputDir));
+      } on EngineWorkerException catch (e) {
+        results.add(_fail(
+            f, jobId, config, '${EngineWorkerException.code}: $e', outputDir));
       } on FileSystemException catch (e) {
         results.add(_fail(f, jobId, config, '文件读写失败: ${e.message}', outputDir));
       } catch (e) {
