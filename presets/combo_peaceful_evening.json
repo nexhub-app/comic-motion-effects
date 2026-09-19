@@ -1,0 +1,84 @@
+{
+  "configVersion": "v1",
+  "effects": [
+    "parallax",
+    "breathing",
+    "fog",
+    "leaves",
+    "fireflies",
+    "godRays",
+    "toneShift",
+    "moodScript"
+  ],
+  "parallax": {
+    "amplitude": 0.012,
+    "periodSec": 3.0,
+    "directionDeg": 0.0,
+    "verticalRatio": 0.35
+  },
+  "breathing": {
+    "enabled": true,
+    "amplitude": 0.006,
+    "periodSec": 3.0,
+    "anchor": "center"
+  },
+  "ambient": {
+    "enabled": true,
+    "particleCount": 40,
+    "speed": 12.0,
+    "opacity": 0.16,
+    "mode": "dust"
+  },
+  "fireflies": {
+    "count": 26,
+    "glowPx": 16.0,
+    "blinkCycles": 3,
+    "driftCycles": 2,
+    "opacity": 0.8,
+    "color": "ffe27a"
+  },
+  "godRays": {
+    "count": 3,
+    "angleDeg": 26.0,
+    "widthFrac": 0.07,
+    "intensity": 0.26,
+    "swayCycles": 1,
+    "color": "fff0c8"
+  },
+  "fog": {
+    "blobs": 7,
+    "driftCycles": 1,
+    "opacity": 0.1,
+    "color": "eaf0e4"
+  },
+  "toneShift": {
+    "shift": 0.05,
+    "warmthCycles": 1
+  },
+  "leaves": {
+    "count": 14,
+    "fallCycles": 1,
+    "sizePx": 12.0,
+    "flipTurns": 2,
+    "swayPx": 26.0,
+    "opacity": 0.88,
+    "palette": "summer"
+  },
+  "moodScript": {
+    "mood": "calm",
+    "cycles": 1,
+    "strength": 1.0
+  },
+  "quality": {
+    "dither": false,
+    "tier": "standard"
+  },
+  "fps": 12,
+  "durationSec": 3.0,
+  "depthMode": "autoLayers",
+  "layerCount": 3,
+  "outputFormat": "both",
+  "seed": 20260914,
+  "maxDimension": 512,
+  "maxFrames": 96
+}

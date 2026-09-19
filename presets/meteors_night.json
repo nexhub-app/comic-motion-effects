@@ -1,0 +1,47 @@
+{
+  "configVersion": "v1",
+  "effects": [
+    "parallax",
+    "breathing",
+    "meteors"
+  ],
+  "parallax": {
+    "amplitude": 0.01,
+    "periodSec": 3.0,
+    "directionDeg": 0.0,
+    "verticalRatio": 0.35
+  },
+  "breathing": {
+    "enabled": true,
+    "amplitude": 0.005,
+    "periodSec": 3.0,
+    "anchor": "center"
+  },
+  "ambient": {
+    "enabled": true,
+    "particleCount": 40,
+    "speed": 12.0,
+    "opacity": 0.16,
+    "mode": "dust"
+  },
+  "meteors": {
+    "count": 6,
+    "streakCycles": 2,
+    "angleDeg": 32.0,
+    "lengthFrac": 0.24,
+    "windowFrac": 0.22,
+    "opacity": 0.88
+  },
+  "quality": {
+    "dither": false,
+    "tier": "standard"
+  },
+  "fps": 12,
+  "durationSec": 3.0,
+  "depthMode": "autoLayers",
+  "layerCount": 3,
+  "outputFormat": "both",
+  "seed": 20260914,
+  "maxDimension": 512,
+  "maxFrames": 96
+}

@@ -1,0 +1,48 @@
+{
+  "configVersion": "v1",
+  "effects": [
+    "parallax",
+    "breathing",
+    "brushStreak"
+  ],
+  "parallax": {
+    "amplitude": 0.016,
+    "periodSec": 3.0,
+    "directionDeg": 12.0,
+    "verticalRatio": 0.35
+  },
+  "breathing": {
+    "enabled": true,
+    "amplitude": 0.006,
+    "periodSec": 3.0,
+    "anchor": "center"
+  },
+  "ambient": {
+    "enabled": true,
+    "particleCount": 40,
+    "speed": 12.0,
+    "opacity": 0.16,
+    "mode": "dust"
+  },
+  "brushStreak": {
+    "streaks": 14,
+    "lengthFrac": 0.48,
+    "thicknessPx": 8.0,
+    "angleDeg": 8.0,
+    "pulses": 2,
+    "gapFreq": 0.12,
+    "opacity": 0.42
+  },
+  "quality": {
+    "dither": false,
+    "tier": "standard"
+  },
+  "fps": 12,
+  "durationSec": 3.0,
+  "depthMode": "autoLayers",
+  "layerCount": 3,
+  "outputFormat": "both",
+  "seed": 20260914,
+  "maxDimension": 512,
+  "maxFrames": 96
+}

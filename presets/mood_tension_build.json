@@ -1,0 +1,64 @@
+{
+  "configVersion": "v1",
+  "effects": [
+    "parallax",
+    "breathing",
+    "ambient",
+    "speedLines",
+    "focusLines",
+    "moodScript"
+  ],
+  "parallax": {
+    "amplitude": 0.014,
+    "periodSec": 3.0,
+    "directionDeg": 0.0,
+    "verticalRatio": 0.35
+  },
+  "breathing": {
+    "enabled": true,
+    "amplitude": 0.008,
+    "periodSec": 3.0,
+    "anchor": "center"
+  },
+  "ambient": {
+    "enabled": true,
+    "particleCount": 40,
+    "speed": 12.0,
+    "opacity": 0.16,
+    "mode": "dust"
+  },
+  "speedLines": {
+    "count": 40,
+    "lengthFrac": 0.26,
+    "intensity": 0.4,
+    "pulses": 2,
+    "thickness": 1
+  },
+  "focusLines": {
+    "lines": 26,
+    "focalX": 0.5,
+    "focalY": 0.45,
+    "innerFrac": 0.3,
+    "wedgeDeg": 2.2,
+    "turnCycles": 1,
+    "opacity": 0.26,
+    "mode": "black"
+  },
+  "moodScript": {
+    "mood": "tension",
+    "cycles": 1,
+    "strength": 1.0
+  },
+  "quality": {
+    "dither": false,
+    "tier": "standard"
+  },
+  "fps": 12,
+  "durationSec": 3.0,
+  "depthMode": "autoLayers",
+  "layerCount": 3,
+  "outputFormat": "both",
+  "seed": 20260914,
+  "maxDimension": 512,
+  "maxFrames": 96
+}

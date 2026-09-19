@@ -1,0 +1,71 @@
+{
+  "configVersion": "v1",
+  "effects": [
+    "parallax",
+    "breathing",
+    "speedLines",
+    "lightning",
+    "embers",
+    "vignette",
+    "moodScript"
+  ],
+  "parallax": {
+    "amplitude": 0.014,
+    "periodSec": 3.0,
+    "directionDeg": 0.0,
+    "verticalRatio": 0.35
+  },
+  "breathing": {
+    "enabled": true,
+    "amplitude": 0.008,
+    "periodSec": 3.0,
+    "anchor": "center"
+  },
+  "ambient": {
+    "enabled": true,
+    "particleCount": 40,
+    "speed": 12.0,
+    "opacity": 0.16,
+    "mode": "dust"
+  },
+  "speedLines": {
+    "count": 48,
+    "lengthFrac": 0.3,
+    "intensity": 0.42,
+    "pulses": 4,
+    "thickness": 1
+  },
+  "embers": {
+    "count": 34,
+    "riseCycles": 1,
+    "glowPx": 6.0,
+    "opacity": 0.75,
+    "color": "ff9a3c"
+  },
+  "lightning": {
+    "strikes": 3,
+    "boltOpacity": 0.9,
+    "flashIntensity": 0.45
+  },
+  "vignette": {
+    "strength": 0.38,
+    "cycles": 1
+  },
+  "moodScript": {
+    "mood": "tension",
+    "cycles": 1,
+    "strength": 1.0
+  },
+  "quality": {
+    "dither": false,
+    "tier": "standard"
+  },
+  "fps": 12,
+  "durationSec": 3.0,
+  "depthMode": "autoLayers",
+  "layerCount": 3,
+  "outputFormat": "both",
+  "seed": 20260914,
+  "maxDimension": 512,
+  "maxFrames": 96
+}

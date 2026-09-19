@@ -1,0 +1,69 @@
+{
+  "configVersion": "v1",
+  "effects": [
+    "parallax",
+    "breathing",
+    "mangaShake",
+    "impactRings",
+    "impactFlash",
+    "moodScript"
+  ],
+  "parallax": {
+    "amplitude": 0.016,
+    "periodSec": 3.0,
+    "directionDeg": 0.0,
+    "verticalRatio": 0.35
+  },
+  "breathing": {
+    "enabled": true,
+    "amplitude": 0.01,
+    "periodSec": 3.0,
+    "anchor": "center"
+  },
+  "ambient": {
+    "enabled": true,
+    "particleCount": 40,
+    "speed": 12.0,
+    "opacity": 0.16,
+    "mode": "dust"
+  },
+  "impactFlash": {
+    "flashes": 1,
+    "dutyFrac": 0.08,
+    "intensity": 0.5
+  },
+  "mangaShake": {
+    "shakes": 4,
+    "amplitude": 0.007,
+    "decay": 0.72,
+    "rotJitDeg": 0.12
+  },
+  "impactRings": {
+    "rings": 3,
+    "focalX": 0.5,
+    "focalY": 0.5,
+    "innerFrac": 0.05,
+    "outerFrac": 0.58,
+    "thicknessPx": 4.2,
+    "pulses": 1,
+    "opacity": 0.5,
+    "mode": "shock"
+  },
+  "moodScript": {
+    "mood": "burst",
+    "cycles": 1,
+    "strength": 1.0
+  },
+  "quality": {
+    "dither": false,
+    "tier": "standard"
+  },
+  "fps": 12,
+  "durationSec": 3.0,
+  "depthMode": "autoLayers",
+  "layerCount": 3,
+  "outputFormat": "both",
+  "seed": 20260914,
+  "maxDimension": 512,
+  "maxFrames": 96
+}
