@@ -748,6 +748,83 @@ void main() {
       expect(File(r.outputGif).existsSync(), isTrue);
     });
 
+    test('后台 processFile 产物与同步版逐字节一致，进度回传主 isolate', () async {
+      final png = _pngEncode(_gradientImage(64, 96));
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(png);
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
+      final sync = await MotionPipeline(cfg, parallel: 1)
+          .processFile(inPath, '${tmp.path}/bg_sync');
+      final events = <int>[];
+      final bg = await processFileInBackground(inPath, '${tmp.path}/bg_async',
+          config: cfg,
+          parallel: 1,
+          onProgress: (done, total) => events.add(done));
+      expect(File(bg.outputGif).readAsBytesSync(),
+          equals(File(sync.outputGif).readAsBytesSync()),
+          reason: '后台入口与同步入口共享同一渲染路径');
+      expect(events, isNotEmpty);
+      expect(events.last, cfg.frameCount, reason: '进度应跨 isolate 回传');
+    });
+
+    test('后台 processBytes 与内存版字节一致', () async {
+      final png = Uint8List.fromList(_pngEncode(_gradientImage(64, 96)));
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
+      final sync = await MotionPipeline(cfg, parallel: 1)
+          .processBytes(input: png);
+      final bg = await processBytesInBackground(input: png, config: cfg, parallel: 1);
+      expect(bg.gifBytes, equals(sync.gifBytes));
+      expect(bg.configHash, sync.configHash);
+    });
+
+    test('后台中途取消：E_CANCELLED 上抛到调用方', () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 64)));
+      final cfg = EffectConfig(fps: 6, durationSec: 1, maxDimension: 64);
+      final token = MotionCancelToken();
+      final jobDir =
+          '${tmp.path}/bg_cancel/in_${cfg.configHash.substring(0, 8)}';
+      await expectLater(
+        processFileInBackground(inPath, '${tmp.path}/bg_cancel',
+            config: cfg,
+            parallel: 2,
+            cancelToken: token,
+            onProgress: (done, total) {
+              if (done >= 1) token.cancel(); // 主 isolate 收到进度后取消
+            }),
+        throwsA(isA<MotionCancelledException>()),
+      );
+      expect(Directory(jobDir).existsSync(), isFalse,
+          reason: '后台取消同样默认清理半成品');
+    });
+
+    test('后台异常原样重抛：错误码与类型不丢', () async {
+      await expectLater(
+        processBytesInBackground(
+            input: Uint8List.fromList(<int>[]), // 空输入 → E_DECODE_EMPTY
+            config: EffectConfig(fps: 2)),
+        throwsA(isA<ImageDecodeException>()),
+      );
+      try {
+        await processBytesInBackground(
+            input: Uint8List.fromList(<int>[]),
+            config: EffectConfig(fps: 2));
+      } on ImageDecodeException catch (e) {
+        expect(e.code, 'E_DECODE_EMPTY');
+      }
+    });
+
+    test('后台入口：启动前已取消的令牌立即生效', () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(32, 32)));
+      final token = MotionCancelToken()..cancel();
+      await expectLater(
+        processFileInBackground(inPath, '${tmp.path}/bg_precancel',
+            config: EffectConfig(fps: 2, maxDimension: 32), cancelToken: token),
+        throwsA(isA<MotionCancelledException>()),
+      );
+    });
+
     test('批处理失败项不中断且台账记录原因', () async {
       // 建一个输入目录: 一张好图 + 一个空文件 + 一个文本文件
       final inDir = Directory('${tmp.path}/imgs')..createSync();

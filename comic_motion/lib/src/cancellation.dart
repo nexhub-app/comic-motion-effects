@@ -26,9 +26,11 @@ class MotionCancelToken {
     if (h != null) h();
   }
 
-  /// 内部桥接点（后台 isolate 包装用它把 cancel() 转发到控制 SendPort）。
-  /// 公开 API 不承诺此字段；嵌入方请使用后台入口而非自行注册。
+  /// 取消桥（仅供后台 isolate 包装层使用，见 background.dart）：注册后
+  /// cancel() 首次触发时会回调一次，把取消转发到后台 isolate 的控制
+  /// SendPort。普通嵌入方无需接触。
   void Function()? _hook;
+  set cancelHook(void Function()? hook) => _hook = hook;
 }
 
 /// 取消或超时异常。code 为 `E_CANCELLED`（调用方取消）或 `E_TIMEOUT`

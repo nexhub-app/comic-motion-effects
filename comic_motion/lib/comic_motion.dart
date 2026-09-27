@@ -4,6 +4,7 @@
 /// The package is UI-free and can be embedded into any Dart/Flutter project.
 library;
 
+export 'src/background.dart';
 export 'src/batch_runner.dart';
 export 'src/cancellation.dart';
 export 'src/config_io.dart';

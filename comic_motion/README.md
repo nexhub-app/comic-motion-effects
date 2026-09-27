@@ -62,6 +62,51 @@ final result = await MotionPipeline(EffectConfig(fps: 12), parallel: 4)
 it never enters `EffectConfig`, so it cannot affect configHash or output
 bytes.
 
+### ⚠️ Threading model: don't render on the UI isolate
+
+`processFile` / `processBytes` are `async`, but the **decode → downscale →
+depth-estimation → layer-splitting → palette-probe** stages run
+synchronously on the calling isolate (only later frame rendering is
+dispatched to the worker pool). Calling them directly on the UI isolate
+freezes the UI for hundreds of milliseconds to seconds. Two fixes:
+
+1. **Use the background entry points** (recommended) — the whole pipeline,
+   including decode, runs on a background isolate; progress and cancellation
+   are bridged back to the caller:
+
+   ```dart
+   final token = MotionCancelToken();
+   final result = await processFileInBackground(
+     inputPath, outDir,
+     config: EffectConfig(fps: 12, durationSec: 2.5, maxDimension: 800),
+     parallel: 4,
+     memoryBudgetMb: 256,
+     cancelToken: token,
+     onProgress: (done, total) => debugPrint('$done/$total'),
+     timeout: const Duration(seconds: 30),
+   );
+   // user navigated away mid-render:
+   token.cancel(); // stops dispatch at the next frame boundary, throws E_CANCELLED
+   ```
+
+   `processBytesInBackground({required Uint8List input, ...})` is the
+   in-memory twin: bytes in, bytes out, no temporary files; the returned GIF
+   bytes are byte-identical to the on-disk product.
+
+2. **Wrap it yourself**: `Isolate.run(() => MotionPipeline(cfg)
+   .processFile(in, out))` — fine for fire-and-forget calls, but progress
+   and cancel cannot cross that isolate boundary.
+
+Cancellation/timeout semantics (both sync and background entries): the
+checkpoints live on the frame-scheduling layer (before dispatch / per
+received frame / before each probe render) — an in-flight single-frame
+render is never interrupted (frames are pure functions; the result is
+discarded), so the granularity is one frame boundary. Cancelled runs delete
+their partial output by default (`keepPartial: true` keeps it) and throw
+`MotionCancelledException`; code `E_CANCELLED` for caller cancel, code
+`E_TIMEOUT` when the `timeout` deadline passes (checked at the same
+checkpoints). Progress counts probe frames and stops after cancel/timeout.
+
 ### Platform support matrix
 
 | Platform | Status | Notes |
@@ -206,6 +251,8 @@ lib/
     json_compat.dart       # compatibility JSON helpers
     pipeline.dart          # single-image pipeline
     worker_pool.dart       # parallel frame-render isolate pool
+    background.dart        # background-isolate entry points (progress/cancel bridge)
+    cancellation.dart      # MotionCancelToken + MotionCancelledException
     batch_runner.dart      # batch processing
     ledger.dart            # JSONL processing ledger (optional, size-rotating)
     render/

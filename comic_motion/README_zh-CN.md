@@ -49,6 +49,33 @@ final result = await MotionPipeline(EffectConfig(fps: 12), parallel: 4)
 
 `processFile` 是异步的（并行度 >1 时跨 isolate），必须 `await`。管线构造参数 `parallel` 为执行期参数，不进入 `EffectConfig`，因此不影响 configHash 与输出字节。
 
+### ⚠️ 线程模型：不要在 UI isolate 上渲染
+
+`processFile` / `processBytes` 虽是 `async`，但**解码 → 降采样 → 深度估算 → 分层 → 调色板探针**各段同步跑在调用方 isolate 上（只有后续帧渲染派发 worker 池）。在 UI isolate 直接调用会卡住 UI 数百毫秒到秒级。两种解法：
+
+1. **用后台入口（推荐）**——整条管线（含解码）在后台 isolate 执行，进度与取消自动桥接回调用方：
+
+   ```dart
+   final token = MotionCancelToken();
+   final result = await processFileInBackground(
+     inputPath, outDir,
+     config: EffectConfig(fps: 12, durationSec: 2.5, maxDimension: 800),
+     parallel: 4,
+     memoryBudgetMb: 256,
+     cancelToken: token,
+     onProgress: (done, total) => debugPrint('$done/$total'),
+     timeout: const Duration(seconds: 30),
+   );
+   // 用户中途翻页离开：
+   token.cancel(); // 在下一帧边界停止派发，抛 E_CANCELLED
+   ```
+
+   `processBytesInBackground({required Uint8List input, ...})` 是它的内存孪生：bytes 进 bytes 出，无临时文件；返回的 GIF 字节与落盘产物逐字节一致。
+
+2. **自行包装**：`Isolate.run(() => MotionPipeline(cfg).processFile(in, out))`——适合即发即忘的调用，但进度与取消无法跨过这层 isolate 边界。
+
+取消/超时语义（同步与后台入口一致）：检查点全部位于帧调度层（派发前 / 每帧回包 / 探针渲染前）——worker 内部进行中的单帧渲染不会被强行打断（帧是纯函数，结果自然丢弃），粒度为一个帧边界。取消的运行默认删除本次写出的半成品（`keepPartial: true` 保留）并抛 `MotionCancelledException`：调用方取消 code 为 `E_CANCELLED`，超过 `timeout` deadline 走同一路径、code 为 `E_TIMEOUT`（deadline 在相同检查点比对）。进度计数含探针帧，取消/超时后不再回调。
+
 ### 平台支持矩阵
 
 | 平台 | 状态 | 说明 |
@@ -166,6 +193,8 @@ lib/
     json_compat.dart       # 兼容性 JSON 工具
     pipeline.dart          # 单图处理管线
     worker_pool.dart       # 并行帧渲染 isolate 池
+    background.dart        # 后台 isolate 入口（进度/取消桥接）
+    cancellation.dart      # MotionCancelToken + MotionCancelledException
     batch_runner.dart      # 批处理
     ledger.dart            # JSONL 台账
     render/
