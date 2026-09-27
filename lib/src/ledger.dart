@@ -5,7 +5,7 @@ import 'json_compat.dart';
 /// Every job (single or batch item) is appended to a JSONL ledger with full
 /// traceability: input, params hash, outputs, timing, status, error.
 class Ledger {
-  Ledger(String dir) : _file = '$dir\\ledger.jsonl' {
+  Ledger(String dir) : _file = '$dir/ledger.jsonl' {
     Directory(dir).createSync(recursive: true);
   }
 

@@ -4,8 +4,8 @@ import 'package:comic_motion/comic_motion.dart';
 
 /// Minimal smoke test: one image in, GIF + frames out.
 Future<void> main(List<String> args) async {
-  final input = args.isNotEmpty ? args[0] : 'sample_images\\01_portrait.png';
-  final out = args.length > 1 ? args[1] : 'build\\smoke';
+  final input = args.isNotEmpty ? args[0] : 'sample_images/01_portrait.png';
+  final out = args.length > 1 ? args[1] : 'build/smoke';
   final config = EffectConfig(
     fps: 12,
     durationSec: 2.0,

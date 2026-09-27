@@ -99,7 +99,7 @@ class ImageIO {
   /// 帧序列的统一命名：串行、worker、调色板探针三条路径必须写同一个路径，
   /// 否则并行会产出不同文件名。
   static String pngPathFor(String dir, int index) =>
-      '$dir\\frame_${index.toString().padLeft(4, '0')}.png';
+      '$dir/frame_${index.toString().padLeft(4, '0')}.png';
 
   static String writePngFrame(String dir, int index, RgbaImage frame) {
     final p = pngPathFor(dir, index);
@@ -113,7 +113,7 @@ class ImageIO {
     io.Directory(dir).createSync(recursive: true);
     final paths = <String>[];
     for (var i = 0; i < frames.length; i++) {
-      final p = '$dir\\${prefix}_${i.toString().padLeft(4, '0')}.png';
+      final p = '$dir/${prefix}_${i.toString().padLeft(4, '0')}.png';
       io.File(p).writeAsBytesSync(img.encodePng(_toPackage(frames[i])));
       paths.add(p);
     }

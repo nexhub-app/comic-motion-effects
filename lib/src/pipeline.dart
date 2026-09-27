@@ -117,7 +117,7 @@ class MotionPipeline {
     final dot = stem.lastIndexOf('.');
     final baseName = dot > 0 ? stem.substring(0, dot) : stem;
     final jobDir =
-        '$outputDir\\${baseName}_${config.configHash.substring(0, 8)}';
+        '$outputDir/${baseName}_${config.configHash.substring(0, 8)}';
     io.Directory(jobDir).createSync(recursive: true);
 
     var gifPath = '';
@@ -127,7 +127,7 @@ class MotionPipeline {
     final wantFrames = config.outputFormat == OutputFormat.frames ||
         config.outputFormat == OutputFormat.both;
     if (wantFrames) {
-      frameDir = '$jobDir\\frames';
+      frameDir = '$jobDir/frames';
       io.Directory(frameDir).createSync(recursive: true);
     }
     final gif = wantGif
@@ -205,12 +205,12 @@ class MotionPipeline {
       }
     }
     if (gif != null) {
-      gifPath = '$jobDir\\anim.gif';
+      gifPath = '$jobDir/anim.gif';
       io.File(gifPath).writeAsBytesSync(gif.finish());
     }
 
     // Persist the exact params next to outputs (reproducibility contract).
-    final paramsFile = '$jobDir\\params.json';
+    final paramsFile = '$jobDir/params.json';
     io.File(paramsFile).writeAsStringSync(config.toJsonString());
 
     sw.stop();

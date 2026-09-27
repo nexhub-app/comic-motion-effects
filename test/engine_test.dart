@@ -321,15 +321,15 @@ void main() {
 
     test('processFile 输出文件齐全且 params.json 可还原 hash', () async {
       final png = _pngEncode(_gradientImage(64, 96));
-      final inPath = '${tmp.path}\\in.png';
+      final inPath = '${tmp.path}/in.png';
       File(inPath).writeAsBytesSync(png);
       final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
       final r = await MotionPipeline(cfg, parallel: 1)
-          .processFile(inPath, '${tmp.path}\\out');
+          .processFile(inPath, '${tmp.path}/out');
       expect(File(r.outputGif).existsSync(), isTrue);
       expect(Directory(r.frameDir).existsSync(), isTrue);
       final paramsFile = File(
-          '${r.outputGif.substring(0, r.outputGif.lastIndexOf('\\'))}\\params.json');
+          '${r.outputGif.substring(0, r.outputGif.lastIndexOf('/'))}/params.json');
       expect(paramsFile.existsSync(), isTrue);
       final restored =
           EffectConfig.fromJson(_decodeJson(paramsFile.readAsStringSync()));
@@ -338,8 +338,29 @@ void main() {
       expect(r.elapsedMs, greaterThan(0));
     });
 
+    test('POSIX 风格路径：输出目录层级与文件名全平台一致', () async {
+      // 用相对 + 纯 "/" 路径跑完整管线。POSIX 上 "\" 是合法文件名字符，
+      // 任何混入都会让产物变成「名字带反斜杠的平铺文件」而非子目录。
+      final workDir = 'build/posix_path_test';
+      Directory(workDir).createSync(recursive: true);
+      addTearDown(() => Directory(workDir).deleteSync(recursive: true));
+      File('$workDir/in.png')
+          .writeAsBytesSync(_pngEncode(_gradientImage(32, 32)));
+      final cfg = EffectConfig(fps: 2, durationSec: 1, maxDimension: 32);
+      final r = await MotionPipeline(cfg, parallel: 1)
+          .processFile('$workDir/in.png', '$workDir/out');
+      final jobName = 'in_${cfg.configHash.substring(0, 8)}';
+      expect(r.outputGif, '$workDir/out/$jobName/anim.gif');
+      expect(r.frameDir, '$workDir/out/$jobName/frames');
+      expect(File(r.outputGif).existsSync(), isTrue);
+      expect(File('$workDir/out/$jobName/params.json').existsSync(), isTrue);
+      expect(ImageIO.pngPathFor('a/b', 1), 'a/b/frame_0001.png');
+      expect(r.outputGif.contains('\\'), isFalse,
+          reason: '产物路径不得含反斜杠（POSIX 上是文件名字符）');
+    });
+
     test('并行与串行输出逐字节一致（GIF 与 PNG 帧序列）', () async {
-      final inPath = '${tmp.path}\\in.png';
+      final inPath = '${tmp.path}/in.png';
       File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(96, 64)));
       final cfg = EffectConfig(
         fps: 6,
@@ -359,9 +380,9 @@ void main() {
         final c = EffectConfig.fromJson(cfg.toJson());
         c.quality = c.quality.copyWith(tier: tier);
         final serial = await MotionPipeline(c, parallel: 1)
-            .processFile(inPath, '${tmp.path}\\p1_${tier.name}');
+            .processFile(inPath, '${tmp.path}/p1_${tier.name}');
         final worker = await MotionPipeline(c, parallel: 3)
-            .processFile(inPath, '${tmp.path}\\p3_${tier.name}');
+            .processFile(inPath, '${tmp.path}/p3_${tier.name}');
         expect(File(worker.outputGif).readAsBytesSync(),
             equals(File(serial.outputGif).readAsBytesSync()),
             reason: 'tier=${tier.name} 的 GIF 字节不一致');
@@ -381,18 +402,18 @@ void main() {
 
     test('批处理失败项不中断且台账记录原因', () async {
       // 建一个输入目录: 一张好图 + 一个空文件 + 一个文本文件
-      final inDir = Directory('${tmp.path}\\imgs')..createSync();
-      File('${inDir.path}\\a.png')
+      final inDir = Directory('${tmp.path}/imgs')..createSync();
+      File('${inDir.path}/a.png')
           .writeAsBytesSync(_pngEncode(_gradientImage(48, 48)));
-      File('${inDir.path}\\b.png').writeAsBytesSync(<int>[]);
-      File('${inDir.path}\\c.png')
+      File('${inDir.path}/b.png').writeAsBytesSync(<int>[]);
+      File('${inDir.path}/c.png')
           .writeAsBytesSync('plain text, not an image!'.codeUnits);
 
       final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 48);
-      final ledger = Ledger('${tmp.path}\\ledger');
+      final ledger = Ledger('${tmp.path}/ledger');
       final results = await BatchRunner(ledger).runFolder(
           inputDir: inDir.path,
-          outputDir: '${tmp.path}\\out',
+          outputDir: '${tmp.path}/out',
           config: cfg,
           parallel: 1);
       expect(results.length, 3);
@@ -415,11 +436,11 @@ void main() {
 
     test('非图片目录抛 ConfigException', () {
       final cfg = EffectConfig(fps: 4, durationSec: 1);
-      final ledger = Ledger('${tmp.path}\\ledger');
+      final ledger = Ledger('${tmp.path}/ledger');
       expect(
         () => BatchRunner(ledger).runFolder(
-            inputDir: '${tmp.path}\\nope',
-            outputDir: '${tmp.path}\\out',
+            inputDir: '${tmp.path}/nope',
+            outputDir: '${tmp.path}/out',
             config: cfg),
         throwsA(isA<ConfigException>()),
       );
@@ -2375,7 +2396,7 @@ void main() {
           configHash: 'h',
           status: 'success',
           warnings: const ['moodScript: 未知 mood "X"，已回落 calm']);
-      final lines = File('${dir.path}\\ledger.jsonl').readAsLinesSync();
+      final lines = File('${dir.path}/ledger.jsonl').readAsLinesSync();
       expect(lines[0].contains('warnings'), isFalse);
       expect(lines[1], contains('"warnings":["moodScript'));
 

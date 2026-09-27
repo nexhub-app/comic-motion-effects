@@ -14,7 +14,7 @@ Future<void> main(List<String> args) async {
   // 只清「带 anim.gif 的演示目录」：图鉴 HTML 与启动脚本是手工资产，
   // 生成器无权抹掉（v1.3 之前是整树 delete，重新生成一次就丢一次 HTML）。
   for (final d in root.listSync().whereType<Directory>()) {
-    if (File('${d.path}\\anim.gif').existsSync()) d.deleteSync(recursive: true);
+    if (File('${d.path}/anim.gif').existsSync()) d.deleteSync(recursive: true);
   }
   Directory(presetDir).createSync(recursive: true);
 
@@ -645,24 +645,24 @@ Future<void> main(List<String> args) async {
     final r = await MotionPipeline(cfg).processFile(input, tmpRoot);
     sw.stop();
     // 归一化命名：<outRoot>/<key>/{anim.gif, frame_0000.png, params.json}
-    final stemDir = r.outputGif.substring(0, r.outputGif.lastIndexOf('\\'));
+    final stemDir = r.outputGif.substring(0, r.outputGif.lastIndexOf('/'));
     final target = Directory('$outRoot/$key');
     target.createSync(recursive: true);
-    File(r.outputGif).copySync('${target.path}\\anim.gif');
-    final frame0 = File('${r.frameDir}\\frame_0000.png');
+    File(r.outputGif).copySync('${target.path}/anim.gif');
+    final frame0 = File('${r.frameDir}/frame_0000.png');
     if (frame0.existsSync()) {
-      frame0.copySync('${target.path}\\frame_0000.png');
+      frame0.copySync('${target.path}/frame_0000.png');
     }
-    final paramsFile = File('$stemDir\\params.json');
+    final paramsFile = File('$stemDir/params.json');
     if (paramsFile.existsSync()) {
-      paramsFile.copySync('${target.path}\\params.json');
+      paramsFile.copySync('${target.path}/params.json');
     }
     Directory(stemDir).deleteSync(recursive: true);
     // 预设文件（完整配置，供 --config 直接使用）
     File('$presetDir/$key.json').writeAsStringSync(cfg.toJsonString());
     n++;
     stdout.writeln(
-        '$key: ${r.frameCount} frames, ${(File('${target.path}\\anim.gif').lengthSync() / 1024).toStringAsFixed(0)} KB, ${sw.elapsedMilliseconds} ms');
+        '$key: ${r.frameCount} frames, ${(File('${target.path}/anim.gif').lengthSync() / 1024).toStringAsFixed(0)} KB, ${sw.elapsedMilliseconds} ms');
   }
   stdout.writeln('DONE: $n demos -> $outRoot');
 }
