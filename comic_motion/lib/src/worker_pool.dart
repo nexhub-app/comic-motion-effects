@@ -65,6 +65,7 @@ class FrameJobSpec {
     required this.layerPixels,
     this.pngDir,
     this.gif,
+    this.wantPngBytes = false,
   });
 
   factory FrameJobSpec.fromLayers({
@@ -73,6 +74,7 @@ class FrameJobSpec {
     required EffectConfig config,
     String? pngDir,
     GifEncoderSpec? gif,
+    bool wantPngBytes = false,
   }) =>
       FrameJobSpec(
         width: base.width,
@@ -82,6 +84,7 @@ class FrameJobSpec {
         layerPixels: layers.map((l) => l.image.data).toList(),
         pngDir: pngDir,
         gif: gif,
+        wantPngBytes: wantPngBytes,
       );
 
   final int width;
@@ -94,19 +97,29 @@ class FrameJobSpec {
   final String? pngDir;
   final GifEncoderSpec? gif;
 
+  /// 帧流回调（onFrame）需要：PNG 字节随 [FrameOutput] 回传主 isolate。
+  /// 仅 opt-in 时启用——不设则 PNG 仍是就地副作用，栅格不出 isolate。
+  final bool wantPngBytes;
+
   /// 每个 worker 常驻的栅格字节数（底图 + 各层 + 在途帧 + 索引帧）。
   int get rasterBytesPerWorker => width * height * 4 * (layerPixels.length + 3);
 }
 
-/// 单帧产物：GIF 片段字节（不编 GIF 时为 null）。PNG 是就地副作用，不回流。
+/// 单帧产物：GIF 片段字节（不编 GIF 时为 null）；`wantPngBytes` 时附带该帧
+/// PNG 字节（供 onFrame 帧流回调），否则为 null。PNG 落盘仍是就地副作用。
 class FrameOutput {
-  FrameOutput(this.index, this.gifBody, {this.from}) : error = null;
+  FrameOutput(this.index, this.gifBody, {this.from, this.pngBytes})
+      : error = null;
   FrameOutput.failed(this.index, this.error)
       : gifBody = null,
-        from = null;
+        from = null,
+        pngBytes = null;
 
   final int index;
   final Uint8List? gifBody;
+
+  /// 该帧 PNG 字节（仅 wantPngBytes 时非 null；与磁盘 frame_NNNN.png 同源同字节）。
+  final Uint8List? pngBytes;
   final String? error;
 
   /// worker 用来把自己归还给空闲池；串行路径为 null。
@@ -119,7 +132,7 @@ class FrameOutput {
 /// 给定同一份定板调色板，单帧编码不依赖任何跨帧状态（编码器缓存只做纯查表
 /// 记忆，只影响速度）。
 class FrameJob {
-  FrameJob(this.compositor, {this.pngDir, this.encoder});
+  FrameJob(this.compositor, {this.pngDir, this.encoder, this.wantPngBytes = false});
 
   factory FrameJob.fromSpec(FrameJobSpec s) => FrameJob(
         FrameCompositor.fromRasters(
@@ -131,17 +144,29 @@ class FrameJob {
         ),
         pngDir: s.pngDir,
         encoder: s.gif?.build(),
+        wantPngBytes: s.wantPngBytes,
       );
 
   final FrameCompositor compositor;
   final String? pngDir;
   final GifFrameEncoder? encoder;
+  final bool wantPngBytes;
 
   FrameOutput run(int index, {SendPort? from}) {
     final frame = compositor.renderFrame(index / compositor.config.fps);
+    Uint8List? pngBytes;
     final dir = pngDir;
-    if (dir != null) ImageIO.writePngFrame(dir, index, frame);
-    return FrameOutput(index, encoder?.encodeFrameBody(frame), from: from);
+    if (wantPngBytes) {
+      // 回调需要字节：编码一次，落盘复用同一份（与 writePngFrame 同一编码器）。
+      pngBytes = Uint8List.fromList(ImageIO.encodePngFrame(frame));
+      if (dir != null) {
+        io.File(ImageIO.pngPathFor(dir, index)).writeAsBytesSync(pngBytes);
+      }
+    } else if (dir != null) {
+      ImageIO.writePngFrame(dir, index, frame);
+    }
+    return FrameOutput(index, encoder?.encodeFrameBody(frame),
+        from: from, pngBytes: pngBytes);
   }
 }
 

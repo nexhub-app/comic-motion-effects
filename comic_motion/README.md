@@ -282,6 +282,30 @@ apply — there is no worker pool. `includeFirstFrame` works on `processFile` /
 `processBytes` / `processImage` and the background entries; the returned
 bytes equal `frames/frame_0000.png` on disk.
 
+### Frame-stream callbacks (progressive preview)
+
+`MotionPipeline.onFrame` delivers every rendered frame as PNG bytes while
+the pipeline runs — build a progressive preview, a thumbnail strip, or
+stream frames elsewhere without touching the GIF:
+
+```dart
+final result = await MotionPipeline(config, parallel: 2, onFrame: (index, png) {
+  // ordered by frame index, exactly one call per frame (probe frames
+  // included); PNG bytes identical to frames/frame_NNNN.png on disk
+  previewWidget.update(index, png);
+}).processFile(input, outDir);
+```
+
+Where the callback runs: **on the isolate executing the pipeline** — the
+calling isolate for the sync entries (the emit point is a synchronous
+section, so heavy work inside the callback slows the render), and — for the
+background entries (`processFileInBackground` / `processBytesInBackground`)
+— the user callback is bridged over a `SendPort` and executes on the
+calling isolate, same as `onProgress`. PNG encoding + cross-isolate
+transfer happen only when `onFrame` is set (zero cost otherwise). The
+callback coexists with `onProgress` and stops after cancel/timeout, like
+every other checkpoint.
+
 ### Recommended mobile parameters
 
 | Parameter | Recommendation | Why |

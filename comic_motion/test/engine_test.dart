@@ -1607,6 +1607,98 @@ void main() {
     });
   });
 
+  group('帧流回调 onFrame', () {
+    late Directory tmp;
+    setUp(() {
+      tmp = Directory.systemTemp.createTempSync('cm_frame_test');
+    });
+    tearDown(() {
+      tmp.deleteSync(recursive: true);
+    });
+
+    test('回调计数 = 帧数、严格按帧号有序、探针帧计入，PNG 与落盘帧同字节',
+        () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 96)));
+      final cfg = EffectConfig(
+          fps: 4, durationSec: 1, maxDimension: 64,
+          quality: QualityParams(tier: RenderTier.standard));
+      final indices = <int>[];
+      final pngs = <int, Uint8List>{};
+      final progress = <int>[];
+      final r = await MotionPipeline(cfg, parallel: 3, onFrame: (i, png) {
+        indices.add(i);
+        pngs[i] = png;
+      }, onProgress: (done, total) => progress.add(done))
+          .processFile(inPath, '${tmp.path}/of_out');
+      expect(indices, [for (var i = 0; i < cfg.frameCount; i++) i],
+          reason: '一帧恰好一次、严格升序（探针帧 0/中/末 也在其中）');
+      for (final i in indices) {
+        expect(pngs[i],
+            equals(File(ImageIO.pngPathFor(r.frameDir, i)).readAsBytesSync()),
+            reason: '回调 PNG 与落盘 frame_NNNN.png 同源同字节');
+      }
+      // 与 onProgress 并存：进度最终到满帧
+      expect(progress.last, cfg.frameCount);
+      // PNG 可解码且不超过工作分辨率上限
+      final img = pkg.decodePng(pngs[0]!)!;
+      expect(img.width, lessThanOrEqualTo(64));
+    });
+
+    test('内存模式与落盘模式的帧流字节一致（gif-only 落盘无帧目录）', () async {
+      final png = _pngEncode(_gradientImage(48, 48));
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(png);
+      final cfg = EffectConfig(
+          fps: 4, durationSec: 1, maxDimension: 48,
+          outputFormat: OutputFormat.gif);
+      final diskPngs = <int, Uint8List>{};
+      await MotionPipeline(cfg, parallel: 1, onFrame: (i, p) => diskPngs[i] = p)
+          .processFile(inPath, '${tmp.path}/gif_only');
+      expect(diskPngs, isNotEmpty);
+
+      final memPngs = <int, Uint8List>{};
+      await MotionPipeline(cfg, parallel: 1, onFrame: (i, p) => memPngs[i] = p)
+          .processBytes(input: Uint8List.fromList(png));
+      expect(memPngs.keys.toList(), diskPngs.keys.toList());
+      for (final i in diskPngs.keys) {
+        expect(memPngs[i], equals(diskPngs[i]),
+            reason: '帧流回调的 PNG 字节跨模式逐字节一致');
+      }
+    });
+
+    test('回调内取消：立即停止后续回调，管线抛 E_CANCELLED', () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 64)));
+      final cfg = EffectConfig(fps: 6, durationSec: 1, maxDimension: 64);
+      final token = MotionCancelToken();
+      final indices = <int>[];
+      await expectLater(
+        MotionPipeline(cfg,
+                parallel: 1,
+                cancelToken: token,
+                onFrame: (i, png) {
+                  indices.add(i);
+                  if (i == 0) token.cancel();
+                })
+            .processFile(inPath, '${tmp.path}/cancel_out'),
+        throwsA(isA<MotionCancelledException>()),
+      );
+      expect(indices, [0], reason: '取消点之后（含已在途帧）不再触发回调');
+    });
+
+    test('后台入口：onFrame 桥接回调用方 isolate，顺序与计数保持', () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 96)));
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
+      final indices = <int>[];
+      await processFileInBackground(inPath, '${tmp.path}/bg_of',
+          config: cfg, parallel: 2, onFrame: (i, png) => indices.add(i));
+      expect(indices, [for (var i = 0; i < cfg.frameCount; i++) i],
+          reason: '后台桥接后回调在调用方 isolate 依帧序触发');
+    });
+  });
+
   group('StreamingGifBuilder 流式 GIF 编码器', () {
     RgbaImage gradFrame(int w, int h, int phase) {
       final img = RgbaImage(width: w, height: h);

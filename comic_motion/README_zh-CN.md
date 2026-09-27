@@ -211,6 +211,26 @@ final cover = result.firstFramePng;             // 未请求时为 null
 `processImage` 与后台入口均可用；返回字节与落盘的
 `frames/frame_0000.png` 完全一致。
 
+### 帧流回调（渐进预览）
+
+`MotionPipeline.onFrame` 在管线运行中把每一帧以 PNG 字节交付出来——可做
+渐进预览、缩略图条，或把帧流送去别处，不必等 GIF：
+
+```dart
+final result = await MotionPipeline(config, parallel: 2, onFrame: (index, png) {
+  // 按帧号有序，一帧恰好一次（含探针帧）；
+  // PNG 字节与落盘 frames/frame_NNNN.png 同源同字节
+  previewWidget.update(index, png);
+}).processFile(input, outDir);
+```
+
+回调执行位置：**在执行管线的 isolate 上**——同步入口即在调用方 isolate
+（回包点是同步执行段，回调里做重活会直接拖慢渲染）；后台便捷入口
+（`processFileInBackground` / `processBytesInBackground`）经 `SendPort`
+桥接，用户回调执行在调用方 isolate（与 `onProgress` 一致）。仅设置
+`onFrame` 时才会逐帧编码并回传 PNG（不设置零额外成本）。回调与
+`onProgress` 并存；取消 / 超时后不再回调（与其他检查点同一语义）。
+
 ### 移动端推荐参数
 
 | 参数 | 推荐 | 原因 |

@@ -191,6 +191,7 @@ class MotionPipeline {
     int? parallel,
     this.memoryBudgetMb,
     this.onProgress,
+    this.onFrame,
     this.cancelToken,
     this.timeout,
     this.keepPartial = false,
@@ -211,6 +212,16 @@ class MotionPipeline {
   /// （每帧写入 GIF 的顺序位置）触发。取消或超时后不再回调。执行期参数，
   /// 不参与 configHash。
   final void Function(int framesDone, int framesTotal)? onProgress;
+
+  /// 帧流回调（可选，T4）：每帧回包、按帧号**有序**触发（帧号升序，一帧
+  /// 恰好一次，含调色板探针帧）。回调运行在**执行管线的 isolate**上——
+  /// 同步入口即在调用方 isolate（emit 帧回包点是同步执行段，回调里做重活
+  /// 会直接拖慢渲染）；后台便捷入口（processFileInBackground 等）经
+  /// SendPort 桥接，用户回调执行在调用方 isolate。与 [onProgress] 并存，
+  /// 取消 / 超时后不再回调。PNG 字节与落盘 `frames/frame_NNNN.png` 同源
+  /// 同字节。执行期参数，不参与 configHash；仅设置本回调时才会把每帧 PNG
+  /// 编码并回传（默认零额外成本）。
+  final void Function(int frameIndex, Uint8List pngBytes)? onFrame;
 
   /// 协作式取消令牌（可选）。检查点在帧调度层：派发前 / 每帧回包 / 探针帧
   /// 渲染前；不打断 worker 内部的单帧渲染（纯函数，跑完自然丢弃），取消
@@ -580,8 +591,13 @@ class MotionPipeline {
       if (includeFirstFrame) firstFrameRgba = probes[0];
       gif.primePalette(probes.values.toList());
       final enc = gif.newFrameEncoder();
-      probes.forEach((k, frame) =>
-          presolved[k] = FrameOutput(k, enc.encodeFrameBody(frame)));
+      final frameCb = onFrame;
+      probes.forEach((k, frame) {
+        presolved[k] = FrameOutput(k, enc.encodeFrameBody(frame),
+            pngBytes: frameCb == null
+                ? null
+                : Uint8List.fromList(ImageIO.encodePngFrame(frame)));
+      });
       probes.clear();
     } else if (includeFirstFrame) {
       // frames-only 路径没有探针段：主 isolate 预渲染第 0 帧充当封面帧并
@@ -601,6 +617,7 @@ class MotionPipeline {
       config: config,
       pngDir: wantFrames ? frameDir : null,
       gif: gif == null ? null : GifEncoderSpec.from(gif),
+      wantPngBytes: onFrame != null,
     );
     final allIndices = [for (var i = 0; i < n; i++) i];
     final pendingCount = n - presolved.length;
@@ -622,10 +639,19 @@ class MotionPipeline {
     void emit(FrameOutput out) {
       checkCancel(); // 每帧回包处检查（含串行、worker、探针三条路径）
       hold[out.index] = out;
+      final frameCb = onFrame;
       while (hold.containsKey(written)) {
         final o = hold.remove(written++)!;
         final body = o.gifBody;
         if (gif != null && body != null) gif.addEncodedBody(body);
+        // 帧流回调：按帧号有序（drain 顺序即帧序），取消后不再触发。
+        final png = o.pngBytes;
+        if (frameCb != null &&
+            png != null &&
+            !cancelled &&
+            !(token?.isCancelled ?? false)) {
+          frameCb(o.index, png);
+        }
       }
       reportProgress();
     }
@@ -640,7 +666,9 @@ class MotionPipeline {
       if (runner == null) {
         fallback = allowedParallel > 1;
         final job = FrameJob(compositor,
-            pngDir: spec.pngDir, encoder: gif?.newFrameEncoder());
+            pngDir: spec.pngDir,
+            encoder: gif?.newFrameEncoder(),
+            wantPngBytes: spec.wantPngBytes);
         for (final out in presolved.values) {
           emit(out);
         }

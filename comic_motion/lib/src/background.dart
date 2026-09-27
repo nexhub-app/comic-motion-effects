@@ -10,6 +10,9 @@
 ///   消息一次性下发（深拷贝语义）。
 /// - progress：后台 isolate 的 onProgress 经 SendPort 回传主 isolate，主侧
 ///   回调在事件循环中异步触发（不阻塞渲染）。
+/// - frames（T4）：后台管线侧的 onFrame 把逐帧 PNG 字节经 SendPort 回传，
+///   用户回调执行在调用方 isolate（语义与 progress 一致）；仅在请求侧传入
+///   onFrame 时，后台管线才开启逐帧 PNG 编码。
 /// - cancel：[MotionCancelToken.cancelHook] 桥把 cancel() 即时转发到后台
 ///   isolate 的控制 ReceivePort → 后台本地 token.cancel() → 管线在下一次
 ///   帧调度检查点响应。后台无轮询定时器；「检查频率」= 管线检查点粒度
@@ -39,6 +42,7 @@ Future<PipelineResult> processFileInBackground(
   int? memoryBudgetMb,
   MotionCancelToken? cancelToken,
   void Function(int framesDone, int framesTotal)? onProgress,
+  void Function(int frameIndex, Uint8List pngBytes)? onFrame,
   Duration? timeout,
   bool keepPartial = false,
   bool includeFirstFrame = false,
@@ -54,9 +58,11 @@ Future<PipelineResult> processFileInBackground(
       timeout: timeout,
       keepPartial: keepPartial,
       includeFirstFrame: includeFirstFrame,
+      wantFrameEvents: onFrame != null,
     ),
     cancelToken: cancelToken,
     forwardProgress: onProgress,
+    forwardFrame: onFrame,
   );
   return r as PipelineResult;
 }
@@ -70,6 +76,7 @@ Future<MemoryPipelineResult> processBytesInBackground({
   int? memoryBudgetMb,
   MotionCancelToken? cancelToken,
   void Function(int framesDone, int framesTotal)? onProgress,
+  void Function(int frameIndex, Uint8List pngBytes)? onFrame,
   Duration? timeout,
   bool keepPartial = false,
   bool includeFirstFrame = false,
@@ -84,9 +91,11 @@ Future<MemoryPipelineResult> processBytesInBackground({
       timeout: timeout,
       keepPartial: keepPartial,
       includeFirstFrame: includeFirstFrame,
+      wantFrameEvents: onFrame != null,
     ),
     cancelToken: cancelToken,
     forwardProgress: onProgress,
+    forwardFrame: onFrame,
   );
   return r as MemoryPipelineResult;
 }
@@ -104,11 +113,13 @@ class _BackgroundBoot {
     this.timeout,
     this.keepPartial = false,
     this.includeFirstFrame = false,
+    this.wantFrameEvents = false,
   });
 
   late final SendPort ack;
   late final SendPort result;
   late final SendPort progress;
+  late final SendPort frames;
 
   final bool fileMode;
   final String? inputPath;
@@ -120,6 +131,9 @@ class _BackgroundBoot {
   final Duration? timeout;
   final bool keepPartial;
   final bool includeFirstFrame;
+
+  /// 请求侧是否要帧流事件（决定后台管线是否开启逐帧 PNG 编码回传）。
+  final bool wantFrameEvents;
 }
 
 /// 后台 isolate 入口：本地 token 承接控制通道的取消命令，progress 回传，
@@ -137,6 +151,10 @@ Future<void> _backgroundEntry(_BackgroundBoot boot) async {
     timeout: boot.timeout,
     keepPartial: boot.keepPartial,
     onProgress: (done, total) => boot.progress.send(<int>[done, total]),
+    // 帧流回调：PNG 字节经 SendPort 回传调用方（回调本体执行在调用方 isolate）。
+    onFrame: boot.wantFrameEvents
+        ? (index, png) => boot.frames.send(<Object>[index, png])
+        : null,
   );
   try {
     final result = boot.fileMode
@@ -170,9 +188,11 @@ Future<Object> _runInBackground({
   required _BackgroundBoot boot,
   MotionCancelToken? cancelToken,
   void Function(int framesDone, int framesTotal)? forwardProgress,
+  void Function(int frameIndex, Uint8List pngBytes)? forwardFrame,
 }) async {
   final resultPort = ReceivePort();
   final progressPort = ReceivePort();
+  final framesPort = ReceivePort();
   final ack = ReceivePort();
   final exitPort = ReceivePort();
   Isolate? isolate;
@@ -200,6 +220,11 @@ Future<Object> _runInBackground({
       forwardProgress(msg[0] as int, msg[1] as int);
     }
   });
+  framesPort.listen((msg) {
+    if (forwardFrame != null && msg is List && msg.length == 2) {
+      forwardFrame(msg[0] as int, msg[1] as Uint8List);
+    }
+  });
   exitPort.listen((_) {
     if (!result.isCompleted) {
       result.completeError(StateError('background isolate exited unexpectedly'));
@@ -210,6 +235,7 @@ Future<Object> _runInBackground({
     boot.ack = ack.sendPort;
     boot.result = resultPort.sendPort;
     boot.progress = progressPort.sendPort;
+    boot.frames = framesPort.sendPort;
     isolate = await Isolate.spawn(_backgroundEntry, boot,
         debugName: 'cm-background-pipeline');
     isolate.addOnExitListener(exitPort.sendPort);
@@ -236,6 +262,7 @@ Future<Object> _runInBackground({
     ack.close();
     resultPort.close();
     progressPort.close();
+    framesPort.close();
     exitPort.close();
     isolate?.kill(priority: Isolate.immediate);
   }
