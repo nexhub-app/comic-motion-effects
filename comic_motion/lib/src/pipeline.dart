@@ -265,6 +265,43 @@ class MotionPipeline {
     );
   }
 
+  /// 对已解码的 [RgbaImage] 走标准管线（与 [processFile] 共享同一渲染
+  /// 主干，无第二套像素逻辑）。strip 模式逐片复用本入口；嵌入方自备解码
+  /// 结果时也可直接使用。
+  ///
+  /// [baseName] 用于输出目录命名 `<baseName>_<hash8>`；[inputLabel] 仅作
+  /// 结果记录（ledger / 调试），不参与渲染。注意：像素总量预算在解码阶段
+  /// 执行，本入口不做二次解码校验。
+  Future<PipelineResult> processImage(
+    RgbaImage source,
+    String outputDir, {
+    String baseName = 'image',
+    String inputLabel = 'memory:image',
+  }) async {
+    final sw = Stopwatch()..start();
+    final jobDir =
+        '$outputDir/${baseName}_${config.configHash.substring(0, 8)}';
+    final core = await _runCore(source, jobDir: jobDir);
+    sw.stop();
+    return PipelineResult(
+      inputPath: inputLabel,
+      outputGif: core.gifPath,
+      frameDir: core.frameDir,
+      paramsFile: core.paramsFile,
+      width: source.width,
+      height: source.height,
+      layerCount: core.layerCount,
+      frameCount: core.frameCount,
+      elapsedMs: sw.elapsedMilliseconds,
+      peakRssMb: _currentRssMb(),
+      configJson: config.toJsonString(),
+      configHash: config.configHash,
+      parallel: core.parallel,
+      parallelFallback: core.parallelFallback,
+      warnings: core.warnings,
+    );
+  }
+
   /// In-memory twin of [processFile]: decode from [input] bytes, render
   /// through the exact same pipeline, return the encoded bytes. No temporary
   /// files, no paths. Same input + same config produces GIF bytes identical

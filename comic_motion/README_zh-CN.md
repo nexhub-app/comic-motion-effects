@@ -106,6 +106,29 @@ final config = EffectConfig(
 - 参数目录（供 App 自动生成设置面板）：`kRenderParamSpecs`（名称 / 类型 / min / max / 默认值 / 语义，并标注哪些范围是 fail-fast）与 `kEffectNames`——App 侧范围不硬编码。
 - 持久化推荐：直接存 `config.toJsonString()`，用 `EffectConfig.fromJson` 读回即恢复——hash 往返一致，可直接当缓存键。
 
+### 条漫 strip 模式
+
+条漫长图（如 800 × 10000+）直接渲染会被 `maxDimension` 降采样毁掉细节、超出边长上限直接被拒，且 parallax 类效果跨分格错位。`processStrip` 按视口比例（默认 9:16，可选重叠）切片，每片走标准管线独立渲染：
+
+```dart
+final strip = await processStrip(
+  inputPath, outDir,
+  config: EffectConfig(
+      fps: 12, durationSec: 2, maxDimension: 800,
+      effects: [EffectKind.rain, EffectKind.vignette]),
+  viewportWidth: 9, viewportHeight: 16,
+  overlapPx: 0, // 裁剪语义：相邻片共享恰好 N 行，不做混合
+);
+for (final s in strip.slices) {
+  print(s.slice.yStart);      // 源图行窗口
+  print(s.result.outputGif);  // `<stem>_slice<NNN>_<hash8>/anim.gif`
+}
+```
+
+- 每片独立目录 `<stem>_slice<NNN>_<hash8>`，独立 configHash + params.json——确定性复现，天然可缓存去重。
+- `kStripSafeEffects` 是跨片安全的叠加类效果集；白名单外效果（parallax/breathing/slowPush/mangaShake 等）允许使用，但会在 `strip.warnings` 提示实验性（每片独立做深度估算，跨片可能错位）。
+- 整话像素总量上限（默认 40M 像素）在切片前的解码阶段强制执行；超限抛 `E_TOO_LARGE` 并提示使用 strip 模式。超大单话可显式调大 `maxPixels`——每片工作栅格始终很小，不受整话高度影响。
+
 ### 平台支持矩阵
 
 | 平台 | 状态 | 说明 |
@@ -225,6 +248,9 @@ lib/
     worker_pool.dart       # 并行帧渲染 isolate 池
     background.dart        # 后台 isolate 入口（进度/取消桥接）
     cancellation.dart      # MotionCancelToken + MotionCancelledException
+    guard.dart             # 可选并发信号量（MotionPipelineGuard）
+    param_catalog.dart      # 程序可读的渲染参数目录
+    strip.dart             # 条漫 strip 模式（切片 + processStrip）
     batch_runner.dart      # 批处理
     ledger.dart            # JSONL 台账
     render/

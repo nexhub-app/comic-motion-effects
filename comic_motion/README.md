@@ -155,6 +155,40 @@ final config = EffectConfig(
   with `EffectConfig.fromJson` — the hash round-trips, so it doubles as a
   cache key.
 
+### Webtoon strip mode
+
+Long webtoon strips (e.g. 800 × 10000+) get destroyed by `maxDimension`
+downscaling, exceed the edge limit outright, and parallax-like effects
+misalign across panels. `processStrip` slices the source by a viewport
+ratio (default 9:16, optional overlap) and renders each slice through the
+standard pipeline independently:
+
+```dart
+final strip = await processStrip(
+  inputPath, outDir,
+  config: EffectConfig(
+      fps: 12, durationSec: 2, maxDimension: 800,
+      effects: [EffectKind.rain, EffectKind.vignette]),
+  viewportWidth: 9, viewportHeight: 16,
+  overlapPx: 0, // crop semantics: adjacent slices share exactly N rows, no blending
+);
+for (final s in strip.slices) {
+  print(s.slice.yStart);      // source-row window
+  print(s.result.outputGif);  // `<stem>_slice<NNN>_<hash8>/anim.gif`
+}
+```
+
+- Per-slice `<stem>_slice<NNN>_<hash8>` directories with independent
+  configHash + params.json — deterministic, naturally cache-friendly.
+- `kStripSafeEffects` lists the overlay-class effects that are safe across
+  slice boundaries; anything else (parallax/breathing/slowPush/mangaShake…)
+  is allowed but flagged experimental in `strip.warnings` (each slice
+  estimates depth independently, so such motion can misalign at cuts).
+- The whole-chapter pixel budget (40M px default) is enforced before
+  slicing; oversized chapters raise `E_TOO_LARGE` with a strip-mode hint.
+  Huge chapters: pass a larger `maxPixels` — per-slice working rasters stay
+  small regardless of chapter height.
+
 ### Platform support matrix
 
 | Platform | Status | Notes |
@@ -301,6 +335,9 @@ lib/
     worker_pool.dart       # parallel frame-render isolate pool
     background.dart        # background-isolate entry points (progress/cancel bridge)
     cancellation.dart      # MotionCancelToken + MotionCancelledException
+    guard.dart             # opt-in concurrency semaphore (MotionPipelineGuard)
+    param_catalog.dart     # program-readable render parameter catalog
+    strip.dart             # webtoon strip mode (slicing + processStrip)
     batch_runner.dart      # batch processing
     ledger.dart            # JSONL processing ledger (optional, size-rotating)
     render/

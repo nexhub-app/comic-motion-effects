@@ -113,13 +113,18 @@ class ImageTooLargeException implements Exception {
 
   @override
   String toString() {
+    final stripHint = height > width * 2
+        ? '; for long webtoon strips use strip-mode processing '
+            '(processStrip, see README) which renders viewport-sized slices'
+        : '';
     if (maxPixels != null) {
       final count = pixelCount != null ? ' ($pixelCount pixels),' : '';
       return 'ImageTooLargeException [$code]: image ${width}x$height$count '
           'exceeds the pixel budget of $maxPixels '
-          '(edge limit ${RgbaImage.maxDimension} is enforced separately)';
+          '(edge limit ${RgbaImage.maxDimension} is enforced separately)'
+          '$stripHint';
     }
     return 'ImageTooLargeException [$code]: image size ${width}x$height '
-        'exceeds the limit of ${RgbaImage.maxDimension}px';
+        'exceeds the limit of ${RgbaImage.maxDimension}px$stripHint';
   }
 }

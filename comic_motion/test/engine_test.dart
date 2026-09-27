@@ -1041,6 +1041,117 @@ void main() {
       expect(kEffectNames, EffectKind.values.map((e) => e.name).toList());
     });
 
+    test('StripSplitter 切片边界：整除 / 非整除大尾片 / 小尾片并入', () {
+      const splitter = StripSplitter(); // 9:16
+      // 宽 90 → 整片高 = 90*16/9 = 160
+      // 整除：480 = 3×160
+      final exact = splitter.plan(90, 480);
+      expect(exact.map((s) => [s.yStart, s.yEnd]), [
+        [0, 160],
+        [160, 320],
+        [320, 480],
+      ]);
+      // 非整除小尾片：500 → 余 20 < 160/3，并入前一片
+      final merged = splitter.plan(90, 500);
+      expect(merged.map((s) => [s.yStart, s.yEnd]), [
+        [0, 160],
+        [160, 320],
+        [320, 500],
+      ]);
+      // 非整除大尾片：560 → 余 80 ≥ 160/3，独立成片
+      final kept = splitter.plan(90, 560);
+      expect(kept.map((s) => [s.yStart, s.yEnd]), [
+        [0, 160],
+        [160, 320],
+        [320, 480],
+        [480, 560],
+      ]);
+      // 重叠：相邻片共享区域恰好 = overlapPx
+      final overlapped = const StripSplitter(overlapPx: 20).plan(90, 480);
+      expect(overlapped.length, 3);
+      for (var i = 1; i < overlapped.length; i++) {
+        expect(overlapped[i - 1].yEnd - overlapped[i].yStart, 20);
+      }
+      expect(overlapped.first.yStart, 0);
+      expect(overlapped.last.yEnd, 480);
+      expect(overlapped.map((s) => s.height).every((h) => h > 0), isTrue);
+    });
+
+    test('processStrip：逐片独立渲染、命名与 hash 独立、安全集无告警', () async {
+      final inPath = '${tmp.path}/strip.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 960)));
+      final cfg = EffectConfig(
+          fps: 2, durationSec: 1, maxDimension: 64,
+          effects: [EffectKind.rain, EffectKind.vignette]);
+      final r = await processStrip(inPath, '${tmp.path}/strip_out',
+          config: cfg, parallel: 1);
+      expect(r.slices, isNotEmpty);
+      expect(r.warnings, isEmpty, reason: '安全集内效果不应有实验性告警');
+      final stem = 'strip';
+      for (final s in r.slices) {
+        final dir =
+            '${tmp.path}/strip_out/${stem}_slice${s.slice.index.toString().padLeft(3, '0')}_${cfg.configHash.substring(0, 8)}';
+        expect(Directory(dir).existsSync(), isTrue,
+            reason: '每片独立目录 <stem>_slice<NNN>_<hash8>');
+        expect(File(s.result.outputGif).existsSync(), isTrue);
+        final params =
+            EffectConfig.fromJson(_decodeJson(File(s.result.paramsFile).readAsStringSync()));
+        expect(params.configHash, cfg.configHash,
+            reason: '片级 configHash 独立成立（同配置同 hash）');
+        expect(s.slice.yStart, lessThan(s.slice.yEnd));
+      }
+      // 片序覆盖：相邻片窗口衔接连续
+      for (var i = 1; i < r.slices.length; i++) {
+        expect(r.slices[i].slice.yStart, r.slices[i - 1].slice.yEnd,
+            reason: '无重叠时切片窗口应无缝衔接');
+      }
+      // GIF 确定性：同输入重跑逐字节一致
+      final again = await processStrip(inPath, '${tmp.path}/strip_out2',
+          config: cfg, parallel: 1);
+      for (var i = 0; i < r.slices.length; i++) {
+        expect(
+            File(again.slices[i].result.outputGif).readAsBytesSync(),
+            equals(File(r.slices[i].result.outputGif).readAsBytesSync()),
+            reason: 'strip 第 $i 片重跑必须逐字节一致');
+      }
+    });
+
+    test('processStrip：白名单外效果允许使用但告警实验性', () async {
+      final inPath = '${tmp.path}/strip.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(32, 200)));
+      final cfg = EffectConfig(
+          fps: 2, durationSec: 1, maxDimension: 32,
+          effects: [EffectKind.parallax, EffectKind.rain]);
+      final r = await processStrip(inPath, '${tmp.path}/strip_warn',
+          config: cfg, parallel: 1);
+      expect(r.warnings, isNotEmpty);
+      expect(r.warnings.join(), contains('experimental'));
+      expect(r.warnings.join(), contains('parallax'));
+      expect(r.slices, isNotEmpty);
+      expect(r.slices.first.result.outputGif, isNotEmpty);
+    });
+
+    test('E_TOO_LARGE：条漫形态的报错提示使用 strip 模式', () {
+      final tall = _gradientImage(100, 10000); // h > 2w
+      expect(
+        () => ImageIO.decode(_pngEncode(tall), maxPixels: 500000),
+        throwsA(
+          predicate((e) =>
+              e is ImageTooLargeException &&
+              e.code == 'E_TOO_LARGE' &&
+              e.toString().contains('processStrip')),
+        ),
+      );
+      // 非条漫形态不带该提示
+      final square = _gradientImage(1000, 1000);
+      try {
+        ImageIO.decode(_pngEncode(square), maxPixels: 500000);
+        fail('should have thrown');
+      } on ImageTooLargeException catch (e) {
+        expect(e.toString().contains('processStrip'), isFalse);
+      }
+    });
+
     test('批处理失败项不中断且台账记录原因', () async {
       // 建一个输入目录: 一张好图 + 一个空文件 + 一个文本文件
       final inDir = Directory('${tmp.path}/imgs')..createSync();
