@@ -437,6 +437,50 @@ void main() {
           reason: '产物路径不得含反斜杠（POSIX 上是文件名字符）');
     });
 
+    test('内存预算充裕时零降级，输出与无预算逐字节一致', () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(96, 64)));
+      final cfg = EffectConfig(fps: 2, durationSec: 1, maxDimension: 96);
+      final plain =
+          await MotionPipeline(cfg, parallel: 1).processFile(inPath, '${tmp.path}/b0');
+      final budgeted = await MotionPipeline(cfg, parallel: 1, memoryBudgetMb: 4096)
+          .processFile(inPath, '${tmp.path}/b1');
+      expect(File(budgeted.outputGif).readAsBytesSync(),
+          equals(File(plain.outputGif).readAsBytesSync()),
+          reason: '预算充裕不得触碰像素路径');
+      expect(budgeted.warnings.join(), isNot(contains('memory budget')));
+    });
+
+    test('内存预算紧张时降为串行并在 warnings 记录', () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(96, 64)));
+      final cfg = EffectConfig(fps: 2, durationSec: 1, maxDimension: 512);
+      final r = await MotionPipeline(cfg, parallel: 8, memoryBudgetMb: 100)
+          .processFile(inPath, '${tmp.path}/b2');
+      expect(r.parallel, 1);
+      expect(r.parallelFallback, isTrue, reason: '预算导致的并行降级要如实上报');
+      final w = r.warnings.join(' | ');
+      expect(w, contains('memory budget'));
+      expect(w, contains('parallel capped at 1'));
+      // 源图远小于分辨率下限，预算不得虚报分辨率降级
+      expect(w, isNot(contains('working resolution')));
+    });
+
+    test('内存预算极小时收缩工作分辨率并记录', () async {
+      final inPath = '${tmp.path}/big.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(1024, 1024)));
+      final cfg = EffectConfig(fps: 2, durationSec: 1, maxDimension: 1024);
+      final r = await MotionPipeline(cfg, parallel: 1, memoryBudgetMb: 180)
+          .processFile(inPath, '${tmp.path}/b3');
+      // PipelineResult.width 报源图尺寸；工作分辨率从 GIF 逻辑屏幕宽验证
+      // （GIF 头偏移 6-7 为小端 u16 宽）。
+      final gifBytes = File(r.outputGif).readAsBytesSync();
+      final gifWidth = gifBytes[6] | (gifBytes[7] << 8);
+      expect(gifWidth, 716, reason: '1024 * 0.7 = 716：预算推导应如实降档');
+      final w = r.warnings.join(' | ');
+      expect(w, contains('working resolution capped at 716px'));
+    });
+
     test('并行与串行输出逐字节一致（GIF 与 PNG 帧序列）', () async {
       final inPath = '${tmp.path}/in.png';
       File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(96, 64)));

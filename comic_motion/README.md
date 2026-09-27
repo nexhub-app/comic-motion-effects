@@ -19,11 +19,25 @@ CLI（单图 / 批处理）与 HTTP API 服务在姊妹包 **[comic_motion_serve
 | 操作系统 | Windows / Linux / macOS（纯 Dart） |
 | 网络 | 仅 `dart pub get` 时需要 |
 
-## 快速开始（作为库）
+## 作为库嵌入 Flutter 工程
+
+### 引入方式
+
+pub.dev（推荐）：
 
 ```yaml
 dependencies:
   comic_motion: ^1.3.0
+```
+
+git 直连：
+
+```yaml
+dependencies:
+  comic_motion:
+    git:
+      url: https://github.com/nexhub-app/comic-motion-effects.git
+      path: comic_motion
 ```
 
 ```dart
@@ -35,7 +49,39 @@ final result = await MotionPipeline(EffectConfig(fps: 12), parallel: 4)
 
 `processFile` 是异步的（并行度 >1 时跨 isolate），必须 `await`。管线构造参数 `parallel` 为执行期参数，不进入 `EffectConfig`，因此不影响 configHash 与输出字节。
 
-本仓库开发者可从源码跑通引擎：
+### 平台支持矩阵
+
+| 平台 | 状态 | 说明 |
+|---|---|---|
+| Android / iOS | ✅ 首要目标 | 纯 Dart + isolate，无原生插件、无 UI 依赖 |
+| Windows / macOS / Linux 桌面 | ✅ | 与 CLI / 服务端同源 |
+| Web | 🚫 本轮未支持 | `dart:io` / isolate 边界尚未收敛（路线图项） |
+
+### 移动端推荐参数
+
+| 参数 | 推荐 | 原因 |
+|---|---|---|
+| `maxDimension` | ≤ 1280 | 峰值内存与工作分辨率像素总量线性相关 |
+| `fps` / `durationSec` | 12 / 2-3 秒 | 帧数 = fps × duration，直接决定编码耗时与内存驻留 |
+| `parallel` | 2-4 | 每个 worker 持一整套层栅格副本，内存随并行线性涨 |
+| `memoryBudgetMb` | 按设备档位（如 256 / 512） | 超预算自动降并行、再降工作分辨率，降级写入 `warnings` |
+
+### 内存预算 API
+
+```dart
+final result = await MotionPipeline(
+  EffectConfig(fps: 12, durationSec: 2.5, maxDimension: 1280),
+  parallel: 4,
+  memoryBudgetMb: 256, // 执行期参数：不进 EffectConfig、不影响 configHash
+).processFile(input, outDir);
+for (final w in result.warnings) {
+  debugPrint(w); // 预算触发的降级（降并行 / 降工作分辨率）都记在这里
+}
+```
+
+预算模型是保守启发式（按实际像素 × 层数 + 安全系数估算）：宁可提前降级也不 OOM。工作分辨率被预算收缩时产物像素随之改变——与无预算运行不逐字节一致，但同预算 + 同输入仍确定性复现；`memoryBudgetMb` 不传时路径零改动，legacy 档逐字节契约不受影响。
+
+### 从源码跑通引擎（本仓库开发者）
 
 ```bash
 git clone https://github.com/nexhub-app/comic-motion-effects.git

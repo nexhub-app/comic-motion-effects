@@ -76,13 +76,45 @@ class PipelineResult {
 
 /// One-shot processing pipeline: decode -> depth -> layers -> frames -> encode.
 class MotionPipeline {
-  MotionPipeline(this.config, {int? parallel})
+  MotionPipeline(this.config, {int? parallel, this.memoryBudgetMb})
       : _parallel = parallel ??
             math.min(
                 kDefaultParallel, math.max(1, io.Platform.numberOfProcessors));
 
   final EffectConfig config;
+
+  /// 调用方内存预算（MB，可选）。执行期参数：不进 [EffectConfig]、不参与
+  /// configHash。按保守启发式自动推导并行上限与工作分辨率：预算不足时先降
+  /// 并行，仍不足再收缩工作分辨率（下限 320px），每次降级都写进
+  /// [PipelineResult.warnings]。注意：工作分辨率变化会改变输出像素，因此
+  /// 预算运行的产物与无预算运行不逐字节一致（同预算 + 同输入仍确定性复现）。
+  final int? memoryBudgetMb;
+
   final int _parallel;
+
+  /// 保守内存模型：base = VM + 解码缓冲 + 调色板/LUT；每个并行 worker 持有
+  /// 一整套层栅格 + 基底 + 帧缓冲副本，按 (layerCount + 2) 份 RGBA 估算并
+  /// 乘 1.5 安全系数（效果通路 scratch 未计全）。宁可提前降级，不可 OOM。
+  static const double _baseMb = 128;
+  static const int _minWorkingDim = 320;
+
+  double _perWorkerMb(RgbaImage src, int dim) {
+    final maxSide = src.width > src.height ? src.width : src.height;
+    var px = src.pixelCount;
+    if (maxSide > dim) {
+      final scale = dim / maxSide;
+      px = (src.width * scale).round() * (src.height * scale).round();
+    }
+    return px * 4 * (config.layerCount + 2) * 1.5 / (1024 * 1024);
+  }
+
+  /// 收缩 maxDimension 上限是否真的会改变工作栅格（源图本就小于上限时
+  /// 不产生任何变化，也不该报降级告警）。
+  bool _workingPixelsDiffer(RgbaImage src, int dim) {
+    if (dim >= config.maxDimension) return false;
+    final maxSide = src.width > src.height ? src.width : src.height;
+    return maxSide > dim;
+  }
 
   /// Process one image file into [outputDir] with uniform naming:
   /// `<input-stem>_<configHash>/anim.gif` and `frames/frame_NNNN.png`.
@@ -93,12 +125,57 @@ class MotionPipeline {
     final sw = Stopwatch()..start();
     final src = ImageIO.decodeFile(inputPath);
 
+    // Memory budget: derive the working-resolution cap and the parallel cap
+    // before touching the pixel path. 无预算时零改动（legacy 逐字节路径不受
+    // 任何影响）。
+    final budgetWarnings = <String>[];
+    var budgetCappedParallel = false;
+    var effectiveMaxDim = config.maxDimension;
+    var allowedParallel = _parallel;
+    final budget = memoryBudgetMb?.toDouble();
+    if (budget != null) {
+      var dim = config.maxDimension;
+      while (dim > _minWorkingDim &&
+          _baseMb + 2 * _perWorkerMb(src, dim) > budget) {
+        final next = math.max(_minWorkingDim, (dim * 0.7).floor());
+        if (next == dim) break;
+        dim = next;
+      }
+      if (_workingPixelsDiffer(src, dim)) {
+        effectiveMaxDim = dim;
+        budgetWarnings.add(
+            'memory budget ${memoryBudgetMb}MB: working resolution capped at '
+            '${effectiveMaxDim}px (config maxDimension ${config.maxDimension}px)');
+      }
+      final perWorker = _perWorkerMb(src, effectiveMaxDim);
+      if (_baseMb + 2 * perWorker > budget) {
+        allowedParallel = 1;
+        budgetWarnings.add(
+            'memory budget ${memoryBudgetMb}MB too small for the estimated '
+            'footprint; degraded to parallel=1');
+      } else {
+        // (p + 1) 份：p 个 worker 各一份 + 主 isolate 一份。
+        final pMax = ((budget - _baseMb) / perWorker).floor() - 1;
+        if (pMax < 1) {
+          allowedParallel = 1;
+        } else if (pMax < _parallel) {
+          allowedParallel = pMax;
+        }
+      }
+      if (allowedParallel < _parallel) {
+        budgetCappedParallel = true;
+        budgetWarnings.add(
+            'memory budget ${memoryBudgetMb}MB: parallel capped at '
+            '$allowedParallel (requested $_parallel)');
+      }
+    }
+
     // Working resolution guard: downscale very large inputs for speed.
     // 目标尺寸两档算法一致，只有滤波器不同：legacy 沿 v1.2 双线性，
     // standard+ 走面积平均（细线稿不再产生锯齿与摩尔纹）。
     final working = config.quality.tier.atLeastStandard
-        ? boxDownscale(src, config.maxDimension)
-        : _downscaleTo(src, config.maxDimension);
+        ? boxDownscale(src, effectiveMaxDim)
+        : _downscaleTo(src, effectiveMaxDim);
 
     // Depth + layers. legacy 档保持 v1.2 的最近邻掩码（不羽化、不外扩）。
     final depth = DepthEstimator(workScale: 0.5).estimate(working);
@@ -182,9 +259,9 @@ class MotionPipeline {
         emit(out);
       }
     } else {
-      final runner = await ParallelFrameRunner.start(spec, _parallel);
+      final runner = await ParallelFrameRunner.start(spec, allowedParallel);
       if (runner == null) {
-        fallback = _parallel > 1;
+        fallback = allowedParallel > 1;
         final job = FrameJob(compositor,
             pngDir: spec.pngDir, encoder: gif?.newFrameEncoder());
         for (final out in presolved.values) {
@@ -228,8 +305,8 @@ class MotionPipeline {
       configJson: config.toJsonString(),
       configHash: config.configHash,
       parallel: parallel,
-      parallelFallback: fallback,
-      warnings: config.warnings,
+      parallelFallback: fallback || budgetCappedParallel,
+      warnings: [...config.warnings, ...budgetWarnings],
     );
   }
 
