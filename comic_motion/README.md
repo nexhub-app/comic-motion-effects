@@ -195,7 +195,7 @@ for (final s in strip.slices) {
 |---|---|---|
 | Android / iOS | ✅ primary target | Pure Dart + isolates, no native plugins, no UI |
 | Windows / macOS / Linux desktop | ✅ | Same code path as CLI/server |
-| Web | 🚫 not yet | `dart:io` / isolate boundaries not yet converged (roadmap) |
+| Web | 🚫 not supported | Core modules (`image_io` / `pipeline` / `worker_pool`) depend on `dart:io`, and `Isolate.spawn` is unavailable on Flutter Web. A port would mean web decode APIs and web workers — the long-term path, not a commitment |
 
 ### Recommended mobile parameters
 

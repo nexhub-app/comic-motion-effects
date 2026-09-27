@@ -135,7 +135,7 @@ for (final s in strip.slices) {
 |---|---|---|
 | Android / iOS | ✅ 首要目标 | 纯 Dart + isolate，无原生插件、无 UI 依赖 |
 | Windows / macOS / Linux 桌面 | ✅ | 与 CLI / 服务端同源 |
-| Web | 🚫 本轮未支持 | `dart:io` / isolate 边界尚未收敛（路线图项） |
+| Web | 🚫 不支持 | 核心模块（`image_io` / `pipeline` / `worker_pool`）依赖 `dart:io`，且 `Isolate.spawn` 在 Flutter Web 不可用；远期若移植需换 web 解码 API 与 web worker——仅为方向，不做实现承诺 |
 
 ### 移动端推荐参数
 
