@@ -563,6 +563,40 @@ void main() {
       expect(one.length, 1);
     });
 
+    test('台账可关闭：null ledger 批处理照常工作且不落盘', () async {
+      final inDir = Directory('${tmp.path}/imgs_nl')..createSync();
+      File('${inDir.path}/a.png')
+          .writeAsBytesSync(_pngEncode(_gradientImage(32, 32)));
+      final results = await BatchRunner(null).runFolder(
+          inputDir: inDir.path,
+          outputDir: '${tmp.path}/out_nl',
+          config: EffectConfig(fps: 2, durationSec: 1, maxDimension: 32));
+      expect(results.single.ok, isTrue);
+      final anyLedger = Directory('${tmp.path}')
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((f) => f.path.contains('ledger'))
+          .isEmpty;
+      expect(anyLedger, isTrue, reason: '嵌入场景不应产生无限增长的台账文件');
+    });
+
+    test('台账按 maxBytes 轮转：旧档改名 .1，查询覆盖当前档', () {
+      final ledger = Ledger('${tmp.path}/ledger_rot', maxBytes: 400);
+      for (var i = 0; i < 6; i++) {
+        ledger.appendJob(
+            jobId: 'j$i',
+            input: 'in_$i.png',
+            configHash: 'hash-$i',
+            status: 'success',
+            error: 'padding padding padding padding padding');
+      }
+      expect(File('${tmp.path}/ledger_rot/ledger.jsonl.1').existsSync(),
+          isTrue, reason: '超过 maxBytes 应轮转出归档');
+      expect(ledger.query(jobId: 'j0'), isEmpty,
+          reason: '轮转后查询只覆盖当前档');
+      expect(ledger.query(jobId: 'j5').length, 1);
+    });
+
     test('非图片目录抛 ConfigException', () {
       final cfg = EffectConfig(fps: 4, durationSec: 1);
       final ledger = Ledger('${tmp.path}/ledger');

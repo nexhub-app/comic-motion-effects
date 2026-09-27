@@ -39,10 +39,12 @@ class BatchItemResult {
 
 /// Batch runner: process every image in a folder with one config.
 /// A failing item never aborts the batch; its reason is recorded.
+///
+/// [ledger] 可为 null：嵌入场景（App 内）不落台账，批处理行为不变。
 class BatchRunner {
   BatchRunner(this.ledger);
 
-  final Ledger ledger;
+  final Ledger? ledger;
 
   static const supportedExts = ['.png', '.jpg', '.jpeg', '.webp'];
 
@@ -95,7 +97,7 @@ class BatchRunner {
       try {
         final r = await MotionPipeline(config, parallel: parallel)
             .processFile(f, outputDir);
-        ledger.appendJob(
+        ledger?.appendJob(
           jobId: jobId,
           input: f,
           configHash: config.configHash,
@@ -138,7 +140,7 @@ class BatchRunner {
 
   BatchItemResult _fail(String f, String jobId, EffectConfig config,
       String error, String outputDir) {
-    ledger.appendJob(
+    ledger?.appendJob(
       jobId: jobId,
       input: f,
       configHash: config.configHash,

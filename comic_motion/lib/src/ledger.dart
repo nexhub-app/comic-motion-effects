@@ -4,10 +4,20 @@ import 'json_compat.dart';
 
 /// Every job (single or batch item) is appended to a JSONL ledger with full
 /// traceability: input, params hash, outputs, timing, status, error.
+///
+/// 嵌入场景控制体积：超过 [maxBytes] 时把当前文件轮转为 `ledger.jsonl.1`
+/// （只保留一代，更早的归档被覆盖）；[query] 只覆盖当前档。
+/// 完全不需要台账的调用方给 [BatchRunner] 传 null ledger 即可。
 class Ledger {
-  Ledger(String dir) : _file = '$dir/ledger.jsonl' {
+  Ledger(String dir, {this.maxBytes = defaultMaxBytes})
+      : _file = '$dir/ledger.jsonl' {
     Directory(dir).createSync(recursive: true);
   }
+
+  /// 单档体积上限（默认 16MB）：已在档上的下次写入前轮转。<=0 表示不轮转。
+  static const int defaultMaxBytes = 16 * 1024 * 1024;
+
+  final int maxBytes;
 
   final String _file;
   final List<Map<String, dynamic>> _cache = [];
@@ -53,7 +63,16 @@ class Ledger {
       if (error != null) 'error': error,
     };
     final line = _jsonEncode(rec);
-    File(_file).writeAsStringSync('$line\n', mode: FileMode.append);
+    final f = File(_file);
+    if (maxBytes > 0 && f.existsSync() && f.lengthSync() > maxBytes) {
+      final rotatedPath = '$_file.1';
+      final rotated = File(rotatedPath);
+      if (rotated.existsSync()) rotated.deleteSync();
+      f.renameSync(rotatedPath);
+      _cache.clear();
+      _loaded = false; // 当前档变空，下次查询重建缓存
+    }
+    f.writeAsStringSync('$line\n', mode: FileMode.append);
     _cache.add(rec);
     _loaded = true; // cache now includes everything in the file
   }
