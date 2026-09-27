@@ -4,7 +4,22 @@
 
 ## Unreleased（1.3.1 候选）
 
-发布导向改造：包拆分、跨平台路径、解码安全、错误码体系、fail-fast 校验、内存预算、台账可关闭。逐字节复现契约全程未破坏（legacy 档像素路径与编码字节零改动，全程 137+6 例测试护栏）。
+发布导向改造（第一轮：包拆分、跨平台路径、解码安全、错误码体系、fail-fast 校验、内存预算、台账可关闭）+ 运行时生命周期接口（第二轮：全内存管线、取消/进度/超时、后台 isolate、并发防护、渲染参数/效果选择 API、条漫 strip 模式）。逐字节复现契约全程未破坏（legacy 档像素路径与编码字节零改动，测试护栏扩至 174+6 例）。
+
+### 第二轮：运行时生命周期接口（R1–R10）
+
+- **全内存管线 API**：`MotionPipeline.processBytes({required Uint8List input, int? maxPixels})` → `MemoryPipelineResult`（`gifBytes` / `paramsJsonBytes` + 对齐 `PipelineResult` 的元信息，无路径）。渲染主干抽出共享 `_runCore`，`processFile` 只剩薄封装——同输入同配置下内存产物与落盘产物逐字节一致（有测试，含并行路径）。`outputFormat: frames` 在内存模式返回 `gifBytes: null`。
+- **取消 / 进度 / 超时**：`MotionPipeline` 新增 `onProgress` / `cancelToken` / `timeout` / `keepPartial`（全部执行期参数，不进 configHash）。检查点全部位于主 isolate 帧调度层（派发前 / 每帧回包 / 探针渲染前），不打断 worker 内部单帧渲染，粒度为一个帧边界；超时用 deadline 比对而非 Timer。取消默认清理本次写出的半成品并抛 `MotionCancelledException`（code `E_CANCELLED`），超时走同一路径（code `E_TIMEOUT`）。进度计数含探针帧、取消后不再回调。新增 `lib/src/cancellation.dart`。
+- **后台 isolate 入口**：`processFileInBackground` / `processBytesInBackground`——整条管线（含解码）在后台 isolate 执行。`Isolate.spawn` + 控制通道：config/并行/预算随启动消息下发，progress 经 SendPort 回传，`cancel()` 经 cancelHook 桥即时推送（后台无轮询定时器，检查频率 = 帧调度检查点）；异常对象跨 isolate 原样重抛、`E_*` 错误码不丢。README（中英）新增醒目「线程模型」警告（同步段：decode/depth/split/probe）与两种解法；新增 `example/04` 完整演示进度/取消/超时/内存流程。
+- **并发防护（opt-in）**：`MotionPipelineGuard` 进程级 FIFO 信号量（`configure(maxConcurrent)` 默认 1；`acquire/release` 或 `run()` 便捷封装，取消异常同样释放槽位）。README 明确「移动端同一时刻只跑一个渲染任务」指引。
+- **一站式渲染参数 API**：`EffectConfig` 构造新增顶层便捷参数 `dither` / `qualityTier` / `amplitude` / `directionDeg`（null = 不触碰；非空映射到 `quality.*` / `parallax.*`，与显式嵌套构造**序列化与 configHash 逐字节等价**，等价性矩阵有测试；默认路径指纹不变）。
+- **渲染效果选择 API**：`withEffect` / `withoutEffect` / `withEffects`（全量替换）/ `clearEffects`（静帧）——不可变语义，一律返回新实例。
+- **参数目录**：`ParamSpec` + `kRenderParamSpecs`（名称/类型/min/max/默认/语义，`strictRange` 区分 fail-fast 与建议范围）+ `kEffectNames`，供 App 动态生成设置面板。持久化推荐：直接存 `EffectConfig.toJsonString()`、`fromJson` 读回即恢复。`example/02` 扩展链式配置演示。
+- **条漫 strip 模式**：`StripSplitter`（视口比例切片，默认 9:16；可选重叠 N px，裁剪语义不做混合；小尾片自动并入）+ `processStrip`（每片走标准管线独立渲染，输出 `<stem>_slice<NNN>_<hash8>/`，片级 configHash 独立、天然缓存去重）+ `kStripSafeEffects` 白名单（白名单外效果允许使用但在 `warnings` 提示实验性）。`MotionPipeline.processImage` 为已解码源图的公共入口（与 processFile 共享渲染主干）。条漫形态（高 > 2×宽）超限时 `E_TOO_LARGE` 消息提示改用 strip 模式。
+- **输入格式矩阵（文档）**：README（中英）明确 JPEG/PNG/静态 WebP 支持；**Animated WebP 与 GIF 实测解码成功、引擎取首帧**（手工构造动画 WebP 容器实测 `image` 4.10.1，行为契约有测试锁定，依赖升级漂移会在 CI 暴露）；AVIF/HEIF 以 `E_DECODE_CORRUPT` 拒绝；损坏/伪装文件错误路径表。
+- **发布就绪**：包内 `docs/` 按 pub 布局约定改名 `doc/`，`dart pub publish --dry-run` 达到 **0 warnings**（未执行发布）；新增 `doc/release_checklist.md`（dry-run 核查表、双包版本对齐策略、path override ↔ 版本依赖切换时机、score 优化清单、发布后动作）。
+- **成本预评估**：`estimateCost(config, {sourceWidth, sourceHeight})` → `CostEstimate`（内存/耗时**区间** + 工作分辨率 + 帧数，基于桌面 bench 拟合、标注经验估算；低端机可行性按上界判断）。
+- **移动端参考区间（文档）**：README 性能章节新增草稿/典型/低端三档粗略区间，明确桌面数据不适用于真机、区间未经真机校准。
 
 ### ⚠ BREAKING CHANGE
 
