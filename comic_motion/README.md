@@ -418,6 +418,26 @@ Parallelism scan (standard tier, 1080p, 96 frames, core trio): `1 → 16.67 s`,
 SHA256/FNV-1a across runs; legacy tier byte-identical with v1.2
 (`presets/classic.json` drill passed).
 
+### Mobile reference ranges (rough)
+
+The desktop numbers above **do not transfer to phones** (fewer big cores,
+thermal throttling, different memory behavior). The ranges below are rough
+estimates for guidance — derived from the desktop bench with mobile
+parallelism and thermal assumptions folded in, **not yet calibrated on real
+devices**; treat them as order-of-magnitude, and use `estimateCost(...)` +
+the `warnings` degradations for the actual device:
+
+| Scenario | Config | Typical wall time | Guidance |
+|---|---|---|---|
+| Draft (in-feed preview) | 480p, 12fps, 2s, core trio, parallel 2 | ~0.5–1.5 s | Mid-tier Snapdragon / Dimensity |
+| Typical | 1080p, 24fps, 4s, core trio, parallel 2–4 | ~4–10 s | Render on demand, not while scrolling |
+| Low-end device | 720p, 12fps, 2s, core trio, parallel 1–2 | ~1–3 s | Cap `maxDimension` ≤ 720, always pass `memoryBudgetMb` |
+
+Rules of thumb on phones: keep `parallel` ≤ 4 (each worker copies the full
+layer rasters); always pass `memoryBudgetMb` and surface its `warnings`;
+prefer the draft config for scrolling previews and render the typical
+config on demand; run one render at a time (see the concurrency section).
+
 ## Tests and benchmarks
 
 ```bash
