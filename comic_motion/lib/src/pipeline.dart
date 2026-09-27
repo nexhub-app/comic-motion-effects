@@ -33,6 +33,7 @@ class PipelineResult {
     required this.configJson,
     required this.configHash,
     required this.contentHash,
+    this.firstFramePng,
     this.parallel = 1,
     this.parallelFallback = false,
     this.warnings = const [],
@@ -65,6 +66,11 @@ class PipelineResult {
 
   /// 配置回落提示（如未知 mood）。执行期属性，不参与 configHash。
   final List<String> warnings;
+
+  /// `includeFirstFrame: true` 时的首帧 PNG（Uint8List），未请求为 null。
+  /// 与 GIF 首帧同源（同一渲染帧：GIF 里的副本经调色板量化），字节与
+  /// `frames/frame_0000.png` 完全一致。执行期产物，不进 [toJson]。
+  final Uint8List? firstFramePng;
 
   Map<String, dynamic> toJson() => {
         'input': inputPath,
@@ -101,6 +107,7 @@ class MemoryPipelineResult {
     required this.configJson,
     required this.configHash,
     required this.contentHash,
+    this.firstFramePng,
     this.parallel = 1,
     this.parallelFallback = false,
     this.warnings = const [],
@@ -133,6 +140,10 @@ class MemoryPipelineResult {
 
   /// 配置回落提示（如未知 mood）。执行期属性，不参与 configHash。
   final List<String> warnings;
+
+  /// `includeFirstFrame: true` 时的首帧 PNG，未请求为 null（语义同
+  /// [PipelineResult.firstFramePng]）。
+  final Uint8List? firstFramePng;
 }
 
 /// Shared interior of [MotionPipeline.processFile] and
@@ -146,6 +157,7 @@ class _CoreOutput {
     required this.gifPath,
     required this.frameDir,
     required this.paramsFile,
+    required this.firstFramePng,
     required this.layerCount,
     required this.frameCount,
     required this.parallel,
@@ -161,6 +173,9 @@ class _CoreOutput {
   final String gifPath;
   final String frameDir;
   final String paramsFile;
+
+  /// `includeFirstFrame: true` 时的首帧 PNG（复用探针帧，未请求为 null）。
+  final Uint8List? firstFramePng;
 
   final int layerCount;
   final int frameCount;
@@ -249,7 +264,11 @@ class MotionPipeline {
   /// 注意：解码、降采样、深度估算、分层与调色板探针在调用方 isolate 同步
   /// 执行（仅后续帧渲染派发 worker 池）。UI isolate 里直接调用会卡帧，
   /// 嵌入方请改用后台 isolate 包装（见 README「Embedding into a Flutter app」）。
-  Future<PipelineResult> processFile(String inputPath, String outputDir) async {
+  ///
+  /// [includeFirstFrame] 为 true 时结果附带 [PipelineResult.firstFramePng]
+  /// ——首帧本来就是调色板探针渲过的，直接复用同一份栅格，零额外渲染成本。
+  Future<PipelineResult> processFile(String inputPath, String outputDir,
+      {bool includeFirstFrame = false}) async {
     final sw = Stopwatch()..start();
     // 单次读盘：同一份字节既做内容指纹又做解码输入（守卫与 decodeFile 一致）。
     final bytes = ImageIO.readFileBytes(inputPath);
@@ -263,7 +282,8 @@ class MotionPipeline {
     final jobDir = '$outputDir/'
         '${baseName}_${contentHash}_${config.configHash.substring(0, 8)}';
 
-    final core = await _runCore(src, jobDir: jobDir);
+    final core = await _runCore(src,
+        jobDir: jobDir, includeFirstFrame: includeFirstFrame);
     sw.stop();
     return PipelineResult(
       inputPath: inputPath,
@@ -279,6 +299,7 @@ class MotionPipeline {
       configJson: config.toJsonString(),
       configHash: config.configHash,
       contentHash: contentHash,
+      firstFramePng: core.firstFramePng,
       parallel: core.parallel,
       parallelFallback: core.parallelFallback,
       warnings: core.warnings,
@@ -299,12 +320,14 @@ class MotionPipeline {
     String outputDir, {
     String baseName = 'image',
     String inputLabel = 'memory:image',
+    bool includeFirstFrame = false,
   }) async {
     final sw = Stopwatch()..start();
     final contentHash = ImageIO.contentHash8(source.data);
     final jobDir = '$outputDir/'
         '${baseName}_${contentHash}_${config.configHash.substring(0, 8)}';
-    final core = await _runCore(source, jobDir: jobDir);
+    final core = await _runCore(source,
+        jobDir: jobDir, includeFirstFrame: includeFirstFrame);
     sw.stop();
     return PipelineResult(
       inputPath: inputLabel,
@@ -320,6 +343,7 @@ class MotionPipeline {
       configJson: config.toJsonString(),
       configHash: config.configHash,
       contentHash: contentHash,
+      firstFramePng: core.firstFramePng,
       parallel: core.parallel,
       parallelFallback: core.parallelFallback,
       warnings: core.warnings,
@@ -336,12 +360,18 @@ class MotionPipeline {
   ///
   /// 与 [processFile] 相同：解码与分层段同步执行，UI isolate 调用会卡帧，
   /// 需要后台化时用 isolate 包装（见 README）。
+  ///
+  /// [includeFirstFrame] 为 true 时结果附带首帧 PNG（复用探针帧；语义同
+  /// [processFile]）。
   Future<MemoryPipelineResult> processBytes(
-      {required Uint8List input, int? maxPixels}) async {
+      {required Uint8List input,
+      int? maxPixels,
+      bool includeFirstFrame = false}) async {
     final sw = Stopwatch()..start();
     final src =
         ImageIO.decode(input, maxPixels: maxPixels ?? ImageIO.defaultMaxPixels);
-    final core = await _runCore(src);
+    final core =
+        await _runCore(src, includeFirstFrame: includeFirstFrame);
     sw.stop();
     return MemoryPipelineResult(
       gifBytes: core.gifBytes,
@@ -355,17 +385,66 @@ class MotionPipeline {
       configJson: config.toJsonString(),
       configHash: config.configHash,
       contentHash: ImageIO.contentHash8(input),
+      firstFramePng: core.firstFramePng,
       parallel: core.parallel,
       parallelFallback: core.parallelFallback,
       warnings: core.warnings,
     );
   }
 
+  /// 渲染 [input] 在 `t` 时刻的静帧（T2）：解码 → 降采样 → 分层一次完成，
+  /// 只渲染一帧，**跳过 GIF 编码与调色板探针**，成本 ≈ 单帧渲染 + 一次 PNG
+  /// 编码。与全量渲染共享同一前置段（[_downscaleAndSplit]），t=0 的静帧与
+  /// GIF 首帧逐像素同源（GIF 里的副本经调色板量化）。
+  ///
+  /// [t] 单位为秒，负值按 0 处理；动效按周期纯函数取值，t 超出时长同样
+  /// 合法（整循环无缝）。全量渲染的第 i 帧对应 `t = i / fps`。受
+  /// [cancelToken] / [timeout] 管控（入口与渲染前各检查一次，粒度为整次
+  /// 静帧）；不使用 worker 池，`parallel` / `memoryBudgetMb` 与静帧无关。
+  Future<Uint8List> renderStillFrame(
+      {required Uint8List input, double t = 0, int? maxPixels}) async {
+    final src =
+        ImageIO.decode(input, maxPixels: maxPixels ?? ImageIO.defaultMaxPixels);
+    return _renderStill(src, t);
+  }
+
+  /// [renderStillFrame] 的文件入口：路径进、PNG `Uint8List` 出。
+  Future<Uint8List> renderStillFrameFile(String inputPath, {double t = 0}) {
+    return _renderStill(ImageIO.decode(ImageIO.readFileBytes(inputPath)), t);
+  }
+
+  Future<Uint8List> _renderStill(RgbaImage src, double t) async {
+    final deadline = timeout == null ? null : (Stopwatch()..start());
+    _checkStillCancel(deadline, 'entry');
+    final (working, layers) = _downscaleAndSplit(src, config.maxDimension);
+    _checkStillCancel(deadline, 'before render');
+    final frame = FrameCompositor(layers, working, config)
+        .renderFrame(math.max(0.0, t));
+    return Uint8List.fromList(ImageIO.encodePngFrame(frame));
+  }
+
+  /// 静帧入口的取消/超时检查：语义与全量渲染一致（code `E_CANCELLED` /
+  /// `E_TIMEOUT`），检查点为静帧入口与渲染前两处。
+  void _checkStillCancel(Stopwatch? deadline, String stage) {
+    if (deadline != null && timeout != null && deadline.elapsed > timeout!) {
+      throw MotionCancelledException(
+          'render timed out after ${timeout!.inMilliseconds}ms ($stage)',
+          code: 'E_TIMEOUT');
+    }
+    final token = cancelToken;
+    if (token != null && token.isCancelled) {
+      throw MotionCancelledException('cancelled by caller',
+          code: 'E_CANCELLED');
+    }
+  }
+
   /// 共享渲染主干入口：取消/超时时清理半成品后原样重抛。渲染本体见
   /// [_runCoreInner]。
-  Future<_CoreOutput> _runCore(RgbaImage src, {String? jobDir}) async {
+  Future<_CoreOutput> _runCore(RgbaImage src,
+      {String? jobDir, bool includeFirstFrame = false}) async {
     try {
-      return await _runCoreInner(src, jobDir: jobDir);
+      return await _runCoreInner(src,
+          jobDir: jobDir, includeFirstFrame: includeFirstFrame);
     } on MotionCancelledException {
       if (jobDir != null && !keepPartial) _cleanupPartial(jobDir);
       rethrow;
@@ -373,11 +452,13 @@ class MotionPipeline {
   }
 
   /// 渲染主干本体。[jobDir] 为 null 时进入内存模式：不建目录、不写任何文件，
-  /// GIF 字节与 params JSON 原样返回。
+  /// GIF 字节与 params JSON 原样返回。[includeFirstFrame] 为 true 时随结果
+  /// 返回首帧 PNG（复用调色板探针帧，见 [_CoreOutput.firstFramePng]）。
   ///
   /// 取消/超时检查点（帧调度层）：主干入口、每块探针渲染前、worker 池启动
   /// 前、每帧回包（emit）处。单帧渲染内部不可打断。
-  Future<_CoreOutput> _runCoreInner(RgbaImage src, {String? jobDir}) async {
+  Future<_CoreOutput> _runCoreInner(RgbaImage src,
+      {String? jobDir, bool includeFirstFrame = false}) async {
     final token = cancelToken;
     final deadline = timeout == null ? null : (Stopwatch()..start());
     var cancelled = false;
@@ -456,20 +537,7 @@ class MotionPipeline {
     }
 
     // Working resolution guard: downscale very large inputs for speed.
-    // 目标尺寸两档算法一致，只有滤波器不同：legacy 沿 v1.2 双线性，
-    // standard+ 走面积平均（细线稿不再产生锯齿与摩尔纹）。
-    final working = config.quality.tier.atLeastStandard
-        ? boxDownscale(src, effectiveMaxDim)
-        : _downscaleTo(src, effectiveMaxDim);
-
-    // Depth + layers. legacy 档保持 v1.2 的最近邻掩码（不羽化、不外扩）。
-    final depth = DepthEstimator(workScale: 0.5).estimate(working);
-    final splitter = LayerSplitter(
-      layerCount: config.layerCount,
-      tier: config.quality.tier,
-      edgeStretchPx: config.quality.edgeStretchPx,
-    );
-    final layers = splitter.split(working, depth);
+    final (working, layers) = _downscaleAndSplit(src, effectiveMaxDim);
 
     // Frames: stream-render -> quantize -> LZW -> discard (O(one frame) RAM).
     final compositor = FrameCompositor(layers, working, config);
@@ -498,6 +566,7 @@ class MotionPipeline {
     // legacy = v1.2 的「首帧建板」；standard+ = 首/中/末三帧，避免只在中间帧
     // 出现的动效亮色挤不进 256 色。renderFrame 是 t 的纯函数，乱序预渲染安全。
     final presolved = <int, FrameOutput>{};
+    RgbaImage? firstFrameRgba;
     if (gif != null) {
       final probes = <int, RgbaImage>{};
       checkCancel(); // 探针帧渲染前检查
@@ -507,12 +576,24 @@ class MotionPipeline {
             probes.putIfAbsent(k, () => compositor.renderFrame(k / config.fps));
         if (wantFrames) ImageIO.writePngFrame(frameDir, k, frame);
       }
+      // 首帧封面：直接复用探针帧 0 的同一份栅格，零额外渲染成本（T2）。
+      if (includeFirstFrame) firstFrameRgba = probes[0];
       gif.primePalette(probes.values.toList());
       final enc = gif.newFrameEncoder();
       probes.forEach((k, frame) =>
           presolved[k] = FrameOutput(k, enc.encodeFrameBody(frame)));
       probes.clear();
+    } else if (includeFirstFrame) {
+      // frames-only 路径没有探针段：主 isolate 预渲染第 0 帧充当封面帧并
+      // 记入 presolved（派工跳过该帧），与 GIF 路径一样只渲染一次。
+      checkCancel(); // 探针帧渲染前检查
+      firstFrameRgba = compositor.renderFrame(0);
+      if (wantFrames) ImageIO.writePngFrame(frameDir, 0, firstFrameRgba);
+      presolved[0] = FrameOutput(0, null);
     }
+    final firstFramePng = includeFirstFrame
+        ? Uint8List.fromList(ImageIO.encodePngFrame(firstFrameRgba!))
+        : null;
 
     final spec = FrameJobSpec.fromLayers(
       base: working,
@@ -604,6 +685,7 @@ class MotionPipeline {
       gifPath: gifPath,
       frameDir: frameDir,
       paramsFile: paramsFile,
+      firstFramePng: firstFramePng,
       layerCount: layers.length,
       frameCount: n,
       parallel: parallel,
@@ -637,6 +719,24 @@ class MotionPipeline {
     try {
       io.Directory(jobDir).deleteSync(); // 非空则失败，忽略
     } catch (_) {}
+  }
+
+  /// 共同前置段（静帧与全量渲染共享）：降采样 + 深度估算 + 分层。两条路径
+  /// 用同一实现，保证 t=0 静帧与 GIF 首帧逐像素同源。目标尺寸两档算法一致，
+  /// 只有滤波器不同：legacy 沿 v1.2 双线性，standard+ 走面积平均（细线稿
+  /// 不再产生锯齿与摩尔纹）；legacy 档保持 v1.2 的最近邻掩码（不羽化、不外扩）。
+  (RgbaImage, List<LayerImage>) _downscaleAndSplit(
+      RgbaImage src, int effectiveMaxDim) {
+    final working = config.quality.tier.atLeastStandard
+        ? boxDownscale(src, effectiveMaxDim)
+        : _downscaleTo(src, effectiveMaxDim);
+    final depth = DepthEstimator(workScale: 0.5).estimate(working);
+    final splitter = LayerSplitter(
+      layerCount: config.layerCount,
+      tier: config.quality.tier,
+      edgeStretchPx: config.quality.edgeStretchPx,
+    );
+    return (working, splitter.split(working, depth));
   }
 
   RgbaImage _downscaleTo(RgbaImage src, int maxDim) {

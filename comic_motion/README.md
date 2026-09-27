@@ -219,6 +219,37 @@ used `<stem>_<configHash8>`): old product directories are not recognized by
 the new layout and must be cleaned up app-side (one-off `delete` of the cache
 root is safe — it only ever contained engine products).
 
+### Still frames & first-frame covers
+
+Apps routinely need a poster frame before (or instead of) the animation.
+Two ways, both at single-frame cost:
+
+```dart
+final config = EffectConfig(fps: 12, durationSec: 2.5, maxDimension: 800);
+
+// 1) Standalone still: render time t once (default 0), PNG bytes out.
+//    Skips GIF encoding and the palette probes entirely.
+final png = await MotionPipeline(config, cancelToken: token, timeout: limit)
+    .renderStillFrame(input: bytes); // bytes in
+final png2 =
+    await MotionPipeline(config).renderStillFrameFile(path); // path in
+// GIF frame i corresponds to t = i / fps; t = 0 is the first frame.
+
+// 2) Piggyback on a full render: attach the first frame for free — it is
+//    the palette-probe frame the pipeline renders anyway.
+final result = await MotionPipeline(config)
+    .processFile(input, outDir, includeFirstFrame: true);
+final cover = result.firstFramePng; // null when not requested
+```
+
+`renderStillFrame` shares the decode → downscale → split path with the full
+pipeline, so a t=0 still is the same rendered frame as the GIF's first frame
+(the GIF copy is palette-quantized). It honours `cancelToken` / `timeout`
+(checked at entry and before render); `parallel` / `memoryBudgetMb` do not
+apply — there is no worker pool. `includeFirstFrame` works on `processFile` /
+`processBytes` / `processImage` and the background entries; the returned
+bytes equal `frames/frame_0000.png` on disk.
+
 ### Recommended mobile parameters
 
 | Parameter | Recommendation | Why |

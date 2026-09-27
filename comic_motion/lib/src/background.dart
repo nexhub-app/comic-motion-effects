@@ -41,6 +41,7 @@ Future<PipelineResult> processFileInBackground(
   void Function(int framesDone, int framesTotal)? onProgress,
   Duration? timeout,
   bool keepPartial = false,
+  bool includeFirstFrame = false,
 }) async {
   final r = await _runInBackground(
     boot: _BackgroundBoot(
@@ -52,6 +53,7 @@ Future<PipelineResult> processFileInBackground(
       memoryBudgetMb: memoryBudgetMb,
       timeout: timeout,
       keepPartial: keepPartial,
+      includeFirstFrame: includeFirstFrame,
     ),
     cancelToken: cancelToken,
     forwardProgress: onProgress,
@@ -70,6 +72,7 @@ Future<MemoryPipelineResult> processBytesInBackground({
   void Function(int framesDone, int framesTotal)? onProgress,
   Duration? timeout,
   bool keepPartial = false,
+  bool includeFirstFrame = false,
 }) async {
   final r = await _runInBackground(
     boot: _BackgroundBoot(
@@ -80,6 +83,7 @@ Future<MemoryPipelineResult> processBytesInBackground({
       memoryBudgetMb: memoryBudgetMb,
       timeout: timeout,
       keepPartial: keepPartial,
+      includeFirstFrame: includeFirstFrame,
     ),
     cancelToken: cancelToken,
     forwardProgress: onProgress,
@@ -99,6 +103,7 @@ class _BackgroundBoot {
     this.memoryBudgetMb,
     this.timeout,
     this.keepPartial = false,
+    this.includeFirstFrame = false,
   });
 
   late final SendPort ack;
@@ -114,6 +119,7 @@ class _BackgroundBoot {
   final int? memoryBudgetMb;
   final Duration? timeout;
   final bool keepPartial;
+  final bool includeFirstFrame;
 }
 
 /// 后台 isolate 入口：本地 token 承接控制通道的取消命令，progress 回传，
@@ -134,8 +140,10 @@ Future<void> _backgroundEntry(_BackgroundBoot boot) async {
   );
   try {
     final result = boot.fileMode
-        ? await pipeline.processFile(boot.inputPath!, boot.outputDir!)
-        : await pipeline.processBytes(input: boot.inputBytes!);
+        ? await pipeline.processFile(boot.inputPath!, boot.outputDir!,
+            includeFirstFrame: boot.includeFirstFrame)
+        : await pipeline.processBytes(
+            input: boot.inputBytes!, includeFirstFrame: boot.includeFirstFrame);
     boot.result.send(result);
   } catch (e, st) {
     try {

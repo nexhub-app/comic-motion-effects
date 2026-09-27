@@ -608,6 +608,100 @@ void main() {
           reason: '逐字节复现契约不受命名变更影响');
     });
 
+    test('静帧：t=0 与 GIF 首帧同源、确定性复现、t 参数生效', () async {
+      final png = _pngEncode(_gradientImage(64, 64));
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
+      final p = MotionPipeline(cfg, parallel: 1);
+      final still0 = await p.renderStillFrame(input: Uint8List.fromList(png));
+      final still0b = await p.renderStillFrame(input: Uint8List.fromList(png));
+      expect(still0, equals(still0b), reason: '同输入同 t 逐字节一致');
+
+      // 静帧尺寸 = 工作栅格尺寸
+      final stillImg = pkg.decodePng(still0)!;
+      expect(stillImg.width, 64);
+      expect(stillImg.height, 64);
+
+      // GIF 首帧平均色与静帧一致（GIF 副本经调色板量化，允许小偏差）
+      final mem = await p.processBytes(input: Uint8List.fromList(png));
+      final f0 = pkg.GifDecoder(mem.gifBytes!).decodeFrame(0)!;
+      int avgR(pkg.Image im) {
+        var s = 0, n = 0;
+        for (var y = 0; y < im.height; y += 4) {
+          for (var x = 0; x < im.width; x += 4) {
+            final c = im.getPixel(x, y);
+            s += c.r.toInt();
+            n++;
+          }
+        }
+        return s ~/ n;
+      }
+
+      expect((avgR(f0) - avgR(stillImg)).abs(), lessThanOrEqualTo(3),
+          reason: 'GIF 首帧与静帧同源（量化仅引入小偏差）');
+
+      // t 参数生效：末帧时刻的静帧与 t=0 不同
+      final stillLast = await p.renderStillFrame(
+          input: Uint8List.fromList(png), t: (cfg.frameCount - 1) / cfg.fps);
+      expect(stillLast, isNot(still0));
+      // 文件入口与字节入口同源
+      final inPath = '${tmp.path}/still.png';
+      File(inPath).writeAsBytesSync(png);
+      expect(await p.renderStillFrameFile(inPath), equals(still0));
+    });
+
+    test('includeFirstFrame：复用探针帧，两模式与后台入口一致', () async {
+      final png = _pngEncode(_gradientImage(64, 96));
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
+      final inPath = '${tmp.path}/cover_in.png';
+      File(inPath).writeAsBytesSync(png);
+
+      final disk = await MotionPipeline(cfg, parallel: 1)
+          .processFile(inPath, '${tmp.path}/cover_out',
+              includeFirstFrame: true);
+      expect(disk.firstFramePng, isNotNull);
+      // 与落盘的 frame_0000.png 完全一致（同一帧同一 PNG 编码器）
+      expect(disk.firstFramePng,
+          equals(File('${disk.frameDir}/frame_0000.png').readAsBytesSync()));
+
+      // 内存模式与落盘模式一致
+      final mem = await MotionPipeline(cfg, parallel: 1)
+          .processBytes(input: Uint8List.fromList(png), includeFirstFrame: true);
+      expect(mem.firstFramePng, equals(disk.firstFramePng));
+
+      // 与 renderStillFrame(t=0) 同帧同字节
+      final still = await MotionPipeline(cfg, parallel: 1)
+          .renderStillFrame(input: Uint8List.fromList(png));
+      expect(disk.firstFramePng, equals(still));
+
+      // 后台入口透传（跨 isolate 后字节一致）
+      final bg = await processFileInBackground(inPath, '${tmp.path}/cover_bg',
+          config: cfg, parallel: 1, includeFirstFrame: true);
+      expect(bg.firstFramePng, equals(disk.firstFramePng));
+
+      // 未请求时为零成本（字段为 null）
+      final plain =
+          await MotionPipeline(cfg, parallel: 1).processBytes(input: Uint8List.fromList(png));
+      expect(plain.firstFramePng, isNull);
+    });
+
+    test('静帧受 cancelToken / timeout 管控（E_CANCELLED / E_TIMEOUT）', () async {
+      final png = _pngEncode(_gradientImage(32, 32));
+      final cancelled = MotionPipeline(
+          EffectConfig(fps: 2, durationSec: 1, maxDimension: 32),
+          parallel: 1,
+          cancelToken: MotionCancelToken()..cancel());
+      await expectLater(
+          cancelled.renderStillFrame(input: Uint8List.fromList(png)),
+          throwsA(isA<MotionCancelledException>()));
+      final timedOut = MotionPipeline(
+          EffectConfig(fps: 2, durationSec: 1, maxDimension: 32),
+          parallel: 1,
+          timeout: const Duration(milliseconds: 0));
+      await expectLater(
+          timedOut.renderStillFrame(input: Uint8List.fromList(png)),
+          throwsA(isA<MotionCancelledException>()));
+    });
+
     test('processBytes 并行路径与串行路径字节一致', () async {
       final png = _pngEncode(_gradientImage(96, 64));
       final cfg = EffectConfig(

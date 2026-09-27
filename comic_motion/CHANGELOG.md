@@ -28,6 +28,7 @@
 ### 第三轮功能任务（T1–T5）
 
 - **输入内容指纹防串缓存（T1）**：产物目录命名纳入输入内容指纹，改为 `<stem>_<contentHash8>_<configHash8>`（strip 片级 `<stem>_slice<NNN>_<contentHash8>_<configHash8>`）。`contentHash8` = 输入字节 FNV-1a 64 指纹前 8 位（`ImageIO.contentHash8`，与 configHash 同风格）；`processImage` 无文件字节，取传入栅格 RGBA 字节计算。`PipelineResult` / `MemoryPipelineResult` 新增 `contentHash` 字段（`PipelineResult.toJson` 同步携带）。内容指纹与配置正交：不进 `EffectConfig` 序列化、不参与 configHash。`processFile` 改为单次读盘（`ImageIO.readFileBytes`，守卫与 `decodeFile` 一致），同一份字节既做指纹又做解码输入。同名文件重新下载 / 覆盖后产物落新目录，嵌入方「目录存在 → 跳过渲染」逻辑不再命中旧画面。
+- **首帧 / 静帧输出 API（T2）**：`MotionPipeline.renderStillFrame({required Uint8List input, double t = 0, int? maxPixels})` 与 `renderStillFrameFile(path, {t})`——单次渲染 t 时刻静帧、PNG `Uint8List` 出；与全量渲染共享解码→降采样→分层主干（抽出共享 `_downscaleAndSplit`），跳过 GIF 编码与调色板探针，成本 ≈ 单帧渲染；t=0 与 GIF 首帧逐像素同源。受 cancelToken/timeout 管控（入口与渲染前各检查一次）。`processFile` / `processBytes` / `processImage` 新增可选 `includeFirstFrame`（默认 false）→ 结果附 `firstFramePng`：直接复用探针帧 0 栅格、零额外渲染成本，字节与落盘 `frames/frame_0000.png` 一致；后台入口同步透传；`PipelineResult` / `MemoryPipelineResult` 新增可空 `firstFramePng` 字段（不进 toJson）。frames-only 路径无探针段时主 isolate 预渲染第 0 帧并跳过派工，同样只渲染一次。
 - **Web 支持状态（文档）**：平台支持矩阵明确 Web **不支持**——`image_io` / `pipeline` / `worker_pool` 依赖 `dart:io`，`Isolate.spawn` 在 Flutter Web 不可用；远期方向（web 解码 API + web worker）一句话带过，不做实现承诺。
 - **rich 档收尾**：README（中英）明确 `rich` 当前与 `standard` 逐字节等价，`RenderTier.rich` 加 `@Deprecated` 提示（新代码请用 standard）。纯标注：行为、序列化、configHash 零改动，JSON 的 `"tier": "rich"` 仍正常解析，按兼容政策保留。
 

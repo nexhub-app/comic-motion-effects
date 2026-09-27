@@ -153,6 +153,33 @@ for (final s in strip.slices) {
 新布局识别，需 App 侧自行清理（对缓存根目录做一次性删除是安全的——里面
 只会有引擎产物）。
 
+### 静帧与首帧封面
+
+App 常常在动画加载完成前（或干脆代替动画）需要一张封面帧。两种方式，成本都只是一帧：
+
+```dart
+final config = EffectConfig(fps: 12, durationSec: 2.5, maxDimension: 800);
+
+// 1) 独立静帧：单次渲染 t 时刻（默认 0），PNG bytes 出。
+//    完全跳过 GIF 编码与调色板探针。
+final png = await MotionPipeline(config, cancelToken: token, timeout: limit)
+    .renderStillFrame(input: bytes);            // bytes 进
+final png2 = await MotionPipeline(config).renderStillFrameFile(path); // 路径进
+// 全量渲染的第 i 帧对应 t = i / fps；t = 0 即首帧。
+
+// 2) 搭全量渲染的车：免费附带首帧——它本来就是管线要渲的调色板探针帧。
+final result = await MotionPipeline(config)
+    .processFile(input, outDir, includeFirstFrame: true);
+final cover = result.firstFramePng;             // 未请求时为 null
+```
+
+`renderStillFrame` 与全量渲染共享解码 → 降采样 → 分层主干，t=0 静帧与 GIF
+首帧是同一渲染帧（GIF 里的副本经调色板量化）。受 `cancelToken` / `timeout`
+管控（入口与渲染前各检查一次）；`parallel` / `memoryBudgetMb` 与静帧无关
+（无 worker 池）。`includeFirstFrame` 在 `processFile` / `processBytes` /
+`processImage` 与后台入口均可用；返回字节与落盘的
+`frames/frame_0000.png` 完全一致。
+
 ### 移动端推荐参数
 
 | 参数 | 推荐 | 原因 |
