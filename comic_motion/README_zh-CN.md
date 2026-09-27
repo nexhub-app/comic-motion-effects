@@ -161,6 +161,30 @@ for (final w in result.warnings) {
 
 预算模型是保守启发式（按实际像素 × 层数 + 安全系数估算）：宁可提前降级也不 OOM。工作分辨率被预算收缩时产物像素随之改变——与无预算运行不逐字节一致，但同预算 + 同输入仍确定性复现；`memoryBudgetMb` 不传时路径零改动，legacy 档逐字节契约不受影响。
 
+### GIF 播放消费指引（Flutter）
+
+引擎保持 UI-free：只交付 GIF 文件 / 字节，怎么*播放*由 App 决定。本节是给嵌入方的实践参考，不是 API，也不给库引入任何 UI 依赖。
+
+**播放组件选型**（三者最终都走同一个 `dart:ui` 解码器——按控制能力选，不是按画质选）：
+
+| 选项 | 擅长 | 注意 |
+|---|---|---|
+| 内建 `Image`（`Image.file` / `Image.memory` / `Image.network`） | 零额外依赖；动态 GIF 开箱即播、自动循环 | 无播放控制——不能暂停 / 恢复 / 跳帧；「暂停」= 把组件换成静帧 |
+| `extended_image`（第三方） | `GifImage` 支持 `autoPlay`、暂停 / 恢复、逐帧控制 | 多一个依赖；底层同一个解码器，解码内存不变 |
+| `dart:ui` 的 `instantiateImageCodec`（自管） | 帧时序与缓存完全可控 | 解码循环、帧缓存、dispose 生命周期都要自己管 |
+
+**解码内存。** 播放中的 GIF 保有存活解码器与至少一帧解码后的 RGBA 位图（`宽 × 高 × 4` 字节）；同屏多个播放中的 GIF 按个数线性叠加。杠杆按收益排序：
+
+- 渲染端就省：`frameCount = fps × durationSec` 与 `maxDimension` 决定产物大小——480p/12fps/2s 的 GIF 无论显示还是存储都比 1280p/24fps/4s 便宜得多。
+- 按显示尺寸解码：传 `cacheWidth` / `cacheHeight`，400px 卡片里的 GIF 按 400px 解码，不按原始尺寸。
+- 控制同屏播放个数（1–3）：逐帧解码是周期性 CPU 消耗，移动端折算成电量与发热。
+
+**列表页（信息流 / 章节网格）。** 引擎的 GIF 整循环无缝（首帧 == 尾帧），天然适合拿一帧当封面：
+
+- 用 `outputFormat: OutputFormat.both` 渲染，取 `result.frameDir/frame_0000.png` 作封面 / 占位，在加载完成前（或代替播放）展示；内存模式（`processBytes`）没有帧 PNG——要么客户端解 GIF 首帧，要么封面场景走落盘模式。
+- 转场落地前对首屏 GIF 用 `precacheImage` 预热；保持列表虚拟化让离屏项释放解码器，或在滚出视口时把播放中的 GIF 换回封面帧（`extended_image` 可以直接暂停）。
+- 尊重系统「减弱动态」（Flutter 侧 `MediaQuery.disableAnimations`）：展示封面帧；渲染端对应的 `reducedMotion` 选项可产出单帧产物。
+
 ### 从源码跑通引擎（本仓库开发者）
 
 ```bash

@@ -226,6 +226,48 @@ is not byte-identical to an unbudgeted run, but the same budget + same input
 still reproduces deterministically. Without `memoryBudgetMb` the pixel path
 is untouched and the legacy byte-identity contract holds.
 
+### GIF playback in Flutter (consumption guide)
+
+The engine is UI-free: it hands over GIF files/bytes and stops there. How to
+*play* them is the app's decision — this section is practical guidance for
+embedders, not an API, and the library itself picks up no UI dependency.
+
+**Player widget options** (all of them decode through the same `dart:ui`
+codec — choose by control surface, not picture quality):
+
+| Option | Good at | Watch out |
+|---|---|---|
+| Built-in `Image` (`Image.file` / `Image.memory` / `Image.network`) | Zero extra dependency; animated GIFs play and loop out of the box | No playback control — no pause/resume/seek; "pausing" means swapping the widget for a static frame |
+| `extended_image` (third-party) | `GifImage` gives `autoPlay`, pause/resume, frame stepping | Extra dependency; same codec underneath, so decode memory is unchanged |
+| `instantiateImageCodec` from `dart:ui` (DIY) | Frame timing and caching fully under your control | You own the decode loop, the frame cache and the dispose lifecycle |
+
+**Decode memory.** A playing GIF keeps its decoder alive with at least one
+decoded RGBA frame resident (`width × height × 4` bytes); every simultaneously
+playing GIF adds another on top. Levers, by leverage:
+
+- Save at render time: `frameCount = fps × durationSec` and `maxDimension`
+  decide how big the product is — a 480p/12fps/2s GIF is far cheaper to
+  display (and to store) than a 1280p/24fps/4s one.
+- Decode at display size: pass `cacheWidth` / `cacheHeight` so a GIF shown in
+  a 400-px card decodes at 400 px instead of its native size.
+- Cap the number of playing GIFs per screen (1–3): per-frame decoding is
+  recurring CPU, which on mobile is battery and thermals.
+
+**List pages (feeds / chapter grids).** The engine's GIFs loop seamlessly
+(first frame == last frame), which makes one frame a natural poster:
+
+- Render with `outputFormat: OutputFormat.both` and use
+  `result.frameDir/frame_0000.png` as the cover/placeholder until (or instead
+  of) playback; in memory mode (`processBytes`) there is no frame PNG — decode
+  the GIF's first frame client-side or keep disk mode for cover flows.
+- Prewarm above-the-fold GIFs with `precacheImage` before the transition
+  lands; keep list virtualization on so off-screen items dispose their
+  decoders, or swap playing GIFs back to their cover frame when scrolled away
+  (`extended_image` can pause instead).
+- Respect the OS reduced-motion setting (`MediaQuery.disableAnimations`):
+  show the cover frame; the engine's `reducedMotion` render option produces
+  the matching single-frame product at render time.
+
 ### Running the engine from source (repo developers)
 
 ```bash

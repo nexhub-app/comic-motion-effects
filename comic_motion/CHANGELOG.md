@@ -21,6 +21,10 @@
 - **成本预评估**：`estimateCost(config, {sourceWidth, sourceHeight})` → `CostEstimate`（内存/耗时**区间** + 工作分辨率 + 帧数，基于桌面 bench 拟合、标注经验估算；低端机可行性按上界判断）。
 - **移动端参考区间（文档）**：README 性能章节新增草稿/典型/低端三档粗略区间，明确桌面数据不适用于真机、区间未经真机校准。
 
+### 第三轮：正确性防护与输出消费（T6–T8 文档收尾）
+
+- **GIF 播放消费指引（文档）**：README（中英）新增 Flutter 侧播放章节——内建 `Image` / `extended_image` / `instantiateImageCodec` 选型取舍、解码内存杠杆（渲染期帧数与尺寸、`cacheWidth`/`cacheHeight` 按显示尺寸解码、同屏播放个数）、列表页封面占位（`OutputFormat.both` 的 `frame_0000.png`）与预热 / 暂停 / 减弱动态策略。库保持 UI-free，本节仅为嵌入方参考，不引入任何 UI 依赖。
+
 ### ⚠ BREAKING CHANGE
 
 - `EffectConfig.fromFile` 移到 IO 边界：改用顶层函数 `effectConfigFromFile(path)`（barrel 导出，错误包装与错误码不变）。`effect_config.dart` 因此为纯 Dart（无 dart:io），Web 可行性评估有据。
