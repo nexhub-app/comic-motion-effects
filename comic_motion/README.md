@@ -109,6 +109,14 @@ params.json                 # 完整参数回放文件
 
 档位只改像素路径，不改动效列表；`legacy` 档与 `presets/classic.json` 是两个独立维度的收回开关。`sierra` 抖动核需要 `dither: true` + `quality.ditherMode: "sierra"` + 非 legacy 档三者同时成立。
 
+## 复现承诺与边界
+
+同 seed + 同参数输出**逐字节一致**；`legacy` 档与 v1.2 输出逐字节一致（回滚承诺）。该承诺有明确边界：
+
+- **依赖版本**：GIF/PNG 编码由 `image` 包承担，字节级复现以 `pubspec.lock` 锁定的 `image` 版本区间为准。下游 `pub upgrade` 若跨入不同编码器实现（调色板/压缩参数变化），输出字节可能改变——对复现敏感的应用请把 `pubspec.lock` 一并纳入版本管理。
+- **configHash 版本化**：configHash 是参数指纹（当前 v1 算法），与 `version` 字段一同写入 `params.json`。未来若 hash 算法或字段序列化变更，将带版本前缀迁移——读取旧 `version` 的回放文件按旧算法口径处理，不静默失效。
+- **执行期参数不在承诺内**：`parallel`、`memoryBudgetMb` 不进 configHash、不影响像素决策（`parallel`），但 `memoryBudgetMb` 收缩工作分辨率时会改变输出像素（见「内存预算 API」）——此时「同参数」以实际生效的工作分辨率为准。
+
 ## 动效目录（32 种）
 
 `EffectConfig.effects` 可任意组合，全部整循环无缝（首尾帧一致）：
