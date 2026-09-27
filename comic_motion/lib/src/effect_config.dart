@@ -1219,7 +1219,31 @@ class EffectConfig {
         leaves = leaves ?? LeavesParams(),
         meteors = meteors ?? MeteorsParams(),
         moodScript = moodScript ?? MoodScriptParams(),
-        quality = quality ?? QualityParams();
+        quality = quality ?? QualityParams() {
+    // Structural fail-fast (v1.3.1): these parameters define the shape of the
+    // output; out-of-domain values used to fall through to per-path degenerate
+    // behavior (fps=0 divides t by zero in frame rendering, maxFrames<2 breaks
+    // the frameCount clamp, maxDimension<1 breaks the downscale clamp). Only
+    // *illegal* values are rejected - legal domains render byte-identically,
+    // so configHash stability is unaffected.
+    if (fps < 1) {
+      throw ConfigException('fps must be a positive integer, got $fps');
+    }
+    if (durationSec <= 0) {
+      throw ConfigException('durationSec must be > 0, got $durationSec');
+    }
+    if (layerCount < 1 || layerCount > 8) {
+      throw ConfigException('layerCount must be in [1, 8], got $layerCount');
+    }
+    if (maxDimension < 1) {
+      throw ConfigException('maxDimension must be >= 1, got $maxDimension');
+    }
+    if (maxFrames < 2) {
+      throw ConfigException(
+          'maxFrames must be >= 2 (frameCount clamps to [2, maxFrames]), '
+          'got $maxFrames');
+    }
+  }
 
   List<EffectKind> effects;
   ParallaxParams parallax;
@@ -1277,8 +1301,8 @@ class EffectConfig {
   String get version => 'v1';
 
   /// 配置层面的可见告警（写进台账，不参与 configHash）。
-  /// 目前只有 moodScript 的未知 mood 回落会报：效果参数越界在取样处静默 clamp，
-  /// 而 fps/layerCount 这类结构性整型不夹紧（越界按各自通路的退化行为出图）。
+  /// 目前只有 moodScript 的未知 mood 回落会报：效果参数越界在取样处静默 clamp；
+  /// 结构性参数（fps/durationSec/layerCount 等）已在构造时 fail-fast 校验。
   List<String> get warnings {
     if (!effects.contains(EffectKind.moodScript)) return const [];
     final m = moodScript.mood.trim().toLowerCase();

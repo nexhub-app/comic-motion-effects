@@ -42,6 +42,40 @@ void main() {
       final cfg = EffectConfig(fps: 60, durationSec: 10, maxFrames: 48);
       expect(cfg.frameCount, 48);
     });
+
+    test('结构性参数非法即抛 ConfigException（fail-fast，不静默退化）', () {
+      expect(() => EffectConfig(fps: 0), throwsConfigException);
+      expect(() => EffectConfig(fps: -1), throwsConfigException);
+      expect(() => EffectConfig(durationSec: 0), throwsConfigException);
+      expect(() => EffectConfig(durationSec: -1.5), throwsConfigException);
+      expect(() => EffectConfig(layerCount: 0), throwsConfigException);
+      expect(() => EffectConfig(layerCount: 9), throwsConfigException);
+      expect(() => EffectConfig(maxDimension: 0), throwsConfigException);
+      expect(() => EffectConfig(maxFrames: 1), throwsConfigException);
+      // fromJson 走同一构造路径，同样拦截
+      expect(() => EffectConfig.fromJson({'fps': 0}), throwsConfigException);
+      expect(() => EffectConfig.fromJson({'layerCount': 99}),
+          throwsConfigException);
+      // 带 code 的 ConfigException，供程序化分支
+      try {
+        EffectConfig(fps: 0);
+      } on ConfigException catch (e) {
+        expect(e.code, 'E_BAD_CONFIG');
+        expect(e.message, contains('fps'));
+      }
+    });
+
+    test('结构性参数合法边界值不抛、行为不变', () {
+      expect(EffectConfig(fps: 1, durationSec: 4).frameCount, 4);
+      expect(EffectConfig(layerCount: 1).layerCount, 1);
+      expect(EffectConfig(layerCount: 8).layerCount, 8);
+      expect(EffectConfig(maxDimension: 1).maxDimension, 1);
+      expect(EffectConfig(maxFrames: 2, fps: 1, durationSec: 10).frameCount, 2);
+      expect(EffectConfig(durationSec: 0.1).frameCount, 2);
+      // 合法域内序列化回放 hash 不变（校验不触碰 hash 输入）
+      final a = EffectConfig(fps: 1, layerCount: 8, durationSec: 0.5);
+      expect(EffectConfig.fromJson(a.toJson()).configHash, a.configHash);
+    });
   });
 
   group('图像解码异常处理', () {
