@@ -73,7 +73,7 @@ Future<void> main(List<String> args) async {
 EffectConfig _cfg(ArgResults res) {
   final cfgPath = res['config'] as String?;
   var cfg = cfgPath != null
-      ? EffectConfig.fromFile(cfgPath)
+      ? effectConfigFromFile(cfgPath)
       : EffectConfig(
           fps: int.parse(res['fps'] as String),
           durationSec: double.parse(res['duration'] as String),

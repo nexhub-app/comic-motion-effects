@@ -30,12 +30,19 @@ void main() {
       final f = File('.openclaw/tmp/bad_config.json')
         ..createSync(recursive: true)
         ..writeAsStringSync('{ not json');
-      expect(() => EffectConfig.fromFile(f.path), throwsConfigException);
+      expect(() => effectConfigFromFile(f.path), throwsConfigException);
     });
 
     test('不存在的配置文件抛 ConfigException', () {
-      expect(() => EffectConfig.fromFile('Z:/nope/none.json'),
+      expect(() => effectConfigFromFile('Z:/nope/none.json'),
           throwsConfigException);
+    });
+
+    test('effect_config.dart 保持纯 Dart（不 import dart:io，为 Web 铺路）', () {
+      final src = File('lib/src/effect_config.dart').readAsStringSync();
+      expect(src.contains("import 'dart:io'"), isFalse,
+          reason: 'effect_config 是序列化 + configHash 的纯数据层，'
+              '文件读取走 config_io.dart 的 IO 边界');
     });
 
     test('frameCount 受 maxFrames 钳制', () {
@@ -1021,7 +1028,7 @@ void main() {
         ..writeAsStringSync('{"fps": "fast"}');
       addTearDown(() => badFile.deleteSync());
       expect(
-          () => EffectConfig.fromFile(badFile.path),
+          () => effectConfigFromFile(badFile.path),
           throwsA(isA<ConfigException>()
               .having((e) => e.code, 'code', 'E_BAD_CONFIG')));
       // worker 崩溃码

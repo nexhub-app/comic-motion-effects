@@ -1,9 +1,12 @@
 /// Effect parameter configuration. Fully JSON-serializable, versioned and
 /// hashed so the same parameters always reproduce the same output.
+///
+/// 纯 Dart：本文件不 import dart:io（配置文件的读取走 `config_io.dart` 的
+/// [effectConfigFromFile]，属于 IO 边界）。序列化 + configHash 因此可以在
+/// 任意平台（含未来 Web）单测与复用。
 library;
 
 import 'dart:convert';
-import 'dart:io';
 
 import 'render/envelope.dart';
 import 'render/quality.dart';
@@ -1550,21 +1553,6 @@ class EffectConfig {
       maxFrames: (j['maxFrames'] as num?)?.toInt() ?? 96,
       reducedMotion: j['reducedMotion'] == true,
     );
-  }
-
-  /// Load from a JSON file (throws [ConfigException] on bad files).
-  static EffectConfig fromFile(String path) {
-    try {
-      final raw = File(path).readAsStringSync();
-      return fromJson(jsonDecode(raw) as Map<String, dynamic>);
-    } on FileSystemException catch (e) {
-      throw ConfigException('Unable to read config file: ${e.message}');
-    } on FormatException catch (e) {
-      throw ConfigException('Config file is not valid JSON: ${e.message}');
-    } on TypeError {
-      throw ConfigException(
-          'Invalid config field type; see docs/api.md for the parameter table');
-    }
   }
 }
 

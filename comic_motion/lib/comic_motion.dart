@@ -5,6 +5,7 @@
 library;
 
 export 'src/batch_runner.dart';
+export 'src/config_io.dart';
 export 'src/depth_splitter.dart';
 export 'src/effect_config.dart';
 export 'src/frame_compositor.dart';
