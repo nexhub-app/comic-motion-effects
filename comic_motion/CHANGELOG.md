@@ -2,6 +2,26 @@
 
 本项目版本记录。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)，`pubspec.yaml`、`lib/src/version.dart` 与 `dart run bin/comic_motion.dart --version` 使用同一常量。
 
+## Unreleased（1.3.1 候选）
+
+发布导向改造：包拆分、跨平台路径、解码安全、错误码体系、fail-fast 校验、内存预算、台账可关闭。逐字节复现契约全程未破坏（legacy 档像素路径与编码字节零改动，全程 137+6 例测试护栏）。
+
+### ⚠ BREAKING CHANGE
+
+- `EffectConfig.fromFile` 移到 IO 边界：改用顶层函数 `effectConfigFromFile(path)`（barrel 导出，错误包装与错误码不变）。`effect_config.dart` 因此为纯 Dart（无 dart:io），Web 可行性评估有据。
+- `EngineWorkerException.code` 由静态常量改为实例字段（取值仍为 `E_WORKER_CRASH`）。
+
+### 新增 / 改进
+
+- **包拆分**：CLI/HTTP/台账查询拆至 `comic_motion_server`（见其 CHANGELOG）；本包运行时仅依赖 `image`，导出面保持兼容（另增补 `json_compat`、`config_io` 导出）。
+- **跨平台路径**：产物路径全部以 `/` 拼接（POSIX 上 `\` 是合法文件名字符，旧实现会产出名字带反斜杠的平铺文件）；Windows 产物布局与目录命名 `<图名>_<hash8>` 不变；新增 POSIX 路径回归测试。
+- **解码像素预算**：`ImageIO.decode/decodeFile` 新增 `maxPixels`（默认 40M 像素）；PNG/JPEG/WebP **头解析即拒**（截断/损坏头部同样拒绝），在分配整幅栅格前防住移动端 OOM；`ImageTooLargeException` 增加 `pixelCount/maxPixels` 字段。
+- **异常错误码体系**：`E_DECODE_EMPTY` / `E_DECODE_CORRUPT` / `E_DECODE_NOT_FOUND` / `E_TOO_LARGE` / `E_BAD_CONFIG` / `E_UNKNOWN_EFFECT` / `E_WORKER_CRASH`，与 HTTP API 错误码对齐；异常消息英文化，`toString` 携带错误码。
+- **结构参数 fail-fast**：`fps ≥ 1`、`durationSec > 0`、`layerCount ∈ [1,8]`、`maxDimension ≥ 1`、`maxFrames ≥ 2`；非法值抛带码 `ConfigException`（此前按各自通路静默退化出图，fps=0 有除零/NaN 风险）。合法域内默认值、行为与 configHash 完全不变。
+- **内存预算 API**：`MotionPipeline(memoryBudgetMb:)`——保守启发式估算层栅格内存，预算不足先降并行、再收缩工作分辨率（下限 320px），每次降级写 `PipelineResult.warnings` 并置 `parallelFallback`。执行期参数：不进 configHash；不传时像素路径零改动。
+- **台账可关闭与轮转**：`BatchRunner(null)` 嵌入场景不落台账；`Ledger(maxBytes:)`（默认 16MB）超限轮转 `ledger.jsonl.1`（单代），查询覆盖当前档。
+- **工程**：三平台 CI（ubuntu/windows/macos matrix，两包分别 analyze+test）；`example/` 三个可运行示例；`docs/`（动效目录、WebP 调研）与英文 README（README_zh-CN.md 保留中文）纳入仓库；兼容与废弃（@Deprecated 周期）政策成文。
+
 ## 1.3.0 — 2026-09-19
 
 新增 11 个动效与一条情绪编排层，像素质量整体上一档；性能靠并行与批量化买回来，经典路径逐字节承诺不变。
