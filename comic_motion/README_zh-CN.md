@@ -292,7 +292,7 @@ sample_images/             # 10 张占位样图
 tool/                      # 样图生成 / 冒烟 / 图鉴生成 / 性能基准 / GIF 校验等脚本
 test/engine_test.dart      # 引擎与配置测试
 test/render_test.dart      # 渲染与效果测试
-docs/                      # 动效目录（API/部署文档在 comic_motion_server/docs）
+doc/                       # 动效目录（API/部署文档在 comic_motion_server/docs）
 ```
 
 ## 错误处理

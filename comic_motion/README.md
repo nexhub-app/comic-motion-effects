@@ -381,7 +381,7 @@ sample_images/             # 10 placeholder samples
 tool/                      # sample/smoke/showcase/bench/gif-check scripts
 test/engine_test.dart      # engine + config tests
 test/render_test.dart      # render + effect tests
-docs/                      # effect catalog, WebP research
+doc/                       # effect catalog, WebP research
 example/                   # three runnable embedding examples
 ```
 
