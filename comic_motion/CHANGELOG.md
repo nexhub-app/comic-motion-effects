@@ -25,6 +25,7 @@
 
 - **GIF 播放消费指引（文档）**：README（中英）新增 Flutter 侧播放章节——内建 `Image` / `extended_image` / `instantiateImageCodec` 选型取舍、解码内存杠杆（渲染期帧数与尺寸、`cacheWidth`/`cacheHeight` 按显示尺寸解码、同屏播放个数）、列表页封面占位（`OutputFormat.both` 的 `frame_0000.png`）与预热 / 暂停 / 减弱动态策略。库保持 UI-free，本节仅为嵌入方参考，不引入任何 UI 依赖。
 - **Web 支持状态（文档）**：平台支持矩阵明确 Web **不支持**——`image_io` / `pipeline` / `worker_pool` 依赖 `dart:io`，`Isolate.spawn` 在 Flutter Web 不可用；远期方向（web 解码 API + web worker）一句话带过，不做实现承诺。
+- **rich 档收尾**：README（中英）明确 `rich` 当前与 `standard` 逐字节等价，`RenderTier.rich` 加 `@Deprecated` 提示（新代码请用 standard）。纯标注：行为、序列化、configHash 零改动，JSON 的 `"tier": "rich"` 仍正常解析，按兼容政策保留。
 
 ### ⚠ BREAKING CHANGE
 

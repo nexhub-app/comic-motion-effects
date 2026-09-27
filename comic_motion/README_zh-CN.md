@@ -235,7 +235,7 @@ params.json                 # 完整参数回放文件
 |---|---|---|
 | `legacy`（默认） | v1.2 的绘制与编码路径 | 与历史输出**逐字节一致**，回滚承诺的载体 |
 | `standard` | 抗锯齿光栅原语、面积平均 / Catmull-Rom 重采样、screen 光照混合、深度平滑上采样 + 掩码羽化、层边缘外扩、GIF 量化 LUT（抖动核可选 sierra） | 日常出图 |
-| `rich` | 与 `standard` 走同一套通路：预留的 `supersample` 与 `mipLevels` 目前无消费方（已知偏差） | 与 standard 对照用 |
+| `rich` | **当前与 `standard` 渲染结果逐字节一致**——预留的 `supersample` / `mipLevels` 尚无消费方（已知偏差） | 已废弃：请用 `standard`；JSON 的 `"tier": "rich"` 仍按本档解析（废弃 ≠ 移除） |
 
 档位只改像素路径，不改动效列表；`legacy` 档与 `presets/classic.json` 是两个独立维度的收回开关。`sierra` 抖动核需要 `dither: true` + `quality.ditherMode: "sierra"` + 非 legacy 档三者同时成立。
 

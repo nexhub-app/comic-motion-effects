@@ -320,7 +320,7 @@ Corrupted / disguised files take these error paths:
 |---|---|---|
 | `legacy` (default) | v1.2 draw + encode paths | **Byte-identical** with historical output; the rollback carrier |
 | `standard` | Anti-aliased raster primitives, box-average / Catmull-Rom resampling, screen light blending, smoothed depth upsample + feathered masks, layer edge stretch, GIF quantize LUT (optional sierra dither kernel) | Everyday rendering |
-| `rich` | Same pipeline as `standard`; the reserved `supersample` and `mipLevels` knobs have no consumer yet (known deviation) | Comparison against standard |
+| `rich` | **Byte-identical to `standard` today** — the reserved `supersample` / `mipLevels` knobs have no consumer yet (known deviation) | Deprecated: pick `standard` instead; `"tier": "rich"` in JSON still resolves to this tier (deprecation ≠ removal) |
 
 Tiers only change the pixel path, never the effect list; `legacy` and
 `presets/classic.json` are two independent rollback switches. The `sierra`
