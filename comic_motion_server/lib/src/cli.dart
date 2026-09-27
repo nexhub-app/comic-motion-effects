@@ -191,8 +191,8 @@ Future<void> _process(ArgResults res) async {
         input: input,
         configHash: cfg.configHash,
         status: 'failed',
-        error: '${EngineWorkerException.code}: $e');
-    stderr.writeln('${EngineWorkerException.code}: $e');
+        error: '${e.code}: $e');
+    stderr.writeln('${e.code}: $e');
     exit(4);
   }
 }

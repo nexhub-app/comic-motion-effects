@@ -906,10 +906,48 @@ void main() {
       expect(
           () => EffectConfig.fromJson(
               _decodeJson('{"effects":["parallax","raiin"]}')),
-          throwsA(isA<ConfigException>()));
+          throwsA(isA<ConfigException>()
+              .having((e) => e.code, 'code', 'E_UNKNOWN_EFFECT')));
       expect(
           () => EffectConfig.fromJson(_decodeJson('{"effects":[42]}')),
-          throwsA(isA<ConfigException>()));
+          throwsA(isA<ConfigException>()
+              .having((e) => e.code, 'code', 'E_UNKNOWN_EFFECT')));
+    });
+
+    test('异常体系携带稳定错误码，与 HTTP API 错误码对齐', () {
+      // 解码族
+      expect(
+          () => ImageIO.decode(<int>[]),
+          throwsA(isA<ImageDecodeException>()
+              .having((e) => e.code, 'code', 'E_DECODE_EMPTY')));
+      expect(
+          () => ImageIO.decode(
+              <int>[137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 2, 3]),
+          throwsA(isA<ImageDecodeException>()
+              .having((e) => e.code, 'code', 'E_DECODE_CORRUPT')));
+      // 像素预算族
+      expect(
+          () => ImageIO.decode(_pngWithDeclaredSize(7000, 7000)),
+          throwsA(isA<ImageTooLargeException>()
+              .having((e) => e.code, 'code', 'E_TOO_LARGE')));
+      // 文件不存在
+      final missing =
+          '${Directory.systemTemp.path}/no_such_${DateTime.now().millisecondsSinceEpoch}.png';
+      expect(
+          () => ImageIO.decodeFile(missing),
+          throwsA(isA<ImageDecodeException>()
+              .having((e) => e.code, 'code', 'E_DECODE_NOT_FOUND')));
+      // 配置族：字段类型错走 fromFile 的 TypeError 包装
+      final badFile = File(
+              '${Directory.systemTemp.path}/bad_cfg_${DateTime.now().millisecondsSinceEpoch}.json')
+        ..writeAsStringSync('{"fps": "fast"}');
+      addTearDown(() => badFile.deleteSync());
+      expect(
+          () => EffectConfig.fromFile(badFile.path),
+          throwsA(isA<ConfigException>()
+              .having((e) => e.code, 'code', 'E_BAD_CONFIG')));
+      // worker 崩溃码
+      expect(EngineWorkerException(3, 'x').code, 'E_WORKER_CRASH');
     });
 
     test('越界质量参数被钳制、未知 tier 回落 legacy、未知 ditherMode 回落 floyd', () {

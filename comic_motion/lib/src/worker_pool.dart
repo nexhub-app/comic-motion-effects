@@ -147,17 +147,22 @@ class FrameJob {
 
 /// worker 内异常或 isolate 意外退出：任务整体失败，错误码 `E_WORKER_CRASH`。
 class EngineWorkerException implements Exception {
-  EngineWorkerException(this.frameIndex, this.cause);
+  EngineWorkerException(this.frameIndex, this.cause,
+      {this.code = 'E_WORKER_CRASH'});
 
-  static const code = 'E_WORKER_CRASH';
+  /// Stable error code; always `E_WORKER_CRASH` today.
+  final String code;
 
   /// null = isolate 级崩溃，无法归因到单帧。
   final int? frameIndex;
+
+  /// Human-readable English reason (also recorded by the HTTP layer).
   final String cause;
 
   @override
   String toString() =>
-      'EngineWorkerException: 帧 ${frameIndex ?? '?'} 的渲染 worker 失败: $cause';
+      'EngineWorkerException [$code]: render worker failed for frame '
+      '${frameIndex ?? '?'}: $cause';
 }
 
 class _BootMsg {
@@ -299,11 +304,11 @@ class ParallelFrameRunner {
       }
       final index = indices[k];
       if (_killed) {
-        throw EngineWorkerException(index, 'worker isolate 意外退出');
+        throw EngineWorkerException(index, 'worker isolate exited unexpectedly');
       }
       final waiting = _pending[index];
       if (waiting == null && !presolved.containsKey(index)) {
-        throw EngineWorkerException(index, '帧未派发即中止');
+        throw EngineWorkerException(index, 'frame aborted before dispatch');
       }
       // 先 await 后摘除：提前 remove 会让随后到达的结果找不到 Completer，死等。
       final out = waiting == null ? presolved[index]! : await waiting.future;

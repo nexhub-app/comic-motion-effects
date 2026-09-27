@@ -16,14 +16,16 @@ class ImageIO {
   /// Decode from bytes. Throws typed exceptions for bad input.
   static RgbaImage decode(List<int> bytes, {int maxPixels = defaultMaxPixels}) {
     if (bytes.isEmpty) {
-      throw ImageDecodeException('文件为空（0 字节），不是有效图片');
+      throw ImageDecodeException('File is empty (0 bytes), not a valid image',
+          code: 'E_DECODE_EMPTY');
     }
     // Guard: text files pretending to be images.
     final head = bytes.take(16).toList();
     final printableHead =
         head.every((b) => (b >= 0x09 && b <= 0x0d) || (b >= 0x20 && b < 0x7f));
     if (printableHead && bytes.length > 8) {
-      throw ImageDecodeException('文件内容是文本，不是图片（仅支持 JPEG/PNG/WebP）');
+      throw ImageDecodeException(
+          'File content looks like text, not an image (supported: JPEG/PNG/WebP)');
     }
     // 头解析即拒：从文件头读出宽高后立刻校验像素总量，在分配整幅
     // 栅格之前拒绝像素炸弹。嗅探不出的格式或损坏头部回落到全解码
@@ -34,7 +36,8 @@ class ImageIO {
     }
     final im = img.decodeImage(Uint8List.fromList(bytes));
     if (im == null) {
-      throw ImageDecodeException('无法解码图片（支持格式：JPEG/PNG/WebP；文件可能已损坏）');
+      throw ImageDecodeException(
+          'Unable to decode image (supported formats: JPEG/PNG/WebP; the file may be corrupted)');
     }
     if (im.width > RgbaImage.maxDimension ||
         im.height > RgbaImage.maxDimension) {
@@ -53,11 +56,13 @@ class ImageIO {
       int maxPixels = defaultMaxPixels}) {
     final f = io.File(path);
     if (!f.existsSync()) {
-      throw ImageDecodeException('文件不存在: $path');
+      throw ImageDecodeException('File not found: $path',
+          code: 'E_DECODE_NOT_FOUND');
     }
     final len = f.lengthSync();
     if (len == 0) {
-      throw ImageDecodeException('文件为空（0 字节）: $path');
+      throw ImageDecodeException('File is empty (0 bytes): $path',
+          code: 'E_DECODE_EMPTY');
     }
     if (len > maxFileBytes) {
       throw ImageTooLargeException(len, 0);
@@ -205,7 +210,7 @@ class ImageIO {
   /// Encode full frame list to an animated GIF.
   static List<int> encodeGifAnimated(List<RgbaImage> frames,
       {int delayCentisecs = 4}) {
-    if (frames.isEmpty) throw StateError('没有帧可编码');
+    if (frames.isEmpty) throw StateError('No frames to encode');
     final first = _toPackage(frames.first);
     final anim =
         img.Image(width: first.width, height: first.height, numChannels: 3);

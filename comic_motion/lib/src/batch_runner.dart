@@ -49,7 +49,8 @@ class BatchRunner {
   List<String> listImages(String dir) {
     final d = Directory(dir);
     if (!d.existsSync()) {
-      throw ConfigException('输入目录不存在: $dir');
+      throw ConfigException('Input directory does not exist: $dir',
+          code: 'E_NO_INPUT');
     }
     return d
         .listSync()
@@ -125,11 +126,11 @@ class BatchRunner {
         results.add(_fail(f, jobId, config, e.toString(), outputDir));
       } on EngineWorkerException catch (e) {
         results.add(_fail(
-            f, jobId, config, '${EngineWorkerException.code}: $e', outputDir));
+            f, jobId, config, '${e.code}: $e', outputDir));
       } on FileSystemException catch (e) {
-        results.add(_fail(f, jobId, config, '文件读写失败: ${e.message}', outputDir));
+        results.add(_fail(f, jobId, config, 'File I/O failed: ${e.message}', outputDir));
       } catch (e) {
-        results.add(_fail(f, jobId, config, '未预期的错误: $e', outputDir));
+        results.add(_fail(f, jobId, config, 'Unexpected error: $e', outputDir));
       }
     }
     return results;

@@ -379,7 +379,7 @@ class StreamingGifBuilder {
     final existing = _enc;
     if (existing != null) return existing;
     final pal = _palette;
-    if (pal == null) throw StateError('调色板尚未建立');
+    if (pal == null) throw StateError('Palette has not been primed');
     return _enc = GifFrameEncoder(
       width: width,
       height: height,
@@ -399,13 +399,13 @@ class StreamingGifBuilder {
 
   /// 按序拼接 worker 产出的帧片段（与 [addFrame] 的字节完全一致）。
   void addEncodedBody(Uint8List body) {
-    if (!hasPalette) throw StateError('调色板尚未建立');
+    if (!hasPalette) throw StateError('Palette has not been primed');
     _body.add(body);
     _frames++;
   }
 
   List<int> finish() {
-    if (_frames == 0) throw StateError('没有帧可编码');
+    if (_frames == 0) throw StateError('No frames to encode');
     final out = BytesBuilder();
     out.add([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]); // GIF89a
     out.add([

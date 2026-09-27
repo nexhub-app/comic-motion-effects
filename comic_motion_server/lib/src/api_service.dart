@@ -236,9 +236,8 @@ class MotionApiService {
         );
       }).catchError((Object e) {
         job.status = 'failed';
-        job.error = e is EngineWorkerException
-            ? '${EngineWorkerException.code}: $e'
-            : e.toString();
+        job.error =
+            e is EngineWorkerException ? '${e.code}: $e' : e.toString();
         ledger.appendJob(
           jobId: job.id,
           input: job.inputPath,

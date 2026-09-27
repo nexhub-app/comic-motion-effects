@@ -12,7 +12,7 @@ class RgbaImage {
   RgbaImage.fromBytes(
       {required this.width, required this.height, required this.data})
       : assert(data.length == width * height * 4,
-            '栅格长度 ${data.length} 与尺寸 ${width}x$height 不一致');
+            'Raster length ${data.length} does not match ${width}x$height');
 
   final int width;
   final int height;
@@ -73,19 +73,36 @@ class RgbaImage {
   }
 }
 
-/// Decode failures carry a user-facing reason; batch jobs record them.
+/// Decode failure with a machine-readable [code] so callers can branch
+/// programmatically instead of parsing messages. Codes align with the HTTP
+/// API error-code table (docs/api.md in comic_motion_server):
+/// `E_DECODE_EMPTY`, `E_DECODE_CORRUPT`, `E_DECODE_NOT_FOUND`.
 class ImageDecodeException implements Exception {
-  ImageDecodeException(this.message);
+  ImageDecodeException(this.message, {this.code = 'E_DECODE_CORRUPT'});
+
+  /// Human-readable English reason; batch jobs record it in the ledger.
   final String message;
 
+  /// Stable error code, e.g. `E_DECODE_EMPTY` for a 0-byte input.
+  final String code;
+
   @override
-  String toString() => 'ImageDecodeException: $message';
+  String toString() => 'ImageDecodeException [$code]: $message';
 }
 
+/// Size rejection with a machine-readable code (`E_TOO_LARGE`).
+///
+/// Carries both the offending dimensions and — when the rejection happened
+/// at the pixel-budget check — the actual pixel count and the budget, so the
+/// message is actionable on mobile devices where memory is tight.
 class ImageTooLargeException implements Exception {
-  ImageTooLargeException(this.width, this.height, {this.pixelCount, this.maxPixels});
+  ImageTooLargeException(this.width, this.height,
+      {this.code = 'E_TOO_LARGE', this.pixelCount, this.maxPixels});
   final int width;
   final int height;
+
+  /// Stable error code; always `E_TOO_LARGE` today.
+  final String code;
 
   /// 实际像素总量。头解析阶段即可精确计算时提供；单边已经超纲、
   /// 乘积可能溢出的腐坏头部下为 null。
@@ -97,10 +114,12 @@ class ImageTooLargeException implements Exception {
   @override
   String toString() {
     if (maxPixels != null) {
-      final count = pixelCount != null ? '共 $pixelCount 像素，' : '';
-      return 'ImageTooLargeException: 图片 ${width}x$height ${count}'
-          '超过像素总量上限 $maxPixels（边长上限 ${RgbaImage.maxDimension} 另行校验）';
+      final count = pixelCount != null ? ' ($pixelCount pixels),' : '';
+      return 'ImageTooLargeException [$code]: image ${width}x$height$count '
+          'exceeds the pixel budget of $maxPixels '
+          '(edge limit ${RgbaImage.maxDimension} is enforced separately)';
     }
-    return 'ImageTooLargeException: 图片尺寸 ${width}x$height 超过上限 ${RgbaImage.maxDimension}';
+    return 'ImageTooLargeException [$code]: image size ${width}x$height '
+        'exceeds the limit of ${RgbaImage.maxDimension}px';
   }
 }

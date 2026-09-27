@@ -53,7 +53,9 @@ EffectKind effectKindFromName(Object? name) {
     if (k.name == name) return k;
   }
   throw ConfigException(
-      '未知效果名称: "$name"（可选: ${EffectKind.values.map((e) => e.name).join(',')}）');
+      'Unknown effect name: "$name" '
+      '(available: ${EffectKind.values.map((e) => e.name).join(', ')})',
+      code: 'E_UNKNOWN_EFFECT');
 }
 
 enum DepthMode { autoLayers, singleLayer }
@@ -1532,19 +1534,29 @@ class EffectConfig {
       final raw = File(path).readAsStringSync();
       return fromJson(jsonDecode(raw) as Map<String, dynamic>);
     } on FileSystemException catch (e) {
-      throw ConfigException('无法读取配置文件: ${e.message}');
+      throw ConfigException('Unable to read config file: ${e.message}');
     } on FormatException catch (e) {
-      throw ConfigException('配置文件不是合法 JSON: ${e.message}');
+      throw ConfigException('Config file is not valid JSON: ${e.message}');
     } on TypeError {
-      throw ConfigException('配置字段类型不正确，请参照 docs/api.md 的参数表');
+      throw ConfigException(
+          'Invalid config field type; see docs/api.md for the parameter table');
     }
   }
 }
 
+/// Invalid effect configuration with a machine-readable [code] so callers
+/// can branch programmatically. Codes align with the HTTP API error-code
+/// table: `E_BAD_CONFIG` for malformed fields/files,
+/// `E_UNKNOWN_EFFECT` for unrecognized effect names.
 class ConfigException implements Exception {
-  ConfigException(this.message);
+  ConfigException(this.message, {this.code = 'E_BAD_CONFIG'});
+
+  /// Human-readable English reason.
   final String message;
 
+  /// Stable error code, e.g. `E_BAD_CONFIG` or `E_UNKNOWN_EFFECT`.
+  final String code;
+
   @override
-  String toString() => 'ConfigException: $message';
+  String toString() => 'ConfigException [$code]: $message';
 }
