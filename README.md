@@ -1,5 +1,7 @@
 # comic-motion-backend
 
+[![CI](https://github.com/nexhub-app/comic-motion-effects/actions/workflows/ci.yml/badge.svg)](https://github.com/nexhub-app/comic-motion-effects/actions/workflows/ci.yml)
+
 纯 Dart 实现的漫画图片动效引擎。对静态漫画图做**深度分层拆解**，合成鸿蒙阅读风格的 **2.5D 视差 + 呼吸感 + 氛围粒子** 动效，输出 GIF 动图与 PNG 帧序列。
 
 - 纯 Dart，无原生依赖，UI-free，可嵌入任意 Dart / Flutter 工程
