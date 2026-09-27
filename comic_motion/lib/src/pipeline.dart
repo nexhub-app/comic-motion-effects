@@ -3,6 +3,7 @@ import 'dart:io' as io;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'cancellation.dart';
 import 'effect_config.dart';
 import 'frame_compositor.dart';
 import 'gif_writer.dart';
@@ -157,8 +158,15 @@ class _CoreOutput {
 
 /// One-shot processing pipeline: decode -> depth -> layers -> frames -> encode.
 class MotionPipeline {
-  MotionPipeline(this.config, {int? parallel, this.memoryBudgetMb})
-      : _parallel = parallel ??
+  MotionPipeline(
+    this.config, {
+    int? parallel,
+    this.memoryBudgetMb,
+    this.onProgress,
+    this.cancelToken,
+    this.timeout,
+    this.keepPartial = false,
+  }) : _parallel = parallel ??
             math.min(
                 kDefaultParallel, math.max(1, io.Platform.numberOfProcessors));
 
@@ -170,6 +178,25 @@ class MotionPipeline {
   /// [PipelineResult.warnings]。注意：工作分辨率变化会改变输出像素，因此
   /// 预算运行的产物与无预算运行不逐字节一致（同预算 + 同输入仍确定性复现）。
   final int? memoryBudgetMb;
+
+  /// 进度回调（可选）：`framesDone / framesTotal`，计数含探针帧，按帧边界
+  /// （每帧写入 GIF 的顺序位置）触发。取消或超时后不再回调。执行期参数，
+  /// 不参与 configHash。
+  final void Function(int framesDone, int framesTotal)? onProgress;
+
+  /// 协作式取消令牌（可选）。检查点在帧调度层：派发前 / 每帧回包 / 探针帧
+  /// 渲染前；不打断 worker 内部的单帧渲染（纯函数，跑完自然丢弃），取消
+  /// 粒度为帧边界。默认清理本次运行写出的半成品并抛
+  /// [MotionCancelledException]（code `E_CANCELLED`）；[keepPartial] 可保留。
+  final MotionCancelToken? cancelToken;
+
+  /// 超时（可选）：与取消共用同一检查点与清理路径，deadline 自渲染主干
+  /// （解码之后）起算，在每个检查点比对；异常 code `E_TIMEOUT`。
+  final Duration? timeout;
+
+  /// 取消/超时后是否保留已产出的半成品。默认 false：删除本次运行写出的
+  /// GIF / params.json / 帧 PNG（目录仅变空时移除，历史产物不误删）。
+  final bool keepPartial;
 
   final int _parallel;
 
@@ -272,9 +299,55 @@ class MotionPipeline {
     );
   }
 
-  /// 共享渲染主干。[jobDir] 为 null 时进入内存模式：不建目录、不写任何文件，
-  /// GIF 字节与 params JSON 原样返回。
+  /// 共享渲染主干入口：取消/超时时清理半成品后原样重抛。渲染本体见
+  /// [_runCoreInner]。
   Future<_CoreOutput> _runCore(RgbaImage src, {String? jobDir}) async {
+    try {
+      return await _runCoreInner(src, jobDir: jobDir);
+    } on MotionCancelledException {
+      if (jobDir != null && !keepPartial) _cleanupPartial(jobDir);
+      rethrow;
+    }
+  }
+
+  /// 渲染主干本体。[jobDir] 为 null 时进入内存模式：不建目录、不写任何文件，
+  /// GIF 字节与 params JSON 原样返回。
+  ///
+  /// 取消/超时检查点（帧调度层）：主干入口、每块探针渲染前、worker 池启动
+  /// 前、每帧回包（emit）处。单帧渲染内部不可打断。
+  Future<_CoreOutput> _runCoreInner(RgbaImage src, {String? jobDir}) async {
+    final token = cancelToken;
+    final deadline = timeout == null ? null : (Stopwatch()..start());
+    var cancelled = false;
+    var cancelCode = 'E_CANCELLED';
+    var cancelMsg = 'cancelled by caller';
+
+    void triggerCancel(String code, String msg) {
+      if (cancelled) return;
+      cancelled = true;
+      cancelCode = code;
+      cancelMsg = msg;
+    }
+
+    // 超时用 deadline 比对而非 Timer：状态只在检查点被读取，两者生效时机
+    // 相同（帧边界），且无定时器泄漏风险。
+    void checkCancel() {
+      if (!cancelled) {
+        final dl = deadline;
+        if (dl != null && dl.elapsed > timeout!) {
+          triggerCancel('E_TIMEOUT',
+              'render timed out after ${timeout!.inMilliseconds}ms');
+        } else if (token != null && token.isCancelled) {
+          triggerCancel('E_CANCELLED', 'cancelled by caller');
+        }
+      }
+      if (cancelled) {
+        throw MotionCancelledException(cancelMsg, code: cancelCode);
+      }
+    }
+
+    // 派发前检查：已取消则零渲染直接失败。
+    checkCancel();
     // Memory budget: derive the working-resolution cap and the parallel cap
     // before touching the pixel path. 无预算时零改动（legacy 逐字节路径不受
     // 任何影响）。
@@ -365,7 +438,9 @@ class MotionPipeline {
     final presolved = <int, FrameOutput>{};
     if (gif != null) {
       final probes = <int, RgbaImage>{};
+      checkCancel(); // 探针帧渲染前检查
       for (final k in gif.wantsProbes ? [0, n ~/ 2, n - 1] : [0]) {
+        checkCancel();
         final frame =
             probes.putIfAbsent(k, () => compositor.renderFrame(k / config.fps));
         if (wantFrames) ImageIO.writePngFrame(frameDir, k, frame);
@@ -392,13 +467,24 @@ class MotionPipeline {
     // 严格按帧号递增追加片段；乱序到达的先压在 hold 里，内存 O(窗口)。
     var written = 0;
     final hold = <int, FrameOutput>{};
+    final progressCb = onProgress;
+    void reportProgress() {
+      // 取消/超时后不再回调。
+      if (progressCb == null || cancelled || (token?.isCancelled ?? false)) {
+        return;
+      }
+      progressCb(written, n);
+    }
+
     void emit(FrameOutput out) {
+      checkCancel(); // 每帧回包处检查（含串行、worker、探针三条路径）
       hold[out.index] = out;
       while (hold.containsKey(written)) {
         final o = hold.remove(written++)!;
         final body = o.gifBody;
         if (gif != null && body != null) gif.addEncodedBody(body);
       }
+      reportProgress();
     }
 
     if (pendingCount == 0) {
@@ -406,6 +492,7 @@ class MotionPipeline {
         emit(out);
       }
     } else {
+      checkCancel(); // worker 池启动（派发）前检查
       final runner = await ParallelFrameRunner.start(spec, allowedParallel);
       if (runner == null) {
         fallback = allowedParallel > 1;
@@ -415,7 +502,10 @@ class MotionPipeline {
           emit(out);
         }
         for (final i in allIndices) {
-          if (!presolved.containsKey(i)) emit(job.run(i));
+          if (!presolved.containsKey(i)) {
+            checkCancel(); // 先检查再渲染，取消后不浪费单帧
+            emit(job.run(i));
+          }
         }
       } else {
         try {
@@ -458,6 +548,32 @@ class MotionPipeline {
       parallelFallback: fallback || budgetCappedParallel,
       warnings: [...config.warnings, ...budgetWarnings],
     );
+  }
+
+  /// 取消/超时的默认清理：删除本次运行写出的 GIF / params.json / 帧 PNG；
+  /// 目录仅在变空时移除。jobDir 内嵌 hash8——能落到同一目录的必然是同
+  /// stem + 同配置，历史产物可复现再生，删除不构成损失。
+  static void _cleanupPartial(String jobDir) {
+    void silentDeleteFile(String p) {
+      try {
+        final f = io.File(p);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+    }
+    silentDeleteFile('$jobDir/anim.gif');
+    silentDeleteFile('$jobDir/params.json');
+    try {
+      final d = io.Directory('$jobDir/frames');
+      if (d.existsSync()) {
+        for (final e in d.listSync()) {
+          if (e is io.File) e.deleteSync();
+        }
+        d.deleteSync();
+      }
+    } catch (_) {}
+    try {
+      io.Directory(jobDir).deleteSync(); // 非空则失败，忽略
+    } catch (_) {}
   }
 
   RgbaImage _downscaleTo(RgbaImage src, int maxDim) {

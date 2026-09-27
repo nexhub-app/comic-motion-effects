@@ -596,6 +596,158 @@ void main() {
       );
     });
 
+    test('派发前取消：零渲染、零文件、进度零回调', () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(48, 48)));
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 48);
+      final token = MotionCancelToken()..cancel();
+      final progressEvents = <int>[];
+      await expectLater(
+        MotionPipeline(cfg,
+                parallel: 1,
+                cancelToken: token,
+                onProgress: (_, __) => progressEvents.add(1))
+            .processFile(inPath, '${tmp.path}/out'),
+        throwsA(isA<MotionCancelledException>()),
+      );
+      expect(progressEvents, isEmpty, reason: '派发前取消不得有任何渲染');
+      expect(Directory('${tmp.path}/out').existsSync(), isFalse,
+          reason: '未进入渲染主干不应创建输出目录');
+    });
+
+    test('processBytes 同样响应取消', () async {
+      final token = MotionCancelToken()..cancel();
+      await expectLater(
+        MotionPipeline(EffectConfig(fps: 2), cancelToken: token)
+            .processBytes(input: Uint8List.fromList(_pngEncode(_gradientImage(32, 32)))),
+        throwsA(isA<MotionCancelledException>()),
+      );
+    });
+
+    test('中途取消（串行）：半成品默认清理，目录无残留', () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 64)));
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
+      final token = MotionCancelToken();
+      final jobDir =
+          '${tmp.path}/out/in_${cfg.configHash.substring(0, 8)}';
+      await expectLater(
+        MotionPipeline(cfg,
+                parallel: 1,
+                cancelToken: token,
+                onProgress: (done, total) {
+                  if (done >= 1) token.cancel(); // 首帧回包后取消
+                })
+            .processFile(inPath, '${tmp.path}/out'),
+        throwsA(isA<MotionCancelledException>()),
+      );
+      expect(Directory(jobDir).existsSync(), isFalse,
+          reason: '默认清理：半成品目录（GIF/params/帧 PNG）应被移除');
+    });
+
+    test('中途取消：keepPartial=true 保留已产出帧，GIF 不落盘', () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 64)));
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
+      final token = MotionCancelToken();
+      final jobDir =
+          '${tmp.path}/out/in_${cfg.configHash.substring(0, 8)}';
+      await expectLater(
+        MotionPipeline(cfg,
+                parallel: 1,
+                keepPartial: true,
+                cancelToken: token,
+                onProgress: (done, total) {
+                  if (done >= 1) token.cancel();
+                })
+            .processFile(inPath, '${tmp.path}/out'),
+        throwsA(isA<MotionCancelledException>()),
+      );
+      expect(File('$jobDir/frames/frame_0000.png').existsSync(), isTrue,
+          reason: 'keepPartial：已写出的探针帧保留');
+      expect(File('$jobDir/anim.gif').existsSync(), isFalse,
+          reason: 'GIF 未完成，不应存在半截文件');
+      expect(File('$jobDir/params.json').existsSync(), isFalse);
+    });
+
+    test('中途取消（worker 路径）：异常上抛、worker 池释放、无残留文件', () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 64)));
+      final cfg = EffectConfig(
+          fps: 6, durationSec: 1, maxDimension: 64,
+          outputFormat: OutputFormat.gif);
+      final token = MotionCancelToken();
+      final jobDir =
+          '${tmp.path}/out/in_${cfg.configHash.substring(0, 8)}';
+      await expectLater(
+        MotionPipeline(cfg,
+                parallel: 3,
+                cancelToken: token,
+                onProgress: (done, total) {
+                  if (done >= 1) token.cancel();
+                })
+            .processFile(inPath, '${tmp.path}/out'),
+        throwsA(isA<MotionCancelledException>()),
+      );
+      expect(Directory(jobDir).existsSync(), isFalse,
+          reason: 'worker 路径取消后同样清理半成品');
+    });
+
+    test('超时走同一取消路径，异常 code 为 E_TIMEOUT', () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(512, 512)));
+      final cfg = EffectConfig(fps: 24, durationSec: 4, maxDimension: 512);
+      final sw = Stopwatch()..start();
+      Object? caught;
+      try {
+        await MotionPipeline(cfg, parallel: 1,
+                timeout: const Duration(milliseconds: 100))
+            .processFile(inPath, '${tmp.path}/out');
+      } catch (e) {
+        caught = e;
+      }
+      sw.stop();
+      expect(caught, isA<MotionCancelledException>(),
+          reason: '96 帧 512px 渲染远超 100ms，必须超时');
+      final e = caught as MotionCancelledException;
+      expect(e.code, 'E_TIMEOUT');
+      expect(e.message, contains('timed out'));
+      expect(sw.elapsed, lessThan(const Duration(seconds: 10)),
+          reason: '超时应在渲染主干早期生效，而非等全部帧渲染完');
+    });
+
+    test('progress 计数正确：含探针帧，单调递增至 framesTotal', () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 64)));
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
+      final events = <int>[];
+      final r = await MotionPipeline(cfg, parallel: 1,
+              onProgress: (done, total) => events.add(done))
+          .processFile(inPath, '${tmp.path}/out');
+      expect(events, isNotEmpty);
+      expect(events.first, 1, reason: '首帧（探针帧 0）回包即计数');
+      for (var i = 1; i < events.length; i++) {
+        expect(events[i], greaterThanOrEqualTo(events[i - 1]));
+      }
+      expect(events.last, cfg.frameCount);
+      expect(r.frameCount, cfg.frameCount);
+    });
+
+    test('取消后同一 pipeline 可再次正常渲染', () async {
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(48, 48)));
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 48);
+      final token = MotionCancelToken()..cancel();
+      final pipeline = MotionPipeline(cfg, parallel: 1, cancelToken: token);
+      await expectLater(pipeline.processFile(inPath, '${tmp.path}/o1'),
+          throwsA(isA<MotionCancelledException>()));
+      // 同一 pipeline、新 token：恢复正常
+      final fresh = MotionCancelToken();
+      final pipeline2 = MotionPipeline(cfg, parallel: 1, cancelToken: fresh);
+      final r = await pipeline2.processFile(inPath, '${tmp.path}/o2');
+      expect(File(r.outputGif).existsSync(), isTrue);
+    });
+
     test('批处理失败项不中断且台账记录原因', () async {
       // 建一个输入目录: 一张好图 + 一个空文件 + 一个文本文件
       final inDir = Directory('${tmp.path}/imgs')..createSync();
