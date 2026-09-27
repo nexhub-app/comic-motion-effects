@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert' as convert;
 import 'dart:io';
 import 'dart:typed_data';
@@ -823,6 +824,67 @@ void main() {
             config: EffectConfig(fps: 2, maxDimension: 32), cancelToken: token),
         throwsA(isA<MotionCancelledException>()),
       );
+    });
+
+    test('MotionPipelineGuard：并发 acquire 排队，release 后放行', () async {
+      MotionPipelineGuard.configure(maxConcurrent: 1);
+      final order = <String>[];
+      final firstInside = Completer<void>();
+      final f1 = MotionPipelineGuard.run(() async {
+        order.add('a-in');
+        firstInside.complete();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        order.add('a-out');
+      });
+      final f2 = MotionPipelineGuard.run(() async {
+        order.add('b-in');
+      });
+      await firstInside.future;
+      expect(MotionPipelineGuard.activeCount, 1);
+      expect(MotionPipelineGuard.queueLength, 1, reason: '第二个任务应排队等待');
+      await f1;
+      await f2;
+      expect(order, ['a-in', 'a-out', 'b-in'],
+          reason: 'maxConcurrent=1 时严格串行');
+    });
+
+    test('MotionPipelineGuard：maxConcurrent=2 允许两个任务并行', () async {
+      MotionPipelineGuard.configure(maxConcurrent: 2);
+      final bothInside = Completer<void>();
+      var inside = 0;
+      await Future.wait([
+        MotionPipelineGuard.run(() async {
+          inside++;
+          if (inside == 2) bothInside.complete();
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }),
+        MotionPipelineGuard.run(() async {
+          inside++;
+          if (inside == 2) bothInside.complete();
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }),
+      ]);
+      expect(bothInside.isCompleted, isTrue, reason: '两个任务应同时持槽');
+      MotionPipelineGuard.configure(maxConcurrent: 1); // 还原默认
+    });
+
+    test('MotionPipelineGuard：body 抛取消异常也释放槽位', () async {
+      MotionPipelineGuard.configure(maxConcurrent: 1);
+      await expectLater(
+        MotionPipelineGuard.run(() async {
+          throw MotionCancelledException('cancelled by caller');
+        }),
+        throwsA(isA<MotionCancelledException>()),
+      );
+      expect(MotionPipelineGuard.activeCount, 0, reason: '取消路径必须释放槽位');
+      // 释放后新任务立即可进
+      var ran = false;
+      await MotionPipelineGuard.run(() async => ran = true);
+      expect(ran, isTrue);
+    });
+
+    test('MotionPipelineGuard：无 acquire 时 release 抛 StateError', () {
+      expect(() => MotionPipelineGuard.release(), throwsStateError);
     });
 
     test('批处理失败项不中断且台账记录原因', () async {

@@ -76,6 +76,17 @@ final result = await MotionPipeline(EffectConfig(fps: 12), parallel: 4)
 
 取消/超时语义（同步与后台入口一致）：检查点全部位于帧调度层（派发前 / 每帧回包 / 探针渲染前）——worker 内部进行中的单帧渲染不会被强行打断（帧是纯函数，结果自然丢弃），粒度为一个帧边界。取消的运行默认删除本次写出的半成品（`keepPartial: true` 保留）并抛 `MotionCancelledException`：调用方取消 code 为 `E_CANCELLED`，超过 `timeout` deadline 走同一路径、code 为 `E_TIMEOUT`（deadline 在相同检查点比对）。进度计数含探针帧，取消/超时后不再回调。
 
+### 并发：移动端同一时刻只跑一个渲染任务
+
+单条管线峰值内存 300~600MB（见性能基准）。两条管线并发就是直接叠加，移动端会 OOM。移动端 App 应保证**同一时刻只跑一个渲染任务**——排队而不是叠着跑。可选用 `MotionPipelineGuard`（进程级信号量，纯 opt-in，库本身不做任何强制）：
+
+```dart
+await MotionPipelineGuard.run(() =>
+    MotionPipeline(config).processFile(input, outDir)); // 忙时自动排队
+```
+
+body 抛任何异常（包括取消的 `MotionCancelledException`）都会先释放槽位再重抛。桌面批处理可显式调大 `maxConcurrent`。
+
 ### 平台支持矩阵
 
 | 平台 | 状态 | 说明 |

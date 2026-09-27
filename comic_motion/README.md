@@ -107,6 +107,23 @@ their partial output by default (`keepPartial: true` keeps it) and throw
 `E_TIMEOUT` when the `timeout` deadline passes (checked at the same
 checkpoints). Progress counts probe frames and stops after cancel/timeout.
 
+### Concurrency: one render at a time on mobile
+
+A single pipeline peaks at 300–600 MB of memory (see the performance
+reference). Two concurrent pipelines add up directly and will OOM on mobile
+devices. Keep mobile apps to **one render task at a time** — queue work
+instead of stacking it. The opt-in `MotionPipelineGuard` is a process-wide
+semaphore for exactly that (the library never enforces it on its own):
+
+```dart
+await MotionPipelineGuard.run(() =>
+    MotionPipeline(config).processFile(input, outDir)); // queues when busy
+```
+
+`run` releases its slot when the body throws — including a
+`MotionCancelledException` from a cancelled render. Desktop batch jobs may
+raise `maxConcurrent` deliberately.
+
 ### Platform support matrix
 
 | Platform | Status | Notes |

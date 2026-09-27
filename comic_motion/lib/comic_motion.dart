@@ -12,6 +12,7 @@ export 'src/depth_splitter.dart';
 export 'src/effect_config.dart';
 export 'src/frame_compositor.dart';
 export 'src/gif_writer.dart';
+export 'src/guard.dart';
 export 'src/image_io.dart';
 export 'src/image_model.dart';
 export 'src/json_compat.dart';
