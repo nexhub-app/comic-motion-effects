@@ -430,12 +430,13 @@ void main() {
       final workDir = 'build/posix_path_test';
       Directory(workDir).createSync(recursive: true);
       addTearDown(() => Directory(workDir).deleteSync(recursive: true));
-      File('$workDir/in.png')
-          .writeAsBytesSync(_pngEncode(_gradientImage(32, 32)));
+      final png = _pngEncode(_gradientImage(32, 32));
+      File('$workDir/in.png').writeAsBytesSync(png);
       final cfg = EffectConfig(fps: 2, durationSec: 1, maxDimension: 32);
       final r = await MotionPipeline(cfg, parallel: 1)
           .processFile('$workDir/in.png', '$workDir/out');
-      final jobName = 'in_${cfg.configHash.substring(0, 8)}';
+      final jobName =
+          'in_${ImageIO.contentHash8(png)}_${cfg.configHash.substring(0, 8)}';
       expect(r.outputGif, '$workDir/out/$jobName/anim.gif');
       expect(r.frameDir, '$workDir/out/$jobName/frames');
       expect(File(r.outputGif).existsSync(), isTrue);
@@ -557,6 +558,56 @@ void main() {
       expect(restored.configHash, cfg.configHash);
     });
 
+    test('内容指纹：同 stem 不同内容 → 不同产物目录，configHash 不变', () async {
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
+      final inPath = '${tmp.path}/same_stem.png';
+      final outDir = '${tmp.path}/fingerprint';
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 64)));
+      final r1 = await MotionPipeline(cfg, parallel: 1)
+          .processFile(inPath, outDir);
+      // 同名覆盖：内容变化（不同尺寸渐变图 → 字节必不同），目录必须随之改变
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(48, 48)));
+      final r2 = await MotionPipeline(cfg, parallel: 1)
+          .processFile(inPath, outDir);
+      expect(r2.contentHash, isNot(r1.contentHash),
+          reason: '同 stem 不同内容 → contentHash 必不同');
+      expect(r1.configHash, r2.configHash,
+          reason: '内容指纹与配置正交：configHash 不受输入内容影响');
+      final dir1 = r1.outputGif.substring(0, r1.outputGif.lastIndexOf('/'));
+      final dir2 = r2.outputGif.substring(0, r2.outputGif.lastIndexOf('/'));
+      expect(dir2, isNot(dir1), reason: '产物目录随内容变化，不再命中旧缓存');
+      expect(Directory(dir1).existsSync(), isTrue,
+          reason: '新内容写新目录，旧产物不被覆盖');
+      expect(r1.contentHash, matches(RegExp(r'^[0-9a-f]{8}$')));
+    });
+
+    test('内容指纹：同内容同配置 → 同目录（命中语义不变），params 回放不受影响', () async {
+      final png = _pngEncode(_gradientImage(56, 56));
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 56);
+      final inPath = '${tmp.path}/stable.png';
+      File(inPath).writeAsBytesSync(png);
+      final r1 = await MotionPipeline(cfg, parallel: 1)
+          .processFile(inPath, '${tmp.path}/stable_out');
+      final r2 = await MotionPipeline(cfg, parallel: 1)
+          .processFile(inPath, '${tmp.path}/stable_out');
+      expect(r1.outputGif, r2.outputGif,
+          reason: '同内容同配置 → 同目录，嵌入方「目录存在→跳过」语义不变');
+      expect(r1.contentHash, r2.contentHash);
+      expect(r1.contentHash, ImageIO.contentHash8(png),
+          reason: 'result.contentHash 与独立计算的输入字节指纹一致');
+      final mem = await MotionPipeline(cfg, parallel: 1)
+          .processBytes(input: Uint8List.fromList(png));
+      expect(mem.contentHash, r1.contentHash,
+          reason: '同内容的落盘/内存入口指纹一致');
+      final restored = EffectConfig.fromJson(
+          _decodeJson(File(r1.paramsFile).readAsStringSync()));
+      expect(restored.configHash, cfg.configHash,
+          reason: 'params.json 回放不受内容指纹影响');
+      expect(File(r2.outputGif).readAsBytesSync(),
+          equals(File(r1.outputGif).readAsBytesSync()),
+          reason: '逐字节复现契约不受命名变更影响');
+    });
+
     test('processBytes 并行路径与串行路径字节一致', () async {
       final png = _pngEncode(_gradientImage(96, 64));
       final cfg = EffectConfig(
@@ -630,8 +681,7 @@ void main() {
       File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 64)));
       final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
       final token = MotionCancelToken();
-      final jobDir =
-          '${tmp.path}/out/in_${cfg.configHash.substring(0, 8)}';
+      final jobDir = '${tmp.path}/out/in_${ImageIO.contentHash8(_pngEncode(_gradientImage(64, 64)))}_${cfg.configHash.substring(0, 8)}';
       await expectLater(
         MotionPipeline(cfg,
                 parallel: 1,
@@ -651,8 +701,7 @@ void main() {
       File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 64)));
       final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
       final token = MotionCancelToken();
-      final jobDir =
-          '${tmp.path}/out/in_${cfg.configHash.substring(0, 8)}';
+      final jobDir = '${tmp.path}/out/in_${ImageIO.contentHash8(_pngEncode(_gradientImage(64, 64)))}_${cfg.configHash.substring(0, 8)}';
       await expectLater(
         MotionPipeline(cfg,
                 parallel: 1,
@@ -678,8 +727,7 @@ void main() {
           fps: 6, durationSec: 1, maxDimension: 64,
           outputFormat: OutputFormat.gif);
       final token = MotionCancelToken();
-      final jobDir =
-          '${tmp.path}/out/in_${cfg.configHash.substring(0, 8)}';
+      final jobDir = '${tmp.path}/out/in_${ImageIO.contentHash8(_pngEncode(_gradientImage(64, 64)))}_${cfg.configHash.substring(0, 8)}';
       await expectLater(
         MotionPipeline(cfg,
                 parallel: 3,
@@ -783,8 +831,7 @@ void main() {
       File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 64)));
       final cfg = EffectConfig(fps: 6, durationSec: 1, maxDimension: 64);
       final token = MotionCancelToken();
-      final jobDir =
-          '${tmp.path}/bg_cancel/in_${cfg.configHash.substring(0, 8)}';
+      final jobDir = '${tmp.path}/bg_cancel/in_${ImageIO.contentHash8(_pngEncode(_gradientImage(64, 64)))}_${cfg.configHash.substring(0, 8)}';
       await expectLater(
         processFileInBackground(inPath, '${tmp.path}/bg_cancel',
             config: cfg,
@@ -1120,9 +1167,11 @@ void main() {
       final stem = 'strip';
       for (final s in r.slices) {
         final dir =
-            '${tmp.path}/strip_out/${stem}_slice${s.slice.index.toString().padLeft(3, '0')}_${cfg.configHash.substring(0, 8)}';
+            '${tmp.path}/strip_out/${stem}_slice${s.slice.index.toString().padLeft(3, '0')}_${s.result.contentHash}_${cfg.configHash.substring(0, 8)}';
         expect(Directory(dir).existsSync(), isTrue,
-            reason: '每片独立目录 <stem>_slice<NNN>_<hash8>');
+            reason: '每片独立目录 <stem>_slice<NNN>_<contentHash8>_<configHash8>');
+        expect(s.result.contentHash, matches(RegExp(r'^[0-9a-f]{8}$')),
+            reason: '片级 contentHash 为 8 位十六进制');
         expect(File(s.result.outputGif).existsSync(), isTrue);
         final params =
             EffectConfig.fromJson(_decodeJson(File(s.result.paramsFile).readAsStringSync()));

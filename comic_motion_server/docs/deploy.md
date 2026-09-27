@@ -79,7 +79,7 @@ dart run tool/smoke_test.dart
 注意：
 - `git checkout` 前先确认工作区干净（`git status`）；`git reset --hard` / `git clean -fd` 会连带丢掉 `v1.3` 的未提交改动，本手册**不**把它们当作回滚手段。标签线（`v1.0.0`~`v1.2.0`）与 `main` 无共同祖先，切过去只能看旧代码，合不回新分支。
 - 台账 `ledger.jsonl` 为 JSONL 追加型，跨版本兼容（旧版本读到新字段会忽略），回滚不销毁历史记录。
-- 输出目录按 `<stem>_<hash8>` 命名，新旧版本产物互不覆盖；回滚后新任务落新目录。
+- 输出目录按 `<stem>_<contentHash8>_<configHash8>` 命名（1.3.1 起纳入输入内容指纹），同名文件内容变化后产物落新目录，新旧版本产物互不覆盖；回滚后新任务落新目录。1.3.1 之前的旧格式目录（`<stem>_<hash8>`）不被新布局识别，部署侧需自行清理。
 - v1.3 起配置里写错的效果名会直接抛 `ConfigException`（此前静默退化成 `parallax`），跨版本搬 `params.json` 时先核对效果名。
 
 ## 三、版本记录

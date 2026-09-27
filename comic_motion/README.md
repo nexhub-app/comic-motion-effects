@@ -174,12 +174,13 @@ final strip = await processStrip(
 );
 for (final s in strip.slices) {
   print(s.slice.yStart);      // source-row window
-  print(s.result.outputGif);  // `<stem>_slice<NNN>_<hash8>/anim.gif`
+  print(s.result.outputGif);  // `<stem>_slice<NNN>_<contentHash8>_<configHash8>/anim.gif`
 }
 ```
 
-- Per-slice `<stem>_slice<NNN>_<hash8>` directories with independent
-  configHash + params.json — deterministic, naturally cache-friendly.
+- Per-slice `<stem>_slice<NNN>_<contentHash8>_<configHash8>` directories with
+  independent configHash + per-slice content fingerprint + params.json —
+  deterministic, naturally cache-friendly.
 - `kStripSafeEffects` lists the overlay-class effects that are safe across
   slice boundaries; anything else (parallax/breathing/slowPush/mangaShake…)
   is allowed but flagged experimental in `strip.warnings` (each slice
@@ -196,6 +197,27 @@ for (final s in strip.slices) {
 | Android / iOS | ✅ primary target | Pure Dart + isolates, no native plugins, no UI |
 | Windows / macOS / Linux desktop | ✅ | Same code path as CLI/server |
 | Web | 🚫 not supported | Core modules (`image_io` / `pipeline` / `worker_pool`) depend on `dart:io`, and `Isolate.spawn` is unavailable on Flutter Web. A port would mean web decode APIs and web workers — the long-term path, not a commitment |
+
+### Output naming & content fingerprint
+
+Product directories are named `<stem>_<contentHash8>_<configHash8>`
+(`<stem>_slice<NNN>_<contentHash8>_<configHash8>` in strip mode). The two
+hashes are orthogonal dimensions:
+
+- `configHash8` — first 8 hex of the parameter fingerprint. Same config ⇒
+  same value.
+- `contentHash8` — first 8 hex of the FNV-1a 64 fingerprint over the **input
+  bytes** (`processImage` fingerprints the passed RGBA raster instead, since
+  no file bytes exist there). Content fingerprints never enter
+  `EffectConfig` serialization or configHash.
+
+The content hash exists so that a re-downloaded or overwritten file with the
+same name lands in a **new** directory — embedder cache logic of the form
+"directory exists → skip rendering" can no longer serve a stale picture.
+Note this is a **breaking change to the naming contract** (pre-1.3.1 caches
+used `<stem>_<configHash8>`): old product directories are not recognized by
+the new layout and must be cleaned up app-side (one-off `delete` of the cache
+root is safe — it only ever contained engine products).
 
 ### Recommended mobile parameters
 
@@ -278,7 +300,7 @@ dart run tool/generate_samples.dart     # generate 10 placeholder samples
 dart run tool/smoke_test.dart           # one image → GIF + frames (~2-4 s)
 ```
 
-Output lands in `build/smoke/01_portrait_<hash8>/`:
+Output lands in `build/smoke/01_portrait_<contentHash8>_<configHash8>/`:
 
 ```
 anim.gif                    # the animation

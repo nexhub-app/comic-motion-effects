@@ -121,11 +121,11 @@ final strip = await processStrip(
 );
 for (final s in strip.slices) {
   print(s.slice.yStart);      // 源图行窗口
-  print(s.result.outputGif);  // `<stem>_slice<NNN>_<hash8>/anim.gif`
+  print(s.result.outputGif);  // `<stem>_slice<NNN>_<contentHash8>_<configHash8>/anim.gif`
 }
 ```
 
-- 每片独立目录 `<stem>_slice<NNN>_<hash8>`，独立 configHash + params.json——确定性复现，天然可缓存去重。
+- 每片独立目录 `<stem>_slice<NNN>_<contentHash8>_<configHash8>`，独立 configHash + 片级内容指纹 + params.json——确定性复现，天然可缓存去重。
 - `kStripSafeEffects` 是跨片安全的叠加类效果集；白名单外效果（parallax/breathing/slowPush/mangaShake 等）允许使用，但会在 `strip.warnings` 提示实验性（每片独立做深度估算，跨片可能错位）。
 - 整话像素总量上限（默认 40M 像素）在切片前的解码阶段强制执行；超限抛 `E_TOO_LARGE` 并提示使用 strip 模式。超大单话可显式调大 `maxPixels`——每片工作栅格始终很小，不受整话高度影响。
 
@@ -136,6 +136,22 @@ for (final s in strip.slices) {
 | Android / iOS | ✅ 首要目标 | 纯 Dart + isolate，无原生插件、无 UI 依赖 |
 | Windows / macOS / Linux 桌面 | ✅ | 与 CLI / 服务端同源 |
 | Web | 🚫 不支持 | 核心模块（`image_io` / `pipeline` / `worker_pool`）依赖 `dart:io`，且 `Isolate.spawn` 在 Flutter Web 不可用；远期若移植需换 web 解码 API 与 web worker——仅为方向，不做实现承诺 |
+
+### 产物命名与内容指纹
+
+产物目录按 `<stem>_<contentHash8>_<configHash8>` 命名（strip 模式为
+`<stem>_slice<NNN>_<contentHash8>_<configHash8>`）。两个 hash 是正交的两个维度：
+
+- `configHash8` —— 参数指纹的前 8 位十六进制，同配置必同值。
+- `contentHash8` —— **输入字节** FNV-1a 64 指纹的前 8 位（`processImage`
+  无原始文件字节，取传入栅格 RGBA 字节计算，同样确定）。内容指纹不进
+  `EffectConfig` 序列化，也不参与 configHash。
+
+内容指纹解决的是：同名文件被重新下载 / 覆盖后，产物落**新目录**——嵌入方
+「目录存在 → 跳过渲染」的缓存逻辑不会再命中旧画面。注意这是对命名契约的
+**BREAKING 变更**（1.3.1 之前为 `<stem>_<configHash8>`）：旧产物目录不被
+新布局识别，需 App 侧自行清理（对缓存根目录做一次性删除是安全的——里面
+只会有引擎产物）。
 
 ### 移动端推荐参数
 
@@ -195,7 +211,7 @@ dart run tool/generate_samples.dart     # 生成 10 张占位样图（sample_ima
 dart run tool/smoke_test.dart           # 单张图 → GIF + 帧序列（约 2-4 秒）
 ```
 
-输出位于 `build/smoke/01_portrait_<hash8>/`：
+输出位于 `build/smoke/01_portrait_<contentHash8>_<configHash8>/`：
 
 ```
 anim.gif                    # 动图成品

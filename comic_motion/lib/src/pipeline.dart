@@ -32,6 +32,7 @@ class PipelineResult {
     required this.peakRssMb,
     required this.configJson,
     required this.configHash,
+    required this.contentHash,
     this.parallel = 1,
     this.parallelFallback = false,
     this.warnings = const [],
@@ -49,6 +50,12 @@ class PipelineResult {
   final double peakRssMb;
   final String configJson;
   final String configHash;
+
+  /// 输入内容指纹（`ImageIO.contentHash8`，输入字节的 FNV-1a 64 前 8 位）。
+  /// 与 configHash 正交：不进 EffectConfig 序列化；产物目录命名
+  /// `<stem>_<contentHash8>_<configHash8>` 的一部分，同名文件内容变化后
+  /// 目录随之改变，旧缓存不再被命中。
+  final String contentHash;
 
   /// 实际生效的并行度（1 = 串行）。执行期属性，不参与 configHash。
   final int parallel;
@@ -71,6 +78,7 @@ class PipelineResult {
         'elapsedMs': elapsedMs,
         'peakRssMb': double.parse(peakRssMb.toStringAsFixed(1)),
         'configHash': configHash,
+        'contentHash': contentHash,
         'parallel': parallel,
         'parallelFallback': parallelFallback,
         if (warnings.isNotEmpty) 'warnings': warnings,
@@ -92,6 +100,7 @@ class MemoryPipelineResult {
     required this.peakRssMb,
     required this.configJson,
     required this.configHash,
+    required this.contentHash,
     this.parallel = 1,
     this.parallelFallback = false,
     this.warnings = const [],
@@ -111,6 +120,10 @@ class MemoryPipelineResult {
   final double peakRssMb;
   final String configJson;
   final String configHash;
+
+  /// 输入内容指纹（同 [PipelineResult.contentHash]；此处基于传入的
+  /// [MotionPipeline.processBytes] input 字节）。
+  final String contentHash;
 
   /// 实际生效的并行度（1 = 串行）。执行期属性，不参与 configHash。
   final int parallel;
@@ -225,7 +238,10 @@ class MotionPipeline {
   }
 
   /// Process one image file into [outputDir] with uniform naming:
-  /// `<input-stem>_<configHash>/anim.gif` and `frames/frame_NNNN.png`.
+  /// `<input-stem>_<contentHash8>_<configHash8>/anim.gif` and
+  /// `frames/frame_NNNN.png`. contentHash8 是输入文件字节的指纹（
+  /// [ImageIO.contentHash8]）：同名文件内容变化后产物目录随之改变，
+  /// 嵌入方「目录存在 → 跳过渲染」的缓存逻辑不会命中旧画面。
   ///
   /// 帧渲染与 GIF/PNG 编码可派发给 isolate 池并行执行；单帧是纯函数，
   /// 并行度只影响耗时与内存画像，输出字节与串行逐字节一致。
@@ -235,14 +251,17 @@ class MotionPipeline {
   /// 嵌入方请改用后台 isolate 包装（见 README「Embedding into a Flutter app」）。
   Future<PipelineResult> processFile(String inputPath, String outputDir) async {
     final sw = Stopwatch()..start();
-    final src = ImageIO.decodeFile(inputPath);
+    // 单次读盘：同一份字节既做内容指纹又做解码输入（守卫与 decodeFile 一致）。
+    final bytes = ImageIO.readFileBytes(inputPath);
+    final src = ImageIO.decode(bytes);
 
     // Uniform output naming.
     final stem = io.File(inputPath).uri.pathSegments.last;
     final dot = stem.lastIndexOf('.');
     final baseName = dot > 0 ? stem.substring(0, dot) : stem;
-    final jobDir =
-        '$outputDir/${baseName}_${config.configHash.substring(0, 8)}';
+    final contentHash = ImageIO.contentHash8(bytes);
+    final jobDir = '$outputDir/'
+        '${baseName}_${contentHash}_${config.configHash.substring(0, 8)}';
 
     final core = await _runCore(src, jobDir: jobDir);
     sw.stop();
@@ -259,6 +278,7 @@ class MotionPipeline {
       peakRssMb: _currentRssMb(),
       configJson: config.toJsonString(),
       configHash: config.configHash,
+      contentHash: contentHash,
       parallel: core.parallel,
       parallelFallback: core.parallelFallback,
       warnings: core.warnings,
@@ -269,7 +289,9 @@ class MotionPipeline {
   /// 主干，无第二套像素逻辑）。strip 模式逐片复用本入口；嵌入方自备解码
   /// 结果时也可直接使用。
   ///
-  /// [baseName] 用于输出目录命名 `<baseName>_<hash8>`；[inputLabel] 仅作
+  /// [baseName] 用于输出目录命名 `<baseName>_<contentHash8>_<configHash8>`
+  /// ——contentHash8 取传入栅格 RGBA 字节的指纹（无原始文件字节可用，
+  /// 与 [processFile] 的文件字节指纹口径不同但同样确定）；[inputLabel] 仅作
   /// 结果记录（ledger / 调试），不参与渲染。注意：像素总量预算在解码阶段
   /// 执行，本入口不做二次解码校验。
   Future<PipelineResult> processImage(
@@ -279,8 +301,9 @@ class MotionPipeline {
     String inputLabel = 'memory:image',
   }) async {
     final sw = Stopwatch()..start();
-    final jobDir =
-        '$outputDir/${baseName}_${config.configHash.substring(0, 8)}';
+    final contentHash = ImageIO.contentHash8(source.data);
+    final jobDir = '$outputDir/'
+        '${baseName}_${contentHash}_${config.configHash.substring(0, 8)}';
     final core = await _runCore(source, jobDir: jobDir);
     sw.stop();
     return PipelineResult(
@@ -296,6 +319,7 @@ class MotionPipeline {
       peakRssMb: _currentRssMb(),
       configJson: config.toJsonString(),
       configHash: config.configHash,
+      contentHash: contentHash,
       parallel: core.parallel,
       parallelFallback: core.parallelFallback,
       warnings: core.warnings,
@@ -330,6 +354,7 @@ class MotionPipeline {
       peakRssMb: _currentRssMb(),
       configJson: config.toJsonString(),
       configHash: config.configHash,
+      contentHash: ImageIO.contentHash8(input),
       parallel: core.parallel,
       parallelFallback: core.parallelFallback,
       warnings: core.warnings,
@@ -588,8 +613,9 @@ class MotionPipeline {
   }
 
   /// 取消/超时的默认清理：删除本次运行写出的 GIF / params.json / 帧 PNG；
-  /// 目录仅在变空时移除。jobDir 内嵌 hash8——能落到同一目录的必然是同
-  /// stem + 同配置，历史产物可复现再生，删除不构成损失。
+  /// 目录仅在变空时移除。jobDir 内嵌 contentHash8 + configHash8——能落到
+  /// 同一目录的必然是同内容 + 同 stem + 同配置，历史产物可复现再生，
+  /// 删除不构成损失。
   static void _cleanupPartial(String jobDir) {
     void silentDeleteFile(String p) {
       try {

@@ -3,6 +3,7 @@
 ## Unreleased（1.3.1 候选）
 
 - 适配核心包 1.3.1：`EffectConfig.fromFile` → `effectConfigFromFile`；`EngineWorkerException.code` 改为实例字段（HTTP 层 `E_WORKER_CRASH` 映射不变）。
+- **产物目录命名纳入内容指纹**：核心包 T1 将产物目录改为 `<stem>_<contentHash8>_<configHash8>`（strip 片级同步）；本包无代码改动，任务台账经 `PipelineResult.toJson` 自动携带 `contentHash` 字段。旧格式缓存目录需部署侧自行清理。
 - 新增 HTTP 契约测试：health、E_INVALID_JSON / E_BAD_CONFIG / E_NO_INPUT、提交-轮询-success 全流程（产物落盘 + 台账可查）。
 
 ## 1.3.0

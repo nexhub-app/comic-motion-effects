@@ -54,6 +54,15 @@ class ImageIO {
   static RgbaImage decodeFile(String path,
       {int maxFileBytes = 64 * 1024 * 1024,
       int maxPixels = defaultMaxPixels}) {
+    return decode(readFileBytes(path, maxFileBytes: maxFileBytes),
+        maxPixels: maxPixels);
+  }
+
+  /// 读取输入文件字节，带与 [decodeFile] 相同的落盘前守卫（存在 / 非空 /
+  /// 64MB 上限）。需要「同一份字节既做内容指纹又做解码输入」的调用方
+  /// （processFile 的单次读盘路径）用它代替 readAsBytesSync。
+  static Uint8List readFileBytes(String path,
+      {int maxFileBytes = 64 * 1024 * 1024}) {
     final f = io.File(path);
     if (!f.existsSync()) {
       throw ImageDecodeException('File not found: $path',
@@ -67,7 +76,25 @@ class ImageIO {
     if (len > maxFileBytes) {
       throw ImageTooLargeException(len, 0);
     }
-    return decode(f.readAsBytesSync(), maxPixels: maxPixels);
+    return f.readAsBytesSync();
+  }
+
+  /// 输入内容指纹：FNV-1a 64（与 configHash 同风格）十六进制的前 8 位。
+  /// 只描述输入字节本身，与配置正交——不进 `EffectConfig` 序列化，
+  /// 也不参与 configHash；同名文件内容变化时指纹随之变化，产物目录因此
+  /// 不再互相覆盖。
+  ///
+  /// 输出恒为 8 位 `[0-9a-f]`：Dart int 是 64 位有符号，直接 toRadixString
+  /// 会在最高位置位时产出带负号的串，这里按高低 32 位拆成两段无符号十六进制。
+  static String contentHash8(List<int> bytes) {
+    var hash = 0xcbf29ce484222325;
+    for (final b in bytes) {
+      hash ^= b & 0xff;
+      hash = (hash * 0x100000001b3) & 0xffffffffffffffff;
+    }
+    final hi = ((hash >> 32) & 0xffffffff).toRadixString(16).padLeft(8, '0');
+    final lo = (hash & 0xffffffff).toRadixString(16).padLeft(8, '0');
+    return (hi + lo).substring(0, 8);
   }
 
   static void _checkPixelBudget(int width, int height, int maxPixels) {

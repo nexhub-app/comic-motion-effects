@@ -180,8 +180,9 @@ class StripProcessResult {
 
 /// 条漫 strip 模式入口：长图 → 视口比例切片 → 每片走标准管线独立渲染。
 ///
-/// 输出命名：`<stem>_slice<NNN>_<hash8>/anim.gif`——每片独立目录、独立
-/// configHash（同配置同 hash，同输入同片内容逐字节可复现，天然缓存去重）。
+/// 输出命名：`<stem>_slice<NNN>_<contentHash8>_<configHash8>/anim.gif`——每片
+/// 独立目录、独立 configHash 与片级 contentHash（片栅格 RGBA 字节指纹），
+/// 同配置同输入逐字节可复现，源图重下载/覆盖后片目录随之改变，天然防串缓存。
 ///
 /// 像素总量上限（第一轮 maxPixels）在切片前由解码强制执行：整话超限抛
 /// `ImageTooLargeException`（code `E_TOO_LARGE`）。注意 strip 模式仍需把
