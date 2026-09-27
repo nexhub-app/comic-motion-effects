@@ -66,6 +66,7 @@ class FrameJobSpec {
     this.pngDir,
     this.gif,
     this.wantPngBytes = false,
+    this.rectMode = false,
   });
 
   factory FrameJobSpec.fromLayers({
@@ -75,6 +76,7 @@ class FrameJobSpec {
     String? pngDir,
     GifEncoderSpec? gif,
     bool wantPngBytes = false,
+    bool rectMode = false,
   }) =>
       FrameJobSpec(
         width: base.width,
@@ -85,6 +87,7 @@ class FrameJobSpec {
         pngDir: pngDir,
         gif: gif,
         wantPngBytes: wantPngBytes,
+        rectMode: rectMode,
       );
 
   final int width;
@@ -101,25 +104,35 @@ class FrameJobSpec {
   /// 仅 opt-in 时启用——不设则 PNG 仍是就地副作用，栅格不出 isolate。
   final bool wantPngBytes;
 
+  /// rect 帧间差分（T5）：worker 只做「渲染 + 量化」回传索引图，差分与
+  /// LZW 在主 isolate 按帧序进行（差分状态在构建器内，无法乱序并行）。
+  final bool rectMode;
+
   /// 每个 worker 常驻的栅格字节数（底图 + 各层 + 在途帧 + 索引帧）。
   int get rasterBytesPerWorker => width * height * 4 * (layerPixels.length + 3);
 }
 
 /// 单帧产物：GIF 片段字节（不编 GIF 时为 null）；`wantPngBytes` 时附带该帧
-/// PNG 字节（供 onFrame 帧流回调），否则为 null。PNG 落盘仍是就地副作用。
+/// PNG 字节（供 onFrame 帧流回调）；rect 模式下 `indexed` 携带量化索引图
+/// 代替 GIF 片段（差分在主 isolate 做）。PNG 落盘仍是就地副作用。
 class FrameOutput {
-  FrameOutput(this.index, this.gifBody, {this.from, this.pngBytes})
+  FrameOutput(this.index, this.gifBody,
+      {this.from, this.pngBytes, this.indexed})
       : error = null;
   FrameOutput.failed(this.index, this.error)
       : gifBody = null,
         from = null,
-        pngBytes = null;
+        pngBytes = null,
+        indexed = null;
 
   final int index;
   final Uint8List? gifBody;
 
   /// 该帧 PNG 字节（仅 wantPngBytes 时非 null；与磁盘 frame_NNNN.png 同源同字节）。
   final Uint8List? pngBytes;
+
+  /// rect 模式：量化索引图（行主序 width×height），差分在主 isolate 按序做。
+  final Uint8List? indexed;
   final String? error;
 
   /// worker 用来把自己归还给空闲池；串行路径为 null。
@@ -132,7 +145,8 @@ class FrameOutput {
 /// 给定同一份定板调色板，单帧编码不依赖任何跨帧状态（编码器缓存只做纯查表
 /// 记忆，只影响速度）。
 class FrameJob {
-  FrameJob(this.compositor, {this.pngDir, this.encoder, this.wantPngBytes = false});
+  FrameJob(this.compositor,
+      {this.pngDir, this.encoder, this.wantPngBytes = false, this.rectMode = false});
 
   factory FrameJob.fromSpec(FrameJobSpec s) => FrameJob(
         FrameCompositor.fromRasters(
@@ -145,12 +159,14 @@ class FrameJob {
         pngDir: s.pngDir,
         encoder: s.gif?.build(),
         wantPngBytes: s.wantPngBytes,
+        rectMode: s.rectMode,
       );
 
   final FrameCompositor compositor;
   final String? pngDir;
   final GifFrameEncoder? encoder;
   final bool wantPngBytes;
+  final bool rectMode;
 
   FrameOutput run(int index, {SendPort? from}) {
     final frame = compositor.renderFrame(index / compositor.config.fps);
@@ -165,8 +181,15 @@ class FrameJob {
     } else if (dir != null) {
       ImageIO.writePngFrame(dir, index, frame);
     }
-    return FrameOutput(index, encoder?.encodeFrameBody(frame),
-        from: from, pngBytes: pngBytes);
+    final enc = encoder;
+    return FrameOutput(
+      index,
+      (rectMode || enc == null) ? null : enc.encodeFrameBody(frame),
+      from: from,
+      pngBytes: pngBytes,
+      indexed:
+          (rectMode && enc != null) ? enc.quantizeIndices(frame) : null,
+    );
   }
 }
 

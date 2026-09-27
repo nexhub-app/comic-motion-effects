@@ -306,6 +306,32 @@ transfer happen only when `onFrame` is set (zero cost otherwise). The
 callback coexists with `onProgress` and stops after cancel/timeout, like
 every other checkpoint.
 
+### GIF frame diffing (opt-in, mobile size)
+
+The default `encoding.diffMode: none` encodes every frame full-canvas and is
+part of the byte-reproduction contract. Webtoon chapters are the biggest
+storage/traffic pain point, so `diffMode: rect` re-encodes each frame as
+only the changed rectangle against the previous frame — the first frame
+stays full-canvas, frames declare *do-not-dispose* so standard decoders
+composite correctly, and a fully static tick becomes a 1×1 placeholder
+frame that keeps the timing. Diffing happens on quantized palette indices;
+dither/sierra error diffusion is per-frame independent, so determinism is
+preserved:
+
+```dart
+final config = EffectConfig(
+  fps: 12, durationSec: 2, maxDimension: 800,
+  effects: [EffectKind.rain, EffectKind.vignette],
+  encoding: EncodingParams(diffMode: 'rect'),
+);
+```
+
+Strip mode routes every slice through the standard pipeline, so slices
+benefit automatically. Expect roughly 2–5× smaller GIFs for webtoon-style
+content (measure with your own material); the decoded result is
+pixel-identical to `none` — locked by tests using a spec-compliant
+compositor.
+
 ### Recommended mobile parameters
 
 | Parameter | Recommendation | Why |

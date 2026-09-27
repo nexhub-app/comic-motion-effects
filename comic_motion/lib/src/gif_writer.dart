@@ -59,9 +59,9 @@ class GifFrameEncoder {
       throw ArgumentError(
           '帧尺寸 ${frame.width}x${frame.height} 与编码器 ${width}x$height 不一致');
     }
-    final indexed = dither ? _quantizeDithered(frame) : _quantizeNearest(frame);
+    final indexed = quantizeIndices(frame);
     final body = BytesBuilder();
-    // Graphic control extension
+    // Graphic control extension（disposal 0 = 不指定，v1.2 起未变）
     body.add([
       0x21,
       0xF9,
@@ -93,6 +93,16 @@ class GifFrameEncoder {
     }
     body.add([0x00]); // block terminator
     return body.takeBytes();
+  }
+
+  /// 量化到全局调色板索引图（行主序，width × height）。帧间差分（rect 模式）
+  /// 在本结果上做——量化是逐帧纯函数（dither 误差扩散逐帧独立），确定性保持。
+  Uint8List quantizeIndices(RgbaImage frame) {
+    if (frame.width != width || frame.height != height) {
+      throw ArgumentError(
+          '帧尺寸 ${frame.width}x${frame.height} 与编码器 ${width}x$height 不一致');
+    }
+    return dither ? _quantizeDithered(frame) : _quantizeNearest(frame);
   }
 
   int _searchExact(int r, int g, int b) {
@@ -277,12 +287,14 @@ class StreamingGifBuilder {
       bool loopForever = true,
       bool dither = false,
       String ditherMode = 'floyd',
-      RenderTier tier = RenderTier.legacy})
+      RenderTier tier = RenderTier.legacy,
+      bool rectDiff = false})
       : delayCs = (100 / fps).round().clamp(2, 100),
         loopForever = loopForever,
         dither = dither,
         sierra = dither && ditherMode == 'sierra' && tier.atLeastStandard,
-        tier = tier;
+        tier = tier,
+        rectDiff = rectDiff;
 
   factory StreamingGifBuilder.fromConfig(
           EffectConfig config, int width, int height) =>
@@ -290,7 +302,8 @@ class StreamingGifBuilder {
           fps: config.fps,
           dither: config.quality.dither,
           ditherMode: config.quality.ditherMode,
-          tier: config.quality.tier);
+          tier: config.quality.tier,
+          rectDiff: config.encoding.diffMode == 'rect');
 
   final int width;
   final int height;
@@ -305,6 +318,10 @@ class StreamingGifBuilder {
 
   final RenderTier tier;
 
+  /// 帧间差分（rect 模式，T5）：只编码相邻帧的变化矩形。差分在主 isolate
+  /// 按帧序进行（worker 只做量化回传索引图），确定性由按序汇聚保证。
+  final bool rectDiff;
+
   /// 管线用：standard+ 档在流式提交前先给三帧探针建调色板。
   bool get wantsProbes => tier.atLeastStandard;
 
@@ -312,6 +329,7 @@ class StreamingGifBuilder {
   List<int>? _palette; // 256 个打包 0xRRGGBB
   GifFrameEncoder? _enc;
   int _frames = 0;
+  Uint8List? _prevIndexed; // rect 模式：上一帧的量化索引图
 
   int get frameCount => _frames;
   bool get hasPalette => _palette != null;
@@ -393,6 +411,11 @@ class StreamingGifBuilder {
 
   void addFrame(RgbaImage frame) {
     if (_palette == null) primePalette([frame]);
+    if (rectDiff) {
+      // rect 模式统一走差分入口（含首帧全画布），保证 _prevIndexed 状态连贯。
+      addIndexedFrame(newFrameEncoder().quantizeIndices(frame));
+      return;
+    }
     _body.add(newFrameEncoder().encodeFrameBody(frame));
     _frames++;
   }
@@ -402,6 +425,90 @@ class StreamingGifBuilder {
     if (!hasPalette) throw StateError('Palette has not been primed');
     _body.add(body);
     _frames++;
+  }
+
+  /// rect 模式专用：提交一帧的量化索引图，与上一帧比较后只编码变化矩形
+  /// （首帧全画布）。必须按帧序调用（差分状态在构建器内）。
+  ///
+  /// - 全零差异帧以 1x1 矩形占位：GIF 帧延迟驱动动画时序，帧不能缺席；
+  ///   1x1 写入的索引与画布现存值一致，视觉上是无操作。
+  /// - 图形控制扩展 disposal 置 1（do-not-dispose）：解码器保留画布，
+  ///   矩形帧按「上一画布 + 本矩形」合成；循环回到首帧（全画布）时自然覆盖。
+  void addIndexedFrame(Uint8List indexed) {
+    if (!hasPalette) throw StateError('Palette has not been primed');
+    if (indexed.length != width * height) {
+      throw ArgumentError('索引图长度 ${indexed.length} 与画布不符');
+    }
+    var left = 0, top = 0, w = width, h = height;
+    final prev = _prevIndexed;
+    if (prev != null && rectDiff) {
+      var minX = width, minY = height, maxX = -1, maxY = -1;
+      for (var y = 0; y < height; y++) {
+        final base = y * width;
+        for (var x = 0; x < width; x++) {
+          if (indexed[base + x] != prev[base + x]) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      if (maxX >= 0) {
+        left = minX;
+        top = minY;
+        w = maxX - minX + 1;
+        h = maxY - minY + 1;
+      } else {
+        left = 0;
+        top = 0;
+        w = 1;
+        h = 1;
+      }
+    }
+    _body.add(_encodeRectBody(indexed, left, top, w, h));
+    _prevIndexed = Uint8List.fromList(indexed);
+    _frames++;
+  }
+
+  /// 矩形帧片段：GCE（disposal 1）+ 图像描述符（left/top/w/h）+ 子矩形 LZW。
+  /// 子矩形取行主序索引，调色板沿用全局板（无局部色表，与全帧路径一致）。
+  Uint8List _encodeRectBody(Uint8List indexed, int left, int top, int w, int h) {
+    final body = BytesBuilder();
+    body.add([
+      0x21,
+      0xF9,
+      0x04,
+      0x04, // disposal = 1 (do not dispose), 无透明色
+      delayCs & 0xff,
+      (delayCs >> 8) & 0xff,
+      0x00,
+      0x00,
+    ]);
+    body.add([
+      0x2C,
+      left & 0xff, (left >> 8) & 0xff,
+      top & 0xff, (top >> 8) & 0xff,
+      w & 0xff, (w >> 8) & 0xff,
+      h & 0xff, (h >> 8) & 0xff,
+      0x00, // no local color table, not interlaced
+    ]);
+    const minCodeSize = 8;
+    body.add([minCodeSize]);
+    final rect = Uint8List(w * h);
+    for (var y = 0; y < h; y++) {
+      rect.setRange(y * w, (y + 1) * w, indexed, (top + y) * width + left);
+    }
+    final lzw = GifFrameEncoder.encodeLzw(rect, minCodeSize);
+    var off = 0;
+    while (off < lzw.length) {
+      final n = math.min(255, lzw.length - off);
+      body.add([n]);
+      body.add(Uint8List.sublistView(lzw, off, off + n));
+      off += n;
+    }
+    body.add([0x00]); // block terminator
+    return body.takeBytes();
   }
 
   List<int> finish() {

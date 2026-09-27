@@ -1154,6 +1154,31 @@ class QualityParams {
       );
 }
 
+/// GIF 编码参数（T5）。
+class EncodingParams {
+  const EncodingParams({this.diffMode = 'none'});
+
+  /// 帧间差分模式：
+  /// - `none`（默认）——每帧全画布 LZW 编码（v1.3 行为，逐字节契约由该
+  ///   默认值守护）；
+  /// - `rect`——相邻帧比较**量化后索引图**，只编码变化矩形（首帧仍全画布，
+  ///   帧 disposal 置 do-not-dispose 供解码器跨帧合成；无变化帧以 1x1 矩形
+  ///   占位保住帧时序）。差分在量化后字节层面进行：dither / sierra 的误差
+  ///   扩散逐帧独立、无跨帧污染，与差分正交，确定性保持。
+  final String diffMode;
+
+  bool get isDefault => diffMode == 'none';
+
+  EncodingParams copyWith({String? diffMode}) =>
+      EncodingParams(diffMode: diffMode ?? this.diffMode);
+
+  Map<String, dynamic> toJson() =>
+      {if (diffMode != 'none') 'diffMode': diffMode};
+
+  static EncodingParams fromJson(Map<String, dynamic> j) =>
+      EncodingParams(diffMode: (j['diffMode'] == 'rect') ? 'rect' : 'none');
+}
+
 class EffectConfig {
   EffectConfig({
     this.effects = const [
@@ -1192,6 +1217,7 @@ class EffectConfig {
     MeteorsParams? meteors,
     MoodScriptParams? moodScript,
     QualityParams? quality,
+    EncodingParams? encoding,
     this.fps = 24,
     this.durationSec = 4.0,
     this.depthMode = DepthMode.autoLayers,
@@ -1242,7 +1268,8 @@ class EffectConfig {
         meteors = meteors ?? MeteorsParams(),
         moodScript = moodScript ?? MoodScriptParams(),
         quality = (quality ?? QualityParams())
-            .copyWith(dither: dither, tier: qualityTier) {
+            .copyWith(dither: dither, tier: qualityTier),
+        encoding = encoding ?? EncodingParams() {
     // Structural fail-fast (v1.3.1): these parameters define the shape of the
     // output; out-of-domain values used to fall through to per-path degenerate
     // behavior (fps=0 divides t by zero in frame rendering, maxFrames<2 breaks
@@ -1305,6 +1332,10 @@ class EffectConfig {
   /// 渲染质量（v1.2 引入 GIF 抖动）。默认 dither=false + tier=legacy，
   /// 即「与 v1.2 逐字节一致」的那一档；JSON 读回时也走同一套默认。
   QualityParams quality;
+
+  /// GIF 编码参数（帧间差分）。条件序列化：默认 `none` 时整段不出现，
+  /// 既有配置的 configHash 不受影响。
+  EncodingParams encoding;
 
   final int fps;
   final double durationSec;
@@ -1385,6 +1416,7 @@ class EffectConfig {
           'moodScript': moodScript.toJson(),
         // v1.2 质量段：仅非默认时序列化，保经典指纹不变
         if (!quality.isDefault) 'quality': quality.toJson(),
+        if (!encoding.isDefault) 'encoding': encoding.toJson(),
         'fps': fps,
         'durationSec': durationSec,
         'depthMode': depthMode.name,
@@ -1641,6 +1673,10 @@ class EffectConfig {
           ? null
           : QualityParams.fromJson(
               (j['quality'] as Map).cast<String, dynamic>()),
+      encoding: j['encoding'] == null
+          ? null
+          : EncodingParams.fromJson(
+              (j['encoding'] as Map).cast<String, dynamic>()),
       fps: (j['fps'] as num?)?.toInt() ?? 24,
       durationSec: (j['durationSec'] as num?)?.toDouble() ?? 4.0,
       depthMode: depthMode,

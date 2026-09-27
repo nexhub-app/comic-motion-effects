@@ -573,6 +573,9 @@ class MotionPipeline {
         : null;
 
     final n = config.frameCount;
+    // rect 帧间差分（T5，opt-in）：worker 回传量化索引图，差分 + LZW 在主
+    // isolate 按帧序做（差分状态在构建器内）。none 模式路径零改动。
+    final rectMode = gif != null && config.encoding.diffMode == 'rect';
     // 调色板探针必须在派工之前定板（worker 只共享板，不建板）。
     // legacy = v1.2 的「首帧建板」；standard+ = 首/中/末三帧，避免只在中间帧
     // 出现的动效亮色挤不进 256 色。renderFrame 是 t 的纯函数，乱序预渲染安全。
@@ -593,10 +596,14 @@ class MotionPipeline {
       final enc = gif.newFrameEncoder();
       final frameCb = onFrame;
       probes.forEach((k, frame) {
-        presolved[k] = FrameOutput(k, enc.encodeFrameBody(frame),
-            pngBytes: frameCb == null
-                ? null
-                : Uint8List.fromList(ImageIO.encodePngFrame(frame)));
+        presolved[k] = FrameOutput(
+          k,
+          rectMode ? null : enc.encodeFrameBody(frame),
+          pngBytes: frameCb == null
+              ? null
+              : Uint8List.fromList(ImageIO.encodePngFrame(frame)),
+          indexed: rectMode ? enc.quantizeIndices(frame) : null,
+        );
       });
       probes.clear();
     } else if (includeFirstFrame) {
@@ -618,6 +625,7 @@ class MotionPipeline {
       pngDir: wantFrames ? frameDir : null,
       gif: gif == null ? null : GifEncoderSpec.from(gif),
       wantPngBytes: onFrame != null,
+      rectMode: rectMode,
     );
     final allIndices = [for (var i = 0; i < n; i++) i];
     final pendingCount = n - presolved.length;
@@ -642,8 +650,13 @@ class MotionPipeline {
       final frameCb = onFrame;
       while (hold.containsKey(written)) {
         final o = hold.remove(written++)!;
-        final body = o.gifBody;
-        if (gif != null && body != null) gif.addEncodedBody(body);
+        final indexed = o.indexed;
+        if (gif != null && indexed != null) {
+          gif.addIndexedFrame(indexed);
+        } else {
+          final body = o.gifBody;
+          if (gif != null && body != null) gif.addEncodedBody(body);
+        }
         // 帧流回调：按帧号有序（drain 顺序即帧序），取消后不再触发。
         final png = o.pngBytes;
         if (frameCb != null &&
@@ -668,7 +681,8 @@ class MotionPipeline {
         final job = FrameJob(compositor,
             pngDir: spec.pngDir,
             encoder: gif?.newFrameEncoder(),
-            wantPngBytes: spec.wantPngBytes);
+            wantPngBytes: spec.wantPngBytes,
+            rectMode: spec.rectMode);
         for (final out in presolved.values) {
           emit(out);
         }

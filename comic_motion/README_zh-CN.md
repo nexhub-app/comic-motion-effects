@@ -231,6 +231,27 @@ final result = await MotionPipeline(config, parallel: 2, onFrame: (index, png) {
 `onFrame` 时才会逐帧编码并回传 PNG（不设置零额外成本）。回调与
 `onProgress` 并存；取消 / 超时后不再回调（与其他检查点同一语义）。
 
+### GIF 帧间差分（opt-in，移动端体积）
+
+默认 `encoding.diffMode: none` 每帧全画布 LZW 编码，属于逐字节复现契约的
+一部分。条漫画一话可达数百 MB 是移动端存储 / 流量的最大痛点，因此
+`diffMode: rect` 把每帧重编码为「相对前一帧的变化矩形」——首帧仍全画布，
+帧声明 do-not-dispose 供标准解码器跨帧合成，完全静止的节拍以 1×1 占位帧
+保住时序。差分在量化后调色板索引层面进行；dither / sierra 的误差扩散逐帧
+独立，确定性保持：
+
+```dart
+final config = EffectConfig(
+  fps: 12, durationSec: 2, maxDimension: 800,
+  effects: [EffectKind.rain, EffectKind.vignette],
+  encoding: EncodingParams(diffMode: 'rect'),
+);
+```
+
+strip 模式每片都走标准管线，片内帧差分自动受益。条漫画类内容 GIF 体积
+大致可缩到原来的 1/2～1/5（请以自己的素材实测）；解码结果与 `none`
+逐像素一致——有测试用规范合成器锁定。
+
 ### 移动端推荐参数
 
 | 参数 | 推荐 | 原因 |

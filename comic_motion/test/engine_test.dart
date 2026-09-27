@@ -1699,6 +1699,148 @@ void main() {
     });
   });
 
+  group('GIF 帧间差分 encoding.diffMode', () {
+    late Directory tmp;
+    setUp(() {
+      tmp = Directory.systemTemp.createTempSync('cm_diff_test');
+    });
+    tearDown(() {
+      tmp.deleteSync(recursive: true);
+    });
+
+    /// GIF89a 规范合成裁判（disposal 0/1：画布跨帧保留、矩形贴盖）。
+    /// image 包 `decode()` 的合成对子矩形帧不可靠（remap/alpha 路径缺陷，
+    /// 既有测试因此只用 decodeFrame）——这里用 decodeFrame 取裸帧
+    /// （gif_check.dart 同款思路），按规范自己合成，none / rect 两侧同法。
+    /// 返回逐帧 RGB 画布快照。
+    List<List<List<int>>> compositeGif(pkg.GifDecoder dec) {
+      final info = dec.info!;
+      final canvas = List.generate(
+          info.height, (_) => List.generate(info.width, (_) => <int>[0, 0, 0]));
+      final out = <List<List<int>>>[];
+      for (var i = 0; i < info.numFrames; i++) {
+        final desc = info.frames[i];
+        final fim = dec.decodeFrame(i)!;
+        expect(fim.width, desc.width, reason: '第 $i 帧解码尺寸 = 描述符矩形');
+        for (var y = 0; y < desc.height; y++) {
+          for (var x = 0; x < desc.width; x++) {
+            final c = fim.getPixel(x, y);
+            canvas[desc.y + y][desc.x + x] = <int>[
+              c.r.toInt(), c.g.toInt(), c.b.toInt(),
+            ];
+          }
+        }
+        out.add([for (final row in canvas) [for (final p in row) ...p]]);
+      }
+      return out;
+    }
+
+    test('配置面：条件序列化、hash 往返、未知值回落 none', () {
+      final base = EffectConfig();
+      expect(base.toJson().containsKey('encoding'), isFalse,
+          reason: '默认 none 整段不序列化，既有指纹不变');
+      expect(EffectConfig(encoding: const EncodingParams()).configHash,
+          base.configHash);
+      final rect =
+          EffectConfig(encoding: const EncodingParams(diffMode: 'rect'));
+      expect(rect.toJson()['encoding'], {'diffMode': 'rect'});
+      expect(rect.configHash, isNot(base.configHash),
+          reason: 'rect 改变编码产物，必须进指纹');
+      expect(EffectConfig.fromJson(rect.toJson()).configHash, rect.configHash);
+      expect(EffectConfig.fromJson(rect.toJson()).encoding.diffMode, 'rect');
+      expect(
+          EffectConfig.fromJson(
+                  {'encoding': {'diffMode': 'typo'}}).encoding.diffMode,
+          'none',
+          reason: '未知 diffMode 与 ditherMode 同语义回落默认');
+    });
+
+    test('none 为默认：显式 none 与缺省的 GIF 逐字节一致（红线）', () async {
+      final png = _pngEncode(_gradientImage(64, 96));
+      final a = await MotionPipeline(
+              EffectConfig(fps: 4, durationSec: 1, maxDimension: 64),
+              parallel: 1)
+          .processBytes(input: Uint8List.fromList(png));
+      final b = await MotionPipeline(
+          EffectConfig(
+              fps: 4, durationSec: 1, maxDimension: 64,
+              encoding: const EncodingParams()),
+          parallel: 1)
+          .processBytes(input: Uint8List.fromList(png));
+      expect(b.gifBytes, equals(a.gifBytes),
+          reason: 'diffMode 缺省与显式 none 必须同字节');
+    });
+
+    test('rect：标准解码器逐帧合成还原与 none 完全一致（串行 + worker 路径）',
+        () async {
+      final png = _pngEncode(_gradientImage(96, 96));
+      EffectConfig cfg({bool rect = false}) => EffectConfig(
+            fps: 4, durationSec: 1, maxDimension: 96,
+            encoding: rect
+                ? const EncodingParams(diffMode: 'rect')
+                : const EncodingParams(),
+          );
+
+      for (final spec in [
+        {'parallel': 1, 'tier': RenderTier.legacy},
+        {'parallel': 3, 'tier': RenderTier.standard},
+      ]) {
+        final tier = spec['tier'] as RenderTier;
+        final noneCfg = cfg()
+          ..quality = QualityParams(tier: tier);
+        final rectCfg = cfg(rect: true)
+          ..quality = QualityParams(tier: tier);
+        final none = await MotionPipeline(noneCfg,
+                parallel: spec['parallel'] as int)
+            .processBytes(input: Uint8List.fromList(png));
+        final rect = await MotionPipeline(rectCfg,
+                parallel: spec['parallel'] as int)
+            .processBytes(input: Uint8List.fromList(png));
+        expect(rect.gifBytes, isNotNull);
+
+        final compNone = compositeGif(pkg.GifDecoder(none.gifBytes!));
+        final compRect = compositeGif(pkg.GifDecoder(rect.gifBytes!));
+        expect(compNone.length, noneCfg.frameCount);
+        expect(compRect.length, compNone.length,
+            reason: 'tier=$tier rect 模式帧数一致（1x1 占位帧也算一帧）');
+        for (var i = 0; i < compNone.length; i++) {
+          expect(compRect[i], equals(compNone[i]),
+              reason: 'tier=$tier 第 $i 帧：rect 合成结果与 none 逐像素一致');
+        }
+      }
+    }, timeout: const Timeout(Duration(minutes: 2)));
+
+    test('rect：体积小于全量编码（同帧重复 → 变化矩形 1x1 占位）', () {
+      const w = 64, h = 64;
+      final f = RgbaImage(width: w, height: h);
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+          f.setPixel(x, y, x * 255 ~/ (w - 1), y * 255 ~/ (h - 1), 128);
+        }
+      }
+      final bNone = StreamingGifBuilder(w, h, fps: 5);
+      for (var i = 0; i < 4; i++) {
+        bNone.addFrame(f);
+      }
+      final bRect = StreamingGifBuilder(w, h, fps: 5, rectDiff: true);
+      for (var i = 0; i < 4; i++) {
+        bRect.addFrame(f);
+      }
+      final noneBytes = Uint8List.fromList(bNone.finish());
+      final rectBytes = Uint8List.fromList(bRect.finish());
+      expect(bRect.frameCount, 4, reason: '无变化帧仍占一帧（时序不丢）');
+      expect(rectBytes.length, lessThan(noneBytes.length),
+          reason: '变化矩形远小于全画布 LZW');
+      // 静态画面：rect 规范合成逐帧与 none 一致
+      final compNone = compositeGif(pkg.GifDecoder(noneBytes));
+      final compRect = compositeGif(pkg.GifDecoder(rectBytes));
+      expect(compRect.length, compNone.length);
+      for (var i = 0; i < compNone.length; i++) {
+        expect(compRect[i], equals(compNone[i]), reason: '第 $i 帧一致');
+      }
+    });
+  });
+
   group('StreamingGifBuilder 流式 GIF 编码器', () {
     RgbaImage gradFrame(int w, int h, int phase) {
       final img = RgbaImage(width: w, height: h);

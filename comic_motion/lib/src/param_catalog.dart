@@ -129,6 +129,16 @@ const List<ParamSpec> kRenderParamSpecs = [
         '抗锯齿 + 面积平均重采样；rich 目前与 standard 等价',
   ),
   ParamSpec(
+    name: 'diffMode',
+    type: 'enum',
+    enumValues: ['none', 'rect'],
+    strictRange: false,
+    defaultValue: 'none',
+    mapsTo: 'encoding.diffMode',
+    description: 'GIF 帧间差分：none 每帧全画布编码（v1.3 行为）；rect '
+        '相邻帧只编码变化矩形，移动端体积收益大（条漫画尤甚）',
+  ),
+  ParamSpec(
     name: 'outputFormat',
     type: 'enum',
     enumValues: ['gif', 'frames', 'both'],
