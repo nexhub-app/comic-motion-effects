@@ -1447,6 +1447,166 @@ void main() {
     });
   });
 
+  group('MotionCacheManager 缓存管理', () {
+    late Directory tmp;
+    setUp(() {
+      tmp = Directory.systemTemp.createTempSync('cm_cache_test');
+    });
+    tearDown(() {
+      tmp.deleteSync(recursive: true);
+    });
+
+    /// 造一个（可能合法的）缓存条目目录：files 为 相对名 → 字节数。
+    void touchDir(String path, Map<String, int> files) {
+      Directory(path).createSync(recursive: true);
+      files.forEach((name, size) {
+        File('$path/$name').writeAsBytesSync(List.filled(size, 0xAB));
+      });
+    }
+
+    test('解析：两种契约形态识别，非法条目一律跳过', () {
+      final root = '${tmp.path}/cache';
+      touchDir('$root/page01_abcd1234_11223344',
+          {'anim.gif': 100, 'params.json': 10});
+      touchDir('$root/long_stem_slice000_deadbeef_55667788', {'anim.gif': 200});
+      touchDir('$root/page02_11223344_abcd1234', {'anim.gif': 40});
+      touchDir('$root/page03_abcd1234_-606ca22', {'anim.gif': 5});
+      File('$root/stray.txt').writeAsStringSync('keep me');
+      touchDir('$root/unknown_dir', {'x.bin': 999});
+      touchDir('$root/tooshort_12345678', {'f': 1}); // 只有 cf8 一段
+      touchDir('$root/badch_zzzzzzzz_11223344', {'f': 1}); // ch8 非 hex
+
+      final mgr = MotionCacheManager(root);
+      final entries = mgr.listEntries();
+      expect(entries.length, 4, reason: '仅契约条目被识别');
+
+      final single = entries.singleWhere((e) => e.stem == 'page01');
+      expect(single.contentHash, 'abcd1234');
+      expect(single.configHash, '11223344');
+      expect(single.sliceIndex, isNull);
+      expect(single.byteSize, 110);
+      expect(single.isSlice, isFalse);
+      expect(File(single.directory).parent.path.endsWith('cache'), isTrue);
+
+      // 负值 configHash 的字面形态（- + 7 hex）按原样识别
+      final neg = entries.singleWhere((e) => e.stem == 'page03');
+      expect(neg.configHash, '-606ca22');
+
+      final slice = entries.singleWhere((e) => e.sliceIndex != null);
+      expect(slice.stem, 'long_stem', reason: 'stem 含下划线时正确回溯');
+      expect(slice.sliceIndex, 0);
+      expect(slice.contentHash, 'deadbeef');
+      expect(slice.configHash, '55667788');
+      expect(slice.byteSize, 200);
+
+      expect(mgr.entryCount(), 4);
+      expect(mgr.totalSize(), 110 + 200 + 40 + 5);
+      // 非契约文件与目录原样保留
+      expect(File('$root/stray.txt').existsSync(), isTrue);
+      expect(Directory('$root/unknown_dir').existsSync(), isTrue);
+      expect(Directory('$root/tooshort_12345678').existsSync(), isTrue);
+      expect(Directory('$root/badch_zzzzzzzz_11223344').existsSync(), isTrue);
+    });
+
+    test('purgeLRU：olderThan / maxEntries / maxBytes 边界', () {
+      final root = '${tmp.path}/lru';
+      String entry(String stem, String ch, int bytes) {
+        final dir = '$root/${stem}_${ch}_11223344';
+        touchDir(dir, {'anim.gif': bytes});
+        final f = File('$dir/anim.gif');
+        final ages = {'e1': 10, 'e2': 5, 'e3': 1};
+        final ageHours = ages[stem]!;
+        f.setLastModifiedSync(
+            DateTime.now().subtract(Duration(hours: ageHours)));
+        return dir;
+      }
+
+      entry('e1', 'aaaaaaaa', 100); // 最旧
+      entry('e2', 'bbbbbbbb', 200);
+      entry('e3', 'cccccccc', 300); // 最新
+
+      // olderThan：只删 5 小时前的 e1
+      final r1 = MotionCacheManager(root)
+          .purgeLRU(olderThan: const Duration(hours: 6));
+      expect(r1.count, 1);
+      expect(r1.purged.single.stem, 'e1');
+      expect(r1.freedBytes, 100);
+      expect(Directory('$root/e1_aaaaaaaa_11223344').existsSync(), isFalse);
+
+      // maxEntries：保留最新 2 条，再删最旧的 e2
+      entry('e1', 'aaaaaaaa', 100); // 重建
+      final r2 = MotionCacheManager(root).purgeLRU(maxEntries: 2);
+      expect(r2.count, 1);
+      expect(r2.purged.single.stem, 'e1', reason: '按新到旧保留 2 条，最旧者淘汰');
+      expect(Directory('$root/e2_bbbbbbbb_11223344').existsSync(), isTrue);
+
+      // maxBytes：500 字节预算恰好保留 e3(300)+e2(200)，删 e1(100)
+      entry('e1', 'aaaaaaaa', 100);
+      final r3 = MotionCacheManager(root).purgeLRU(maxBytes: 500);
+      expect(r3.count, 1);
+      expect(r3.purged.single.stem, 'e1');
+      expect(r3.freedBytes, 100);
+      expect(MotionCacheManager(root).totalSize(), 500);
+
+      // 三条件组合：全部清空（olderThan 覆盖所有 + maxEntries=0）
+      final r4 = MotionCacheManager(root)
+          .purgeLRU(maxEntries: 0, olderThan: const Duration(seconds: 1));
+      expect(r4.count, 2);
+      expect(MotionCacheManager(root).entryCount(), 0);
+    });
+
+    test('purgePrefix / purgeAll：片级条目同 stem 清理，非法条目保留', () {
+      final root = '${tmp.path}/purge';
+      touchDir('$root/chap01_aaaaaaaa_11223344', {'anim.gif': 10});
+      touchDir('$root/chap01_slice000_bbbbbbbb_11223344', {'anim.gif': 20});
+      touchDir('$root/chap01_slice001_bbbbbbbb_11223344', {'anim.gif': 30});
+      touchDir('$root/chap02_cccccccc_11223344', {'anim.gif': 40});
+      touchDir('$root/keepme_dir', {'f': 1});
+      File('$root/keepme.txt').writeAsStringSync('x');
+
+      final mgr = MotionCacheManager(root);
+      final r = mgr.purgePrefix('chap01');
+      expect(r.count, 3, reason: '同 stem 的单图与全部片级条目一并清理');
+      expect(r.freedBytes, 60);
+      expect(Directory('$root/chap02_cccccccc_11223344').existsSync(), isTrue);
+      expect(Directory('$root/keepme_dir').existsSync(), isTrue);
+      expect(File('$root/keepme.txt').existsSync(), isTrue);
+
+      final rAll = mgr.purgeAll();
+      expect(rAll.count, 1);
+      expect(rAll.purged.single.stem, 'chap02');
+      expect(MotionCacheManager(root).entryCount(), 0);
+      expect(Directory('$root/keepme_dir').existsSync(), isTrue,
+          reason: 'purgeAll 绝不触碰非契约条目');
+    });
+
+    test('与管线集成：同内容单条目，内容变化后新旧条目并存可清', () async {
+      final root = '${tmp.path}/cache_e2e';
+      final inPath = '${tmp.path}/in.png';
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 64)));
+      final r1 = await MotionPipeline(cfg, parallel: 1)
+          .processFile(inPath, root);
+      var entries = MotionCacheManager(root).listEntries();
+      expect(entries.length, 1);
+      expect(entries.single.stem, 'in');
+      expect(entries.single.contentHash, r1.contentHash);
+      expect(entries.single.configHash, cfg.configHash.substring(0, 8));
+
+      File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(48, 48)));
+      final r2 = await MotionPipeline(cfg, parallel: 1)
+          .processFile(inPath, root);
+      entries = MotionCacheManager(root).listEntries();
+      expect(entries.length, 2, reason: '同 stem 不同内容 → 两个条目并存');
+      final report = MotionCacheManager(root).purgePrefix('in');
+      expect(report.count, 2);
+      expect(report.freedBytes,
+          entries.fold<int>(0, (s, e) => s + e.byteSize));
+      expect(MotionCacheManager(root).entryCount(), 0);
+      expect(r1.contentHash, isNot(r2.contentHash));
+    });
+  });
+
   group('StreamingGifBuilder 流式 GIF 编码器', () {
     RgbaImage gradFrame(int w, int h, int phase) {
       final img = RgbaImage(width: w, height: h);

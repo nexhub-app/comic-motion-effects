@@ -142,7 +142,9 @@ for (final s in strip.slices) {
 产物目录按 `<stem>_<contentHash8>_<configHash8>` 命名（strip 模式为
 `<stem>_slice<NNN>_<contentHash8>_<configHash8>`）。两个 hash 是正交的两个维度：
 
-- `configHash8` —— 参数指纹的前 8 位十六进制，同配置必同值。
+- `configHash8` —— 参数指纹字符串的前 8 位。同配置必同值；FNV-1a 结果最高
+  位置位时该段带前导 `-`（configHash 是有符号整数的十六进制串，稳定且
+  按字面携带）。
 - `contentHash8` —— **输入字节** FNV-1a 64 指纹的前 8 位（`processImage`
   无原始文件字节，取传入栅格 RGBA 字节计算，同样确定）。内容指纹不进
   `EffectConfig` 序列化，也不参与 configHash。
@@ -152,6 +154,35 @@ for (final s in strip.slices) {
 **BREAKING 变更**（1.3.1 之前为 `<stem>_<configHash8>`）：旧产物目录不被
 新布局识别，需 App 侧自行清理（对缓存根目录做一次性删除是安全的——里面
 只会有引擎产物）。
+
+### 缓存管理
+
+上面的命名契约是库自己定义的——清理工具也由库提供（`MotionCacheManager`，
+`cache_manager.dart`）：
+
+```dart
+final cache = MotionCacheManager(cacheRootDir);
+
+for (final e in cache.listEntries()) {
+  print('${e.stem} slice=${e.sliceIndex} ${e.byteSize}B ${e.modifiedAt}');
+}
+print(cache.totalSize());
+
+// LRU 淘汰：先删 30 天前的旧条目，再在 200 条 / 512MB 预算内从旧到新淘汰。
+// 三个条件可任意组合。
+final report = cache.purgeLRU(
+    olderThan: const Duration(days: 30),
+    maxEntries: 200,
+    maxBytes: 512 << 20);
+print(report); // 清理明细（条目 + 释放字节）
+
+cache.purgePrefix('chapter_0042'); // 清某一话：含全部片级条目
+cache.purgeAll();
+```
+
+`purge*` 只删除**完整匹配库命名契约**的目录；无法识别的文件与目录（App
+自己的东西）一律跳过、绝不触碰。条漫画一话可产出几十个片级 GIF——长期
+运行的 App 请按周期做 `purgeLRU`。
 
 ### 静帧与首帧封面
 

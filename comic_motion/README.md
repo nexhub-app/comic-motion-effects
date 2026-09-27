@@ -204,8 +204,10 @@ Product directories are named `<stem>_<contentHash8>_<configHash8>`
 (`<stem>_slice<NNN>_<contentHash8>_<configHash8>` in strip mode). The two
 hashes are orthogonal dimensions:
 
-- `configHash8` — first 8 hex of the parameter fingerprint. Same config ⇒
-  same value.
+- `configHash8` — first 8 characters of the parameter fingerprint string.
+  Same config ⇒ same value; for configs whose FNV-1a value has its top bit
+  set this segment carries a leading `-` (the `configHash` string is a
+  signed-int hex rendering — stable and carried verbatim).
 - `contentHash8` — first 8 hex of the FNV-1a 64 fingerprint over the **input
   bytes** (`processImage` fingerprints the passed RGBA raster instead, since
   no file bytes exist there). Content fingerprints never enter
@@ -218,6 +220,36 @@ Note this is a **breaking change to the naming contract** (pre-1.3.1 caches
 used `<stem>_<configHash8>`): old product directories are not recognized by
 the new layout and must be cleaned up app-side (one-off `delete` of the cache
 root is safe — it only ever contained engine products).
+
+### Cache management
+
+The naming contract above is the library's own — so the library ships the
+cleanup tool (`MotionCacheManager`, `cache_manager.dart`):
+
+```dart
+final cache = MotionCacheManager(cacheRootDir);
+
+for (final e in cache.listEntries()) {
+  print('${e.stem} slice=${e.sliceIndex} ${e.byteSize}B ${e.modifiedAt}');
+}
+print(cache.totalSize());
+
+// LRU purge: drop entries older than 30 days, then keep the newest 200
+// within a 512 MB budget. Any combination of the three limits is valid.
+final report = cache.purgeLRU(
+    olderThan: const Duration(days: 30),
+    maxEntries: 200,
+    maxBytes: 512 << 20);
+print(report); // purged entries + freed bytes
+
+cache.purgePrefix('chapter_0042'); // one work: slices included
+cache.purgeAll();
+```
+
+`purge*` methods only ever delete directories that **fully match the
+library's naming contract**; unrecognized files and directories (the app's
+own) are skipped untouched. Webtoon chapters render dozens of slice GIFs per
+chapter — budget a periodic `purgeLRU` in long-running apps.
 
 ### Still frames & first-frame covers
 
