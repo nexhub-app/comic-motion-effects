@@ -244,6 +244,34 @@ frames/frame_0000.png ...   # per-frame PNGs
 params.json                 # full parameter replay file
 ```
 
+## Input format matrix
+
+Decoding is delegated to the pure-Dart `image` package (behavior pinned by
+tests; the animated-WebP contract below is locked by a test so a dependency
+upgrade cannot silently drift):
+
+| Format | Status | Behavior |
+|---|---|---|
+| JPEG | ✅ supported | Baseline decoder, full decode path |
+| PNG | ✅ supported | Baseline decoder, full decode path |
+| WebP (static, VP8 lossy) | ✅ supported | Full decode path |
+| WebP (static, VP8L lossless) | ✅ supported | Full decode path |
+| WebP (extended header, VP8X) | ✅ supported | Canvas-size aware |
+| **WebP (animated)** | ⚠️ **first frame only** | Decodes successfully; the engine renders from frame 0 and discards the remaining animation frames (measured on `image` 4.10.1 — the animation itself is never animated) |
+| **GIF (incl. animated)** | ⚠️ **first frame only** | Also decodes successfully (`image` ships a GIF decoder); the engine renders from the decoded first frame, animation frames discarded |
+| AVIF / HEIF | 🚫 not supported | Rejected as `E_DECODE_CORRUPT`; transcode to PNG/JPEG/WebP first |
+
+Corrupted / disguised files take these error paths:
+
+| Input | Code |
+|---|---|
+| 0-byte file / empty bytes | `E_DECODE_EMPTY` |
+| File not found (path input) | `E_DECODE_NOT_FOUND` |
+| Text file disguised as an image | `E_DECODE_CORRUPT` |
+| Corrupt or truncated bitstream | `E_DECODE_CORRUPT` |
+| Header-declared dimensions exceed the pixel budget | `E_TOO_LARGE` (rejected **before** raster allocation — pixel bombs never allocate) |
+| Long-strip-shaped rejection (height > 2 × width) | `E_TOO_LARGE` + message hinting at strip mode (`processStrip`) |
+
 ## Render tiers (quality)
 
 | Tier | Contents | Purpose |

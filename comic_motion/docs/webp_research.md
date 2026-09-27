@@ -47,6 +47,19 @@
 5. **验收标准**：体积对比基准（bench 增 WebP 场景）；GIF↔WebP 同参产物
    视觉一致性抽检；`gif_check.dart` 对应的 `webp_check.dart` 严格解码校验。
 
+## 五、输入侧行为实测（R7 补记，2026-09-27）
+
+本包**输出** Animated WebP 尚未实现（上表是路线建议），但**输入侧**的
+Animated WebP 行为已实测锁定（README 输入格式矩阵有对应契约测试）：
+
+- 手工构造 Animated WebP（VP8X 动画标志 + ANIM + 两个 ANMF/VP8L 子块），
+  `ImageIO.decode` **不报错**：`image` 4.10.1 会解码动画容器并取首帧像素，
+  其余动画帧被丢弃——引擎以该首帧为静态源图渲染动效。
+- Animated GIF 输入同理：`image` 包自带 GIF 解码器，解码成功、取首帧。
+- 因此「Animated WebP / GIF 输入」的正确预期是**按首帧静态图处理**，而非
+  报错；此行为契约由 `test/engine_test.dart` 的行为锁定用例保证，`image`
+  包升级若改变该行为会在 CI 首先暴露。
+
 ## 四、GIF 帧间差分 与 条漫 strip 模式（同批 P2 设计提案）
 
 ### GIF 帧间差分（opt-in 编码选项）

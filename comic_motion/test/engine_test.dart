@@ -1131,6 +1131,47 @@ void main() {
       expect(r.slices.first.result.outputGif, isNotEmpty);
     });
 
+    test('Animated WebP：解码成功且取首帧（image 包行为契约，升级时预警）', () {
+      // 实测（image 4.10.1）：animated WebP 不报错——解码动画并取首帧像素，
+      // 其余帧被丢弃。此测试锁住该行为；若 image 包升级后行为变化，此处
+      // 首先暴露（README 输入格式矩阵据此声明）。
+      final eng = ImageIO.decode(_animatedWebpBytes(32, 32));
+      expect(eng.width, 32);
+      expect(eng.height, 32);
+      expect(eng.data[0], 255, reason: '首帧为纯红');
+      expect(eng.data[1], 0);
+      expect(eng.data[2], 0);
+    });
+
+    test('Animated GIF：同样解码成功且取首帧（实测 image 4.10.1）', () {
+      final red = pkg.Image(width: 16, height: 16);
+      pkg.fillRect(red, x1: 0, y1: 0, x2: 15, y2: 15,
+          color: pkg.ColorRgba8(255, 0, 0, 255));
+      final blue = pkg.Image(width: 16, height: 16);
+      pkg.fillRect(blue, x1: 0, y1: 0, x2: 15, y2: 15,
+          color: pkg.ColorRgba8(0, 0, 255, 255));
+      final anim = pkg.Image(width: 16, height: 16)
+        ..addFrame(red)
+        ..addFrame(blue);
+      final eng = ImageIO.decode(pkg.encodeGif(anim).toList());
+      expect(eng.width, 16);
+      expect(eng.height, 16);
+    });
+
+    test('AVIF/HEIF 容器被拒：E_DECODE_CORRUPT（不支持，提示转码）', () {
+      // ftyp 盒的 ISOM 容器头（HEIF/AVIF 同族），无 JPEG/PNG/WebP 签名
+      final fake = <int>[
+        0, 0, 0, 0x18, ...'ftypavif'.codeUnits, 0, 0, 0, 0,
+        ...'mif1avif'.codeUnits, 0, 0, 0, 8, ...'meta'.codeUnits,
+      ];
+      try {
+        ImageIO.decode(fake);
+        fail('should have thrown');
+      } on ImageDecodeException catch (e) {
+        expect(e.code, 'E_DECODE_CORRUPT');
+      }
+    });
+
     test('E_TOO_LARGE：条漫形态的报错提示使用 strip 模式', () {
       final tall = _gradientImage(100, 10000); // h > 2w
       expect(
@@ -3389,3 +3430,64 @@ List<int> _webpWithCanvasSize(int w, int h) {
 
 dynamic jsonDecodePublic(String s) => convert.jsonDecode(s);
 // NOTE: 下方不再有代码 —— GIF writer 测试已并入 main() 内的 'StreamingGifBuilder' 组。
+
+/// 手工构造 Animated WebP（VP8X 动画标志 + ANIM + 两个 ANMF/VP8L 子块），
+/// 首帧纯红、次帧纯蓝，用于锁定「解码取首帧」的行为契约。
+Uint8List _animatedWebpBytes(int w, int h) {
+  final red = pkg.Image(width: w, height: h);
+  pkg.fillRect(red, x1: 0, y1: 0, x2: w - 1, y2: h - 1,
+      color: pkg.ColorRgba8(255, 0, 0, 255));
+  final blue = pkg.Image(width: w, height: h);
+  pkg.fillRect(blue, x1: 0, y1: 0, x2: w - 1, y2: h - 1,
+      color: pkg.ColorRgba8(0, 0, 255, 255));
+  final frame0 = _vp8lPayload(pkg.encodeWebP(red).toList());
+  final frame1 = _vp8lPayload(pkg.encodeWebP(blue).toList());
+
+  final vp8x = <int>[
+    0x02, // animation flag
+    0, 0, 0,
+    (w - 1) & 0xff, ((w - 1) >> 8) & 0xff, ((w - 1) >> 16) & 0xff,
+    (h - 1) & 0xff, ((h - 1) >> 8) & 0xff, ((h - 1) >> 16) & 0xff,
+  ];
+  final out = <int>[...'RIFF'.codeUnits, 0, 0, 0, 0, ...'WEBP'.codeUnits];
+  out.addAll(_webpChunk('VP8X', vp8x));
+  out.addAll(_webpChunk('ANIM', <int>[0, 0, 0, 0, 0, 0])); // bg + loop=∞
+  for (final f in [frame0, frame1]) {
+    final anmfPayload = <int>[
+      0, 0, 0, // x
+      0, 0, 0, // y
+      (w - 1) & 0xff, ((w - 1) >> 8) & 0xff, ((w - 1) >> 16) & 0xff,
+      (h - 1) & 0xff, ((h - 1) >> 8) & 0xff, ((h - 1) >> 16) & 0xff,
+      100, 0, 0, // duration ms
+      0x00, // alpha blend, keep
+    ];
+    out.addAll(
+        _webpChunk('ANMF', [...anmfPayload, ..._webpChunk('VP8L', f)]));
+  }
+  final riffSize = out.length - 8;
+  out[4] = riffSize & 0xff;
+  out[5] = (riffSize >> 8) & 0xff;
+  out[6] = (riffSize >> 16) & 0xff;
+  out[7] = (riffSize >> 24) & 0xff;
+  return Uint8List.fromList(out);
+}
+
+/// 单帧无损 WebP → VP8L 子块 payload（含 0x2F 签名）。
+Uint8List _vp8lPayload(List<int> webp) {
+  final b = Uint8List.fromList(webp);
+  final size = b[16] | (b[17] << 8) | (b[18] << 16) | (b[19] << 24);
+  return Uint8List.sublistView(b, 20, 20 + size);
+}
+
+List<int> _webpChunk(String fourcc, List<int> payload) {
+  final out = <int>[
+    ...fourcc.codeUnits,
+    payload.length & 0xff,
+    (payload.length >> 8) & 0xff,
+    (payload.length >> 16) & 0xff,
+    (payload.length >> 24) & 0xff,
+    ...payload,
+  ];
+  if (payload.length.isOdd) out.add(0);
+  return out;
+}
