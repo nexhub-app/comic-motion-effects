@@ -74,6 +74,50 @@ void main() {
       expect(decoded.width, 4);
       expect(decoded.height, 3);
     });
+
+    test('边长合法但像素总量超限：头解析即拒', () {
+      // 7000x7000 = 49M 像素 > 40M 默认上限；边长 7000 < 12000 合法。
+      // 体数据只有 1x1 —— 证明拒绝发生在分配整幅栅格之前。
+      final bytes = _pngWithDeclaredSize(7000, 7000);
+      expect(
+          () => ImageIO.decode(bytes),
+          throwsA(isA<ImageTooLargeException>()
+              .having((e) => e.pixelCount, 'pixelCount', 49000000)
+              .having((e) => e.maxPixels, 'maxPixels', ImageIO.defaultMaxPixels)
+              .having((e) => e.toString(), 'message', contains('49000000'))));
+    });
+
+    test('头解析即拒：IHDR 后截断的文件也按像素总量拒绝', () {
+      // 只有签名 + IHDR，没有任何图像数据——若等到整图解码才校验，
+      // 这里会得到 ImageDecodeException 而非像素预算拒绝。
+      final bytes = _pngWithDeclaredSize(7000, 7000, truncate: true);
+      expect(() => ImageIO.decode(bytes),
+          throwsA(isA<ImageTooLargeException>()));
+    });
+
+    test('maxPixels 可按调用方配置收紧', () {
+      final png = _pngEncode(_gradientImage(64, 64)); // 4096 像素
+      expect(() => ImageIO.decode(png, maxPixels: 4095),
+          throwsA(isA<ImageTooLargeException>()));
+      // 恰好等于上限时放行，证明嗅探读出的宽高精确可信。
+      expect(ImageIO.decode(png, maxPixels: 4096).pixelCount, 4096);
+    });
+
+    test('JPEG 头嗅探：宽高读数与真实解码一致', () {
+      final jpg = pkg.encodeJpg(_pngToPkg(_gradientImage(64, 48))).toList();
+      // 上限 64*48-1 拒绝、64*48 放行 => 嗅探必须精确读到 64x48。
+      expect(() => ImageIO.decode(jpg, maxPixels: 64 * 48 - 1),
+          throwsA(isA<ImageTooLargeException>()));
+      expect(ImageIO.decode(jpg, maxPixels: 64 * 48).pixelCount, 64 * 48);
+    });
+
+    test('WebP 头嗅探：VP8X 扩展头的画布尺寸参与预算校验', () {
+      // image 包没有 WebP 编码器，手工构造 VP8X 头（只声明画布尺寸），
+      // 8000x8000 = 64M 像素 > 40M：拒绝必须发生在嗅探层。
+      final bytes = _webpWithCanvasSize(8000, 8000);
+      expect(() => ImageIO.decode(bytes),
+          throwsA(isA<ImageTooLargeException>()));
+    });
   });
 
   group('分层拆解', () {
@@ -2486,7 +2530,9 @@ Map<String, dynamic> _decodeJson(String s) {
 Matcher throwsConfigException = throwsA(const TypeMatcher<ConfigException>());
 
 /// PNG encode via image package (same path ImageIO uses).
-List<int> _pngEncode(RgbaImage img) {
+List<int> _pngEncode(RgbaImage img) => pkg.encodePng(_pngToPkg(img)).toList();
+
+pkg.Image _pngToPkg(RgbaImage img) {
   final im = pkg.Image(width: img.width, height: img.height, numChannels: 3);
   for (var y = 0; y < img.height; y++) {
     for (var x = 0; x < img.width; x++) {
@@ -2494,7 +2540,71 @@ List<int> _pngEncode(RgbaImage img) {
       im.setPixelRgb(x, y, img.data[i], img.data[i + 1], img.data[i + 2]);
     }
   }
-  return pkg.encodePng(im).toList();
+  return im;
+}
+
+int _crc32(List<int> data) {
+  var crc = 0xFFFFFFFF;
+  for (final b in data) {
+    crc ^= b;
+    for (var k = 0; k < 8; k++) {
+      crc = (crc >> 1) ^ (0xEDB88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF;
+}
+
+List<int> _pngChunk(String type, List<int> data) {
+  final len = data.length;
+  final body = <int>[...type.codeUnits, ...data];
+  final crc = _crc32(body);
+  return [
+    (len >> 24) & 0xff, (len >> 16) & 0xff, (len >> 8) & 0xff, len & 0xff, //
+    ...body,
+    (crc >> 24) & 0xff, (crc >> 16) & 0xff, (crc >> 8) & 0xff, crc & 0xff,
+  ];
+}
+
+/// 构造一张声明 w×h 的 PNG：IHDR 合法（CRC 正确），体数据只有 1x1 像素，
+/// 或在 IHDR 后直接截断——用于验证解码前的头级像素预算校验。
+List<int> _pngWithDeclaredSize(int w, int h, {bool truncate = false}) {
+  final ihdr = [
+    (w >> 24) & 0xff, (w >> 16) & 0xff, (w >> 8) & 0xff, w & 0xff, //
+    (h >> 24) & 0xff, (h >> 16) & 0xff, (h >> 8) & 0xff, h & 0xff,
+    8, 6, 0, 0, 0, // bit depth 8 / RGBA / compression / filter / interlace
+  ];
+  final bytes = <int>[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, //
+    ..._pngChunk('IHDR', ihdr),
+  ];
+  if (truncate) return bytes;
+  final scanline = [0, 255, 128, 64, 255]; // 1x1 RGBA 的 filter 字节 + 像素
+  bytes.addAll(_pngChunk('IDAT', ZLibEncoder().convert(scanline)));
+  bytes.addAll(_pngChunk('IEND', const []));
+  return bytes;
+}
+
+/// 构造 VP8X 扩展头的 WebP：仅声明画布尺寸（image 包没有 WebP 编码器，
+/// 无法生成可完整解码的样本，但头级校验只需头部成立）。
+List<int> _webpWithCanvasSize(int w, int h) {
+  final vp8x = <int>[
+    0, 0, 0, 0, // flags
+    (w - 1) & 0xff, ((w - 1) >> 8) & 0xff, ((w - 1) >> 16) & 0xff, //
+    (h - 1) & 0xff, ((h - 1) >> 8) & 0xff, ((h - 1) >> 16) & 0xff,
+  ];
+  // RIFF 块 = fourcc + 小端长度 + 数据（无 CRC；10 字节长度天然偶对齐）。
+  final chunk = <int>[
+    ...'VP8X'.codeUnits,
+    vp8x.length & 0xff, (vp8x.length >> 8) & 0xff, (vp8x.length >> 16) & 0xff, 0,
+    ...vp8x,
+  ];
+  final riffSize = 4 + chunk.length;
+  return [
+    ...'RIFF'.codeUnits,
+    riffSize & 0xff, (riffSize >> 8) & 0xff, (riffSize >> 16) & 0xff, 0, //
+    ...'WEBP'.codeUnits,
+    ...chunk,
+  ];
 }
 
 dynamic jsonDecodePublic(String s) => convert.jsonDecode(s);

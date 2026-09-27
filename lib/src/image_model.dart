@@ -83,11 +83,24 @@ class ImageDecodeException implements Exception {
 }
 
 class ImageTooLargeException implements Exception {
-  ImageTooLargeException(this.width, this.height);
+  ImageTooLargeException(this.width, this.height, {this.pixelCount, this.maxPixels});
   final int width;
   final int height;
 
+  /// 实际像素总量。头解析阶段即可精确计算时提供；单边已经超纲、
+  /// 乘积可能溢出的腐坏头部下为 null。
+  final int? pixelCount;
+
+  /// 像素总量上限。像素预算拒绝时提供，与 [pixelCount] 配对出现。
+  final int? maxPixels;
+
   @override
-  String toString() =>
-      'ImageTooLargeException: 图片尺寸 ${width}x$height 超过上限 ${RgbaImage.maxDimension}';
+  String toString() {
+    if (maxPixels != null) {
+      final count = pixelCount != null ? '共 $pixelCount 像素，' : '';
+      return 'ImageTooLargeException: 图片 ${width}x$height ${count}'
+          '超过像素总量上限 $maxPixels（边长上限 ${RgbaImage.maxDimension} 另行校验）';
+    }
+    return 'ImageTooLargeException: 图片尺寸 ${width}x$height 超过上限 ${RgbaImage.maxDimension}';
+  }
 }
