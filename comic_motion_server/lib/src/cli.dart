@@ -4,16 +4,9 @@ import 'package:args/args.dart';
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 
+import 'package:comic_motion/comic_motion.dart';
+
 import 'api_service.dart';
-import 'batch_runner.dart';
-import 'effect_config.dart';
-import 'image_model.dart';
-import 'json_compat.dart';
-import 'ledger.dart';
-import 'pipeline.dart';
-import 'render/quality.dart';
-import 'version.dart';
-import 'worker_pool.dart';
 
 Future<void> main(List<String> args) async {
   final parser = ArgParser()

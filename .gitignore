@@ -10,3 +10,6 @@ DELIVERY/
 realtime/comparison.md
 realtime/readme.md
 presets/.json
+
+# agent session artifacts
+.mimosa/

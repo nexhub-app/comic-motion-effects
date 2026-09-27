@@ -8,12 +8,16 @@ on:
 
 jobs:
   test:
-    name: analyze + test (${{ matrix.os }})
+    name: analyze + test (${{ matrix.os }} / ${{ matrix.package }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        package: [comic_motion, comic_motion_server]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
     steps:
       - uses: actions/checkout@v4
 

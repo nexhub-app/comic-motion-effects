@@ -11,6 +11,7 @@ export 'src/frame_compositor.dart';
 export 'src/gif_writer.dart';
 export 'src/image_io.dart';
 export 'src/image_model.dart';
+export 'src/json_compat.dart';
 export 'src/motion_math.dart';
 export 'src/ledger.dart';
 export 'src/pipeline.dart';
