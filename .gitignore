@@ -4,9 +4,10 @@ build/
 data/ledger/
 *.log
 
-# internal docs (never upload)
-docs/
-DELIVERY/
+# internal docs (never upload) — 仅仓库根的内部文档；
+# comic_motion/docs 与 comic_motion_server/docs 是对外文档，纳入 git
+/docs/
+/DELIVERY/
 realtime/comparison.md
 realtime/readme.md
 presets/.json
