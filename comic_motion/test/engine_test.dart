@@ -1004,6 +1004,36 @@ void main() {
       expect(withRain.toJson(), built.toJson());
     });
 
+    test('estimateCost：1080p 典型场景覆盖 bench 实测区间', () {
+      final cfg = EffectConfig(fps: 24, durationSec: 4, maxDimension: 1600);
+      final est = estimateCost(cfg, sourceWidth: 1920, sourceHeight: 1080);
+      expect(est.workingWidth, 1600, reason: '最长边降到 maxDimension');
+      expect(est.workingHeight, 900);
+      expect(est.frameCount, 96);
+      // bench 实测（README 性能参考）：1080p 534MB/2.25s、1600 上限 607MB
+      expect(est.minPeakMemoryMb <= 534, isTrue, reason: '实测值应落在区间内');
+      expect(est.maxPeakMemoryMb >= 607, isTrue);
+      expect(est.minDurationMs <= 2300, isTrue);
+      expect(est.maxDurationMs >= 2200, isTrue);
+      expect(est.note, contains('empirical'));
+      expect(est.toJson()['maxPeakMemoryMb'], isNotNull);
+    });
+
+    test('estimateCost：无源尺寸保守正方形；reducedMotion 单帧更快', () {
+      final cfg = EffectConfig(fps: 12, durationSec: 2, maxDimension: 800);
+      final est = estimateCost(cfg);
+      expect(est.workingWidth, 800);
+      expect(est.workingHeight, 800);
+      final still = estimateCost(EffectConfig(
+          fps: 12, durationSec: 2, maxDimension: 800, reducedMotion: true));
+      expect(still.frameCount, 1);
+      expect(still.maxDurationMs, lessThan(est.maxDurationMs));
+      // 小源图不放大
+      final small = estimateCost(cfg, sourceWidth: 320, sourceHeight: 240);
+      expect(small.workingWidth, 320);
+      expect(small.workingHeight, 240);
+    });
+
     test('参数目录：完整、去重、默认值与真实配置一致', () {
       final names = kRenderParamSpecs.map((s) => s.name).toList();
       expect(names.length, kRenderParamSpecs.length, reason: '名称去重');
