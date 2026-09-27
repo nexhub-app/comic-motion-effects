@@ -1,5 +1,7 @@
+import 'dart:convert' as convert;
 import 'dart:io' as io;
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'effect_config.dart';
 import 'frame_compositor.dart';
@@ -74,6 +76,85 @@ class PipelineResult {
       };
 }
 
+/// Result of an in-memory run: bytes in ([MotionPipeline.processBytes]),
+/// bytes out. Meta fields mirror [PipelineResult]; there are no paths because
+/// nothing touches the filesystem — the caller owns the returned bytes.
+class MemoryPipelineResult {
+  MemoryPipelineResult({
+    required this.gifBytes,
+    required this.paramsJsonBytes,
+    required this.width,
+    required this.height,
+    required this.layerCount,
+    required this.frameCount,
+    required this.elapsedMs,
+    required this.peakRssMb,
+    required this.configJson,
+    required this.configHash,
+    this.parallel = 1,
+    this.parallelFallback = false,
+    this.warnings = const [],
+  });
+
+  /// Encoded GIF bytes. Null when the config requests frames-only output
+  /// (`outputFormat: frames`) — memory mode never persists PNG frames.
+  final Uint8List? gifBytes;
+
+  /// Exact params.json equivalent (parameter replay payload).
+  final Uint8List paramsJsonBytes;
+  final int width;
+  final int height;
+  final int layerCount;
+  final int frameCount;
+  final int elapsedMs;
+  final double peakRssMb;
+  final String configJson;
+  final String configHash;
+
+  /// 实际生效的并行度（1 = 串行）。执行期属性，不参与 configHash。
+  final int parallel;
+
+  /// true = 请求过并行但被降级（spawn 失败 / 超内存预算 / 核数不足）。
+  final bool parallelFallback;
+
+  /// 配置回落提示（如未知 mood）。执行期属性，不参与 configHash。
+  final List<String> warnings;
+}
+
+/// Shared interior of [MotionPipeline.processFile] and
+/// [MotionPipeline.processBytes]: decode -> budget -> downscale -> depth ->
+/// layers -> probe -> dispatch -> encode. There is exactly one render path;
+/// the file/memory difference is only where the bytes end up.
+class _CoreOutput {
+  _CoreOutput({
+    required this.gifBytes,
+    required this.paramsJson,
+    required this.gifPath,
+    required this.frameDir,
+    required this.paramsFile,
+    required this.layerCount,
+    required this.frameCount,
+    required this.parallel,
+    required this.parallelFallback,
+    required this.warnings,
+  });
+
+  /// null = frames-only（无 GIF 产物）。
+  final Uint8List? gifBytes;
+  final String paramsJson;
+
+  /// 磁盘模式的产物路径；内存模式一律为空串。
+  final String gifPath;
+  final String frameDir;
+  final String paramsFile;
+
+  final int layerCount;
+  final int frameCount;
+  final int parallel;
+  final bool parallelFallback;
+  final List<String> warnings;
+}
+
 /// One-shot processing pipeline: decode -> depth -> layers -> frames -> encode.
 class MotionPipeline {
   MotionPipeline(this.config, {int? parallel, this.memoryBudgetMb})
@@ -121,10 +202,79 @@ class MotionPipeline {
   ///
   /// 帧渲染与 GIF/PNG 编码可派发给 isolate 池并行执行；单帧是纯函数，
   /// 并行度只影响耗时与内存画像，输出字节与串行逐字节一致。
+  ///
+  /// 注意：解码、降采样、深度估算、分层与调色板探针在调用方 isolate 同步
+  /// 执行（仅后续帧渲染派发 worker 池）。UI isolate 里直接调用会卡帧，
+  /// 嵌入方请改用后台 isolate 包装（见 README「Embedding into a Flutter app」）。
   Future<PipelineResult> processFile(String inputPath, String outputDir) async {
     final sw = Stopwatch()..start();
     final src = ImageIO.decodeFile(inputPath);
 
+    // Uniform output naming.
+    final stem = io.File(inputPath).uri.pathSegments.last;
+    final dot = stem.lastIndexOf('.');
+    final baseName = dot > 0 ? stem.substring(0, dot) : stem;
+    final jobDir =
+        '$outputDir/${baseName}_${config.configHash.substring(0, 8)}';
+
+    final core = await _runCore(src, jobDir: jobDir);
+    sw.stop();
+    return PipelineResult(
+      inputPath: inputPath,
+      outputGif: core.gifPath,
+      frameDir: core.frameDir,
+      paramsFile: core.paramsFile,
+      width: src.width,
+      height: src.height,
+      layerCount: core.layerCount,
+      frameCount: core.frameCount,
+      elapsedMs: sw.elapsedMilliseconds,
+      peakRssMb: _currentRssMb(),
+      configJson: config.toJsonString(),
+      configHash: config.configHash,
+      parallel: core.parallel,
+      parallelFallback: core.parallelFallback,
+      warnings: core.warnings,
+    );
+  }
+
+  /// In-memory twin of [processFile]: decode from [input] bytes, render
+  /// through the exact same pipeline, return the encoded bytes. No temporary
+  /// files, no paths. Same input + same config produces GIF bytes identical
+  /// to [processFile] on disk (that equivalence is covered by tests).
+  ///
+  /// `outputFormat: frames` 在内存模式下不落 PNG 帧序列（无处可落），返回的
+  /// [MemoryPipelineResult.gifBytes] 为 null；需要 GIF 时用 gif / both。
+  ///
+  /// 与 [processFile] 相同：解码与分层段同步执行，UI isolate 调用会卡帧，
+  /// 需要后台化时用 isolate 包装（见 README）。
+  Future<MemoryPipelineResult> processBytes(
+      {required Uint8List input, int? maxPixels}) async {
+    final sw = Stopwatch()..start();
+    final src =
+        ImageIO.decode(input, maxPixels: maxPixels ?? ImageIO.defaultMaxPixels);
+    final core = await _runCore(src);
+    sw.stop();
+    return MemoryPipelineResult(
+      gifBytes: core.gifBytes,
+      paramsJsonBytes: Uint8List.fromList(convert.utf8.encode(core.paramsJson)),
+      width: src.width,
+      height: src.height,
+      layerCount: core.layerCount,
+      frameCount: core.frameCount,
+      elapsedMs: sw.elapsedMilliseconds,
+      peakRssMb: _currentRssMb(),
+      configJson: config.toJsonString(),
+      configHash: config.configHash,
+      parallel: core.parallel,
+      parallelFallback: core.parallelFallback,
+      warnings: core.warnings,
+    );
+  }
+
+  /// 共享渲染主干。[jobDir] 为 null 时进入内存模式：不建目录、不写任何文件，
+  /// GIF 字节与 params JSON 原样返回。
+  Future<_CoreOutput> _runCore(RgbaImage src, {String? jobDir}) async {
     // Memory budget: derive the working-resolution cap and the parallel cap
     // before touching the pixel path. 无预算时零改动（legacy 逐字节路径不受
     // 任何影响）。
@@ -189,23 +339,20 @@ class MotionPipeline {
     // Frames: stream-render -> quantize -> LZW -> discard (O(one frame) RAM).
     final compositor = FrameCompositor(layers, working, config);
 
-    // Uniform output naming.
-    final stem = io.File(inputPath).uri.pathSegments.last;
-    final dot = stem.lastIndexOf('.');
-    final baseName = dot > 0 ? stem.substring(0, dot) : stem;
-    final jobDir =
-        '$outputDir/${baseName}_${config.configHash.substring(0, 8)}';
-    io.Directory(jobDir).createSync(recursive: true);
-
     var gifPath = '';
     var frameDir = '';
     final wantGif = config.outputFormat == OutputFormat.gif ||
         config.outputFormat == OutputFormat.both;
-    final wantFrames = config.outputFormat == OutputFormat.frames ||
-        config.outputFormat == OutputFormat.both;
-    if (wantFrames) {
-      frameDir = '$jobDir/frames';
-      io.Directory(frameDir).createSync(recursive: true);
+    // PNG 帧序列只属于磁盘模式；内存模式没有可落盘处（wantFrames 恒 false）。
+    final wantFrames = jobDir != null &&
+        (config.outputFormat == OutputFormat.frames ||
+            config.outputFormat == OutputFormat.both);
+    if (jobDir != null) {
+      io.Directory(jobDir).createSync(recursive: true);
+      if (wantFrames) {
+        frameDir = '$jobDir/frames';
+        io.Directory(frameDir).createSync(recursive: true);
+      }
     }
     final gif = wantGif
         ? StreamingGifBuilder.fromConfig(config, working.width, working.height)
@@ -281,29 +428,32 @@ class MotionPipeline {
         }
       }
     }
+    Uint8List? gifBytes;
     if (gif != null) {
-      gifPath = '$jobDir/anim.gif';
-      io.File(gifPath).writeAsBytesSync(gif.finish());
+      final bytes = gif.finish();
+      if (jobDir != null) {
+        gifPath = '$jobDir/anim.gif';
+        io.File(gifPath).writeAsBytesSync(bytes);
+      }
+      gifBytes = Uint8List.fromList(bytes);
     }
 
     // Persist the exact params next to outputs (reproducibility contract).
-    final paramsFile = '$jobDir/params.json';
-    io.File(paramsFile).writeAsStringSync(config.toJsonString());
+    final paramsJson = config.toJsonString();
+    var paramsFile = '';
+    if (jobDir != null) {
+      paramsFile = '$jobDir/params.json';
+      io.File(paramsFile).writeAsStringSync(paramsJson);
+    }
 
-    sw.stop();
-    return PipelineResult(
-      inputPath: inputPath,
-      outputGif: gifPath,
+    return _CoreOutput(
+      gifBytes: gifBytes,
+      paramsJson: paramsJson,
+      gifPath: gifPath,
       frameDir: frameDir,
       paramsFile: paramsFile,
-      width: src.width,
-      height: src.height,
       layerCount: layers.length,
       frameCount: n,
-      elapsedMs: sw.elapsedMilliseconds,
-      peakRssMb: _currentRssMb(),
-      configJson: config.toJsonString(),
-      configHash: config.configHash,
       parallel: parallel,
       parallelFallback: fallback || budgetCappedParallel,
       warnings: [...config.warnings, ...budgetWarnings],

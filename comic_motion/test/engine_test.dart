@@ -529,6 +529,73 @@ void main() {
       }
     }, timeout: const Timeout(Duration(minutes: 3)));
 
+    test('processBytes 与 processFile 产物逐字节一致（GIF + params.json）', () async {
+      final png = _pngEncode(_gradientImage(64, 96));
+      final inPath = '${tmp.path}/in.png';
+      File(inPath).writeAsBytesSync(png);
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 64);
+      final disk = await MotionPipeline(cfg, parallel: 1)
+          .processFile(inPath, '${tmp.path}/out');
+      final mem = await MotionPipeline(cfg, parallel: 1)
+          .processBytes(input: Uint8List.fromList(png));
+      expect(mem.gifBytes, isNotNull);
+      expect(mem.gifBytes, equals(File(disk.outputGif).readAsBytesSync()),
+          reason: '同输入同配置：内存入口与落盘入口必须产出同一份 GIF 字节');
+      expect(mem.paramsJsonBytes,
+          equals(File(disk.paramsFile).readAsBytesSync()));
+      expect(mem.configHash, disk.configHash);
+      expect(mem.width, disk.width);
+      expect(mem.height, disk.height);
+      expect(mem.layerCount, disk.layerCount);
+      expect(mem.frameCount, disk.frameCount);
+      expect(mem.warnings, disk.warnings);
+      expect(mem.elapsedMs, greaterThan(0));
+      // params 可还原回同一 config
+      final restored = EffectConfig.fromJson(
+          _decodeJson(convert.utf8.decode(mem.paramsJsonBytes)));
+      expect(restored.configHash, cfg.configHash);
+    });
+
+    test('processBytes 并行路径与串行路径字节一致', () async {
+      final png = _pngEncode(_gradientImage(96, 64));
+      final cfg = EffectConfig(
+        fps: 6,
+        durationSec: 1,
+        maxDimension: 96,
+        effects: const [
+          EffectKind.parallax,
+          EffectKind.breathing,
+          EffectKind.ambient,
+          EffectKind.rain,
+        ],
+      );
+      final serial = await MotionPipeline(cfg, parallel: 1)
+          .processBytes(input: Uint8List.fromList(png));
+      final workers = await MotionPipeline(cfg, parallel: 3)
+          .processBytes(input: Uint8List.fromList(png));
+      expect(workers.gifBytes, equals(serial.gifBytes));
+    });
+
+    test('processBytes：outputFormat=frames 时 gifBytes 为 null', () async {
+      final png = _pngEncode(_gradientImage(48, 48));
+      final cfg = EffectConfig(fps: 4, durationSec: 1, maxDimension: 48,
+          outputFormat: OutputFormat.frames);
+      final mem = await MotionPipeline(cfg, parallel: 1)
+          .processBytes(input: Uint8List.fromList(png));
+      expect(mem.gifBytes, isNull,
+          reason: '内存模式不落 PNG 帧序列；frames-only 即无 GIF 字节');
+      expect(mem.paramsJsonBytes, isNotEmpty);
+      expect(mem.frameCount, cfg.frameCount);
+    });
+
+    test('processBytes：空输入抛 ImageDecodeException（同一解码路径）', () {
+      expect(
+        () => MotionPipeline(EffectConfig(fps: 2))
+            .processBytes(input: Uint8List(0)),
+        throwsA(isA<ImageDecodeException>()),
+      );
+    });
+
     test('批处理失败项不中断且台账记录原因', () async {
       // 建一个输入目录: 一张好图 + 一个空文件 + 一个文本文件
       final inDir = Directory('${tmp.path}/imgs')..createSync();
