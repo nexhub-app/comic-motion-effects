@@ -887,6 +887,160 @@ void main() {
       expect(() => MotionPipelineGuard.release(), throwsStateError);
     });
 
+    test('顶层便捷参数与既有字段等价：同序列化同 configHash', () {
+      // 等价性矩阵：顶层便捷参数 ↔ 既有嵌套字段，逐字节一致
+      final pairs = <EffectConfig, EffectConfig>{
+        EffectConfig(dither: true):
+            EffectConfig(quality: QualityParams(dither: true)),
+        EffectConfig(dither: true, qualityTier: RenderTier.standard):
+            EffectConfig(
+                quality: QualityParams(
+                    dither: true, tier: RenderTier.standard)),
+        EffectConfig(amplitude: 0.03):
+            EffectConfig(parallax: ParallaxParams(amplitude: 0.03)),
+        EffectConfig(directionDeg: 45):
+            EffectConfig(parallax: ParallaxParams(directionDeg: 45)),
+        EffectConfig(amplitude: 0.02, directionDeg: 30):
+            EffectConfig(
+                parallax:
+                    ParallaxParams(amplitude: 0.02, directionDeg: 30.0)),
+        // 一处设齐（fps/duration/maxDimension/dither/tier/amplitude/direction）
+        EffectConfig(
+          fps: 12,
+          durationSec: 2.5,
+          maxDimension: 800,
+          dither: true,
+          qualityTier: RenderTier.standard,
+          amplitude: 0.02,
+          directionDeg: 45,
+        ): EffectConfig(
+            fps: 12,
+            durationSec: 2.5,
+            maxDimension: 800,
+            quality: QualityParams(dither: true, tier: RenderTier.standard),
+            parallax: ParallaxParams(amplitude: 0.02, directionDeg: 45.0)),
+      };
+      pairs.forEach((flat, nested) {
+        expect(flat.toJson(), nested.toJson(),
+            reason: '顶层便捷参数必须与既有字段序列化逐字节一致');
+        expect(flat.configHash, nested.configHash, reason: 'hash 必须一致');
+      });
+    });
+
+    test('默认路径：序列化与 configHash 完全不变（条件序列化保持）', () {
+      final base = EffectConfig();
+      // null 与显式默认值同路径
+      expect(EffectConfig(dither: false).configHash, base.configHash);
+      expect(EffectConfig(dither: null, amplitude: null).configHash,
+          base.configHash);
+      // 经典配置不出现 quality 段（v1.2 指纹不变）
+      expect(base.toJson().containsKey('quality'), isFalse);
+      expect(EffectConfig.fromJson(base.toJson()).configHash, base.configHash);
+      // 非 null 便捷参数才写 quality 段
+      expect(EffectConfig(dither: true).toJson()['quality'], isNotNull);
+    });
+
+    test('顶层便捷参数不绕过 fail-fast；建议范围越界不抛', () {
+      // 结构性参数照旧 fail-fast
+      expect(() => EffectConfig(dither: true, fps: 0), throwsConfigException);
+      expect(() => EffectConfig(amplitude: 1, layerCount: 9),
+          throwsConfigException);
+      // amplitude/directionDeg 是建议范围：越界映射但不抛（既有 clamp 语义）
+      final wide = EffectConfig(amplitude: 99);
+      expect(wide.parallax.amplitude, 99);
+      expect(EffectConfig.fromJson(wide.toJson()).configHash,
+          wide.configHash);
+    });
+
+    test('效果选择 API：增删改查任意组合，原 config 不被修改', () {
+      final base = EffectConfig(); // [parallax, breathing, ambient]
+      final baseHash = base.configHash;
+      final baseEffects = List<EffectKind>.from(base.effects);
+
+      // withEffect：追加、不重复
+      final withRain = base.withEffect(EffectKind.rain);
+      expect(withRain.effects, contains(EffectKind.rain));
+      expect(withRain.effects.length, baseEffects.length + 1);
+      expect(withRain.withEffect(EffectKind.rain).effects.length,
+          baseEffects.length + 1, reason: '重复启用不重复追加');
+      expect(withRain.configHash, isNot(baseHash));
+
+      // withoutEffect：移除
+      final noParallax = base.withoutEffect(EffectKind.parallax);
+      expect(noParallax.effects, isNot(contains(EffectKind.parallax)));
+      expect(noParallax.effects.length, baseEffects.length - 1);
+      // 移除未启用的效果 = 等价新实例
+      expect(base.withoutEffect(EffectKind.rain).configHash, baseHash);
+
+      // withEffects：全量替换
+      final replaced = base.withEffects([EffectKind.rain, EffectKind.snow]);
+      expect(replaced.effects, [EffectKind.rain, EffectKind.snow]);
+
+      // clearEffects：全关 = 静帧
+      final still = base.clearEffects();
+      expect(still.effects, isEmpty);
+
+      // 链式：一处设齐 + 选效果（任务书示例）
+      final chained = EffectConfig(
+        fps: 12,
+        durationSec: 2.5,
+        maxDimension: 800,
+        dither: true,
+        effects: [EffectKind.rain],
+      ).withoutEffect(EffectKind.fog);
+      expect(chained.fps, 12);
+      expect(chained.quality.dither, isTrue);
+      expect(chained.effects, [EffectKind.rain]);
+
+      // 不可变语义：原 config 全程未被修改
+      expect(base.effects, baseEffects);
+      expect(base.configHash, baseHash);
+
+      // 效果组合与直接构造等价
+      final built = EffectConfig(
+          effects: [EffectKind.parallax, EffectKind.breathing,
+              EffectKind.ambient, EffectKind.rain]);
+      expect(withRain.configHash, built.configHash);
+      expect(withRain.toJson(), built.toJson());
+    });
+
+    test('参数目录：完整、去重、默认值与真实配置一致', () {
+      final names = kRenderParamSpecs.map((s) => s.name).toList();
+      expect(names.length, kRenderParamSpecs.length, reason: '名称去重');
+      expect(
+          names,
+          containsAll([
+            'fps', 'durationSec', 'maxDimension', 'layerCount', 'maxFrames',
+            'seed', 'dither', 'qualityTier', 'outputFormat', 'amplitude',
+            'directionDeg', 'effects',
+          ]));
+      final base = EffectConfig();
+      Object? specOf(String n) =>
+          kRenderParamSpecs.firstWhere((s) => s.name == n).defaultValue;
+      expect(specOf('fps'), base.fps);
+      expect(specOf('durationSec'), base.durationSec);
+      expect(specOf('maxDimension'), base.maxDimension);
+      expect(specOf('layerCount'), base.layerCount);
+      expect(specOf('maxFrames'), base.maxFrames);
+      expect(specOf('seed'), base.seed);
+      expect(specOf('dither'), base.quality.dither);
+      expect(specOf('qualityTier'), base.quality.tier);
+      expect(specOf('outputFormat'), base.outputFormat);
+      expect(specOf('amplitude'), base.parallax.amplitude);
+      expect(specOf('directionDeg'), base.parallax.directionDeg);
+      expect(specOf('effects'), base.effects.map((e) => e.name).toList());
+      // 便捷参数标注映射目标
+      final dither =
+          kRenderParamSpecs.firstWhere((s) => s.name == 'dither');
+      expect(dither.mapsTo, 'quality.dither');
+      // strictRange 参数与构造器 fail-fast 一致
+      expect(kRenderParamSpecs.firstWhere((s) => s.name == 'fps').strictRange,
+          isTrue);
+      // 效果目录 32 种且与枚举一致
+      expect(kEffectNames.length, EffectKind.values.length);
+      expect(kEffectNames, EffectKind.values.map((e) => e.name).toList());
+    });
+
     test('批处理失败项不中断且台账记录原因', () async {
       // 建一个输入目录: 一张好图 + 一个空文件 + 一个文本文件
       final inDir = Directory('${tmp.path}/imgs')..createSync();

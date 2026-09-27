@@ -25,7 +25,33 @@ Future<void> main() async {
   );
   config.quality = config.quality.copyWith(tier: RenderTier.standard);
 
-  // 导出：与产物 params.json 同源，可用于回放 / 留档 / 跨端传递
+  // ---- R5 渲染参数 API + 效果选择 API（不可变链式）----
+  // 顶层便捷参数（dither / amplitude / directionDeg / qualityTier）一处设齐
+  // 全部渲染参数，内部映射到既有字段，与显式嵌套写法同 hash；效果增删返回
+  // 新实例、原 config 不被修改。
+  final tuned = EffectConfig(
+    fps: 12,
+    durationSec: 2.5,
+    maxDimension: 800,
+    dither: true,
+    qualityTier: RenderTier.standard,
+    amplitude: 0.02,
+    directionDeg: 45,
+    effects: [EffectKind.rain],
+  ).withoutEffect(EffectKind.fog).withEffect(EffectKind.snow);
+  stdout.writeln(
+      '链式配置: fps=${tuned.fps}, dither=${tuned.quality.dither}, '
+      'amplitude=${tuned.parallax.amplitude}, '
+      'effects=${tuned.effects.map((e) => e.name).join('+')}');
+  // 程序可读的参数目录：App 可据此动态生成设置面板（范围不硬编码）
+  for (final spec in kRenderParamSpecs) {
+    stdout.writeln(
+        '  参数目录 ${spec.name}(${spec.type}): 默认=${spec.defaultValue}, '
+        'min=${spec.min}, max=${spec.max}');
+  }
+
+  // 导出：与产物 params.json 同源，可用于回放 / 留档 / 跨端传递。
+  // App 持久化推荐方式：直接存 EffectConfig.toJsonString()，读回即恢复。
   final json = config.toJsonString();
   final jsonFile = File('build/example_02_params.json')
     ..createSync(recursive: true)

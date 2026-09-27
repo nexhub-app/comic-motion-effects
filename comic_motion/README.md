@@ -124,6 +124,37 @@ await MotionPipelineGuard.run(() =>
 `MotionCancelledException` from a cancelled render. Desktop batch jobs may
 raise `maxConcurrent` deliberately.
 
+### One-stop render parameters & effect selection
+
+Every CLI-tunable render parameter is a first-class
+[EffectConfig] constructor parameter — no need to touch nested objects:
+
+```dart
+final config = EffectConfig(
+  fps: 12, durationSec: 2.5, maxDimension: 800,   // timing / resolution
+  layerCount: 3, seed: 42, outputFormat: OutputFormat.gif,
+  dither: true, qualityTier: RenderTier.standard, // → quality.dither / quality.tier
+  amplitude: 0.02, directionDeg: 45,              // → parallax.amplitude / directionDeg
+  effects: [EffectKind.rain],
+).withoutEffect(EffectKind.fog).withEffect(EffectKind.snow); // immutable chaining
+```
+
+- The convenience parameters (`dither` / `qualityTier` / `amplitude` /
+  `directionDeg`) are nullable and map onto the existing nested fields —
+  **byte-identical serialization and configHash** versus constructing the
+  nested objects directly (equivalence-matrix tested). The default path's
+  fingerprint is unchanged.
+- Effect selection (`withEffect` / `withoutEffect` / `withEffects` /
+  `clearEffects`) always returns a **new instance**; the original config is
+  never mutated. Clearing everything yields static frames.
+- Parameter catalog for auto-generated settings panels:
+  `kRenderParamSpecs` (name / type / min / max / default / semantics, plus
+  which ranges are fail-fast) and `kEffectNames` — no hardcoded ranges in
+  the app.
+- Persistence recommendation: store `config.toJsonString()` and restore
+  with `EffectConfig.fromJson` — the hash round-trips, so it doubles as a
+  cache key.
+
 ### Platform support matrix
 
 | Platform | Status | Notes |

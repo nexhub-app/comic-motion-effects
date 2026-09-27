@@ -87,6 +87,25 @@ await MotionPipelineGuard.run(() =>
 
 body 抛任何异常（包括取消的 `MotionCancelledException`）都会先释放槽位再重抛。桌面批处理可显式调大 `maxConcurrent`。
 
+### 一站式渲染参数与效果选择
+
+CLI 能调的全部渲染参数都是 [EffectConfig] 构造的一等参数——不必再理解嵌套对象：
+
+```dart
+final config = EffectConfig(
+  fps: 12, durationSec: 2.5, maxDimension: 800,   // 时长 / 分辨率
+  layerCount: 3, seed: 42, outputFormat: OutputFormat.gif,
+  dither: true, qualityTier: RenderTier.standard, // → quality.dither / quality.tier
+  amplitude: 0.02, directionDeg: 45,              // → parallax.amplitude / directionDeg
+  effects: [EffectKind.rain],
+).withoutEffect(EffectKind.fog).withEffect(EffectKind.snow); // 不可变链式
+```
+
+- 便捷参数（`dither` / `qualityTier` / `amplitude` / `directionDeg`）为可空命名参数，非空时映射到既有嵌套字段——与显式构造嵌套对象**序列化与 configHash 逐字节一致**（等价性矩阵有测试）；默认值路径的指纹完全不变。
+- 效果选择（`withEffect` / `withoutEffect` / `withEffects` / `clearEffects`）一律返回**新实例**，原 config 绝不修改；全关 = 静帧。
+- 参数目录（供 App 自动生成设置面板）：`kRenderParamSpecs`（名称 / 类型 / min / max / 默认值 / 语义，并标注哪些范围是 fail-fast）与 `kEffectNames`——App 侧范围不硬编码。
+- 持久化推荐：直接存 `config.toJsonString()`，用 `EffectConfig.fromJson` 读回即恢复——hash 往返一致，可直接当缓存键。
+
 ### 平台支持矩阵
 
 | 平台 | 状态 | 说明 |

@@ -91,6 +91,15 @@ class ParallaxParams {
         directionDeg: (j['directionDeg'] as num?)?.toDouble() ?? 0.0,
         verticalRatio: (j['verticalRatio'] as num?)?.toDouble() ?? 0.35,
       );
+
+  /// R5 顶层便捷参数的映射载体：null = 保留原值。
+  ParallaxParams copyWith({double? amplitude, double? directionDeg}) =>
+      ParallaxParams(
+        amplitude: amplitude ?? this.amplitude,
+        periodSec: periodSec,
+        directionDeg: directionDeg ?? this.directionDeg,
+        verticalRatio: verticalRatio,
+      );
 }
 
 class BreathingParams {
@@ -1192,7 +1201,17 @@ class EffectConfig {
     this.maxDimension = 1600,
     this.maxFrames = 96,
     this.reducedMotion = false,
-  })  : parallax = parallax ?? ParallaxParams(),
+
+    /// ---- R5 顶层便捷参数（null = 不触碰对应嵌套字段）----
+    /// 嵌入方在一处设齐全部渲染参数；非 null 时映射到既有字段，与显式
+    /// 传嵌套参数**逐字节等价**（序列化与 configHash 均相同，等价性矩阵
+    /// 有测试覆盖）。默认路径（全 null）的序列化与 configHash 完全不变。
+    bool? dither,
+    double? amplitude,
+    double? directionDeg,
+    RenderTier? qualityTier,
+  })  : parallax = (parallax ?? ParallaxParams())
+            .copyWith(amplitude: amplitude, directionDeg: directionDeg),
         breathing = breathing ?? BreathingParams(),
         ambient = ambient ?? AmbientParams(),
         rain = rain ?? RainParams(),
@@ -1222,7 +1241,8 @@ class EffectConfig {
         leaves = leaves ?? LeavesParams(),
         meteors = meteors ?? MeteorsParams(),
         moodScript = moodScript ?? MoodScriptParams(),
-        quality = quality ?? QualityParams() {
+        quality = (quality ?? QualityParams())
+            .copyWith(dither: dither, tier: qualityTier) {
     // Structural fail-fast (v1.3.1): these parameters define the shape of the
     // output; out-of-domain values used to fall through to per-path degenerate
     // behavior (fps=0 divides t by zero in frame rendering, maxFrames<2 breaks
@@ -1396,6 +1416,84 @@ class EffectConfig {
         verticalRatio: parallax.verticalRatio,
       );
     }
+  }
+
+  /// ---- R5 渲染效果选择 API（不可变语义）----
+  /// 全部返回**新实例**，原 config 绝不修改（`effects` 列表为全新列表）。
+  /// 参数对象与原实例共享引用——与既有可变性模型一致；`configHash` 只依赖
+  /// 序列化内容，效果增删后与「直接用同名单构造」完全一致。
+
+  /// 复制配置：字段逐一传入构造器（全部已通过校验，不会重抛）。
+  EffectConfig copy() => EffectConfig(
+        effects: List<EffectKind>.from(effects),
+        parallax: parallax,
+        breathing: breathing,
+        ambient: ambient,
+        rain: rain,
+        snow: snow,
+        sakura: sakura,
+        fireflies: fireflies,
+        godRays: godRays,
+        speedLines: speedLines,
+        impactFlash: impactFlash,
+        heartbeat: heartbeat,
+        fog: fog,
+        embers: embers,
+        lightning: lightning,
+        toneShift: toneShift,
+        vignette: vignette,
+        starlight: starlight,
+        slowPush: slowPush,
+        shimmer: shimmer,
+        focusLines: focusLines,
+        screenTone: screenTone,
+        mangaShake: mangaShake,
+        impactRings: impactRings,
+        brushStreak: brushStreak,
+        flame: flame,
+        smoke: smoke,
+        bubbles: bubbles,
+        leaves: leaves,
+        meteors: meteors,
+        moodScript: moodScript,
+        quality: quality,
+        fps: fps,
+        durationSec: durationSec,
+        depthMode: depthMode,
+        layerCount: layerCount,
+        outputFormat: outputFormat,
+        seed: seed,
+        maxDimension: maxDimension,
+        maxFrames: maxFrames,
+        reducedMotion: reducedMotion,
+      );
+
+  /// 启用一个效果（已启用则为无变化的等价新实例）。
+  EffectConfig withEffect(EffectKind kind) {
+    final c = copy();
+    if (!c.effects.contains(kind)) c.effects = [...c.effects, kind];
+    return c;
+  }
+
+  /// 关闭一个效果（未启用则为无变化的等价新实例）。
+  EffectConfig withoutEffect(EffectKind kind) {
+    final c = copy();
+    c.effects = c.effects.where((e) => e != kind).toList();
+    return c;
+  }
+
+  /// 全量替换效果列表（不去重，按传入顺序）。
+  EffectConfig withEffects(List<EffectKind> kinds) {
+    final c = copy();
+    c.effects = List<EffectKind>.from(kinds);
+    return c;
+  }
+
+  /// 全关效果（= 静帧）。
+  EffectConfig clearEffects() {
+    final c = copy();
+    c.effects = const [];
+    return c;
   }
 
   /// SHA-like stable hash (FNV-1a 64) over canonical JSON of the config.
