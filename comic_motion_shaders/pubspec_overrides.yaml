@@ -1,5 +1,5 @@
 # 开发期用 path 依赖直连 monorepo 内的核心包（与 comic_motion_flutter 的
 # pubspec_overrides 同策略）；发布时删除本文件、走版本依赖。
-pubspec_overrides:
+dependency_overrides:
   comic_motion:
     path: ../comic_motion
