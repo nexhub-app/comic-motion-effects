@@ -787,6 +787,14 @@ class MotionPipeline {
   (RgbaImage, List<LayerImage>) downscaleAndSplitForExport(RgbaImage src) =>
       _downscaleAndSplit(src, config.maxDimension);
 
+  /// 导出类入口专用的降采样段（入场帧序列用：入场是整页效果，不做分层，
+  /// 跳过深度估算与切层的开销）。降采样算法口径与 [_downscaleAndSplit]
+  /// 完全一致（legacy 双线性 / standard+ 面积平均）。
+  RgbaImage downscaleForExport(RgbaImage src) =>
+      config.quality.tier.atLeastStandard
+          ? boxDownscale(src, config.maxDimension)
+          : _downscaleTo(src, config.maxDimension);
+
   RgbaImage _downscaleTo(RgbaImage src, int maxDim) {
     final maxSide = src.width > src.height ? src.width : src.height;
     if (maxSide <= maxDim) return src;

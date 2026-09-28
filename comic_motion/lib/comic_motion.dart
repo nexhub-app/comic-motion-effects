@@ -12,6 +12,7 @@ export 'src/config_io.dart';
 export 'src/cost_estimate.dart';
 export 'src/depth_splitter.dart';
 export 'src/effect_config.dart';
+export 'src/entrance.dart';
 export 'src/frame_compositor.dart';
 export 'src/gif_writer.dart';
 export 'src/guard.dart';
