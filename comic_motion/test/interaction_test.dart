@@ -14,10 +14,11 @@ import 'package:comic_motion/comic_motion.dart';
 /// MotionCacheManager 识别与清理。
 void main() {
   // 幅度放大到 0.05，保证 64px 测试图上各相位像素可分辨。
-  EffectConfig makeCfg({bool reducedMotion = false}) => EffectConfig(
+  EffectConfig makeCfg({bool reducedMotion = false, int maxDimension = 64}) =>
+      EffectConfig(
         fps: 4,
         durationSec: 1,
-        maxDimension: 64,
+        maxDimension: maxDimension,
         reducedMotion: reducedMotion,
         parallax: const ParallaxParams(amplitude: 0.05),
       );
@@ -320,7 +321,8 @@ RgbaImage _gradientImage(int w, int h) {
   return img;
 }
 
-List<int> _pngEncode(RgbaImage img) => pkg.encodePng(_pngToPkg(img)).toList();
+Uint8List _pngEncode(RgbaImage img) =>
+    Uint8List.fromList(pkg.encodePng(_pngToPkg(img)).toList());
 
 pkg.Image _pngToPkg(RgbaImage img) {
   final im = pkg.Image(width: img.width, height: img.height, numChannels: 3);
