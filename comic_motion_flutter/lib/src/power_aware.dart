@@ -19,14 +19,13 @@
 /// W4 之前逐 widget 等价——生命周期路径初始为 resumed，不触发抑制。
 library;
 
-import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
-mixin MotionPowerAware<T extends StatefulWidget> on State<T>
-    implements WidgetsBindingObserver {
+mixin MotionPowerAware<T extends StatefulWidget> on State<T> {
   bool _lifecycleActive = true;
   bool _viewportVisible = true;
   bool _lastActive = true;
+  _MotionPowerObserver<T>? _observer;
 
   /// App 传入的策略钩子；null = 恒允许。子类覆盖返回 widget 字段。
   bool Function()? get enableMotion => null;
@@ -51,8 +50,11 @@ mixin MotionPowerAware<T extends StatefulWidget> on State<T>
 
   /// 挂生命周期 observer + 初始视口检查。子类 initState 调用。
   void motionPowerInit() {
-    _lastActive = true;
-    WidgetsBinding.instance.addObserver(this);
+    // 初始聚合值即基线：钩子启动即为 false 时，之后恢复必须触发
+    // onMotionRestored（若硬编码 true，恢复会被判为"无变化"而丢失）。
+    _lastActive = motionActive;
+    _observer = _MotionPowerObserver<T>(this);
+    WidgetsBinding.instance.addObserver(_observer!);
     if (pauseWhenNotVisible) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) updateMotionVisibility(_computeViewportVisible());
@@ -62,7 +64,41 @@ mixin MotionPowerAware<T extends StatefulWidget> on State<T>
 
   /// 移除 observer。子类 dispose 调用。
   void motionPowerDispose() {
-    WidgetsBinding.instance.removeObserver(this);
+    final observer = _observer;
+    if (observer != null) {
+      WidgetsBinding.instance.removeObserver(observer);
+      _observer = null;
+    }
+    _scrollPos?.removeListener(_onScrollPosition);
+    _scrollPos = null;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _subscribeScrollPosition();
+  }
+
+  ScrollPosition? _scrollPos;
+
+  /// 订阅祖先 Scrollable 的位置：滚动通知只向祖先冒泡，列表项内的
+  /// NotificationListener 收不到外层列表的滚动——主用例（本 widget 作为
+  /// 列表项）必须走 position 监听。内层可滚动（通知真途经本子树）仍由
+  /// 子类 build 的 NotificationListener 转发覆盖。
+  void _subscribeScrollPosition() {
+    final pos = Scrollable.maybeOf(context)?.position;
+    if (identical(pos, _scrollPos)) return;
+    _scrollPos?.removeListener(_onScrollPosition);
+    _scrollPos = pos;
+    pos?.addListener(_onScrollPosition);
+  }
+
+  void _onScrollPosition() {
+    if (!pauseWhenNotVisible) return;
+    // 惰性检查：滚动帧布局完成后做一次视口求交。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) updateMotionVisibility(_computeViewportVisible());
+    });
   }
 
   /// 滚动通知转发（子类 build 包 `NotificationListener<ScrollNotification>`
@@ -77,7 +113,7 @@ mixin MotionPowerAware<T extends StatefulWidget> on State<T>
     return false;
   }
 
-  /// 生命周期变化（WidgetsBindingObserver 桥接）。
+  /// 生命周期变化（经 [_MotionPowerObserver] 桥接）。
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _setLifecycleActive(state == AppLifecycleState.resumed);
   }
@@ -88,11 +124,8 @@ mixin MotionPowerAware<T extends StatefulWidget> on State<T>
     _notifyIfChanged();
   }
 
-  /// 视口自检（仅 pauseWhenNotVisible 启用时有效）。
-  void _checkViewport() {
-    if (!mounted) return;
-    _setViewportVisible(_computeViewportVisible());
-  }
+  /// 视口可见性更新（滚动后置帧自检回调写入）。
+  void updateMotionVisibility(bool visible) => _setViewportVisible(visible);
 
   bool _computeViewportVisible() {
     final ro = context.findRenderObject();
@@ -127,4 +160,17 @@ mixin MotionPowerAware<T extends StatefulWidget> on State<T>
       onMotionSuppressed();
     }
   }
+}
+
+/// 生命周期桥：observer 须以实例注册，mixin 不能 `implements
+/// WidgetsBindingObserver`（那会要求宿主 State 实现全部观察者方法）。
+class _MotionPowerObserver<T extends StatefulWidget>
+    with WidgetsBindingObserver {
+  _MotionPowerObserver(this._owner);
+
+  final MotionPowerAware<T> _owner;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) =>
+      _owner.didChangeAppLifecycleState(state);
 }

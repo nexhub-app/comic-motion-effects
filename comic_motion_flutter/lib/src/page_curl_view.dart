@@ -32,6 +32,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
@@ -159,6 +160,7 @@ class _PageCurlViewState extends State<PageCurlView>
 
   late final Ticker _ticker;
   final _TurnNotifier _notifier = _TurnNotifier();
+  Duration _clock = Duration.zero; // ticker 相对时钟（Ticker 无 elapsed getter）
   bool _reducedMotion = false;
 
   @override
@@ -193,7 +195,7 @@ class _PageCurlViewState extends State<PageCurlView>
         final img = _frontImage;
         _frontImage = null;
         img?.dispose();
-        _notifier.notifyListeners();
+        _notifier.repaint();
         WidgetsBinding.instance
             .addPostFrameCallback((_) => unawaited(_captureIdleFront()));
       }
@@ -205,7 +207,7 @@ class _PageCurlViewState extends State<PageCurlView>
       } else if (_mode == _TurnMode.idle) {
         _breath = 0;
         _ticker.stop();
-        _notifier.notifyListeners();
+        _notifier.repaint();
       }
     }
   }
@@ -233,7 +235,7 @@ class _PageCurlViewState extends State<PageCurlView>
     final old = _frontImage;
     _frontImage = img;
     old?.dispose();
-    _notifier.notifyListeners();
+    _notifier.repaint();
   }
 
   /// 翻页起步抓屏：front（当前页）+ back（目标页）。back host 挂载后的
@@ -255,7 +257,7 @@ class _PageCurlViewState extends State<PageCurlView>
     _backImage = back;
     oldFront?.dispose();
     oldBack?.dispose();
-    _notifier.notifyListeners();
+    _notifier.repaint();
   }
 
   Future<void> _nextFrame() {
@@ -285,6 +287,7 @@ class _PageCurlViewState extends State<PageCurlView>
   // ---- 状态机 ----
 
   void _onTick(Duration elapsed) {
+    _clock = elapsed;
     switch (_mode) {
       case _TurnMode.animating:
         final raw = (elapsed - _animStart).inMicroseconds /
@@ -298,14 +301,14 @@ class _PageCurlViewState extends State<PageCurlView>
           if (_reducedMotion) {
             setState(() {});
           } else {
-            _notifier.notifyListeners();
+            _notifier.repaint();
           }
         }
       case _TurnMode.idle:
         if (!widget.idleBreath || _reducedMotion) break;
         final sec = elapsed.inMicroseconds / 1e6;
         _breath = 0.004 * math.sin(2 * math.pi * sec / 6);
-        _notifier.notifyListeners(); // 快照绘制：零 widget 重建
+        _notifier.repaint(); // 快照绘制：零 widget 重建
       case _TurnMode.dragging:
         break; // 进度由手势回调驱动
     }
@@ -330,9 +333,15 @@ class _PageCurlViewState extends State<PageCurlView>
     _commit = commit;
     _dragFrom = from;
     _dragTo = to;
-    _animStart = _ticker.elapsed;
-    _mode = _TurnMode.animating;
-    if (!_ticker.isActive) _ticker.start();
+    if (!_ticker.isActive) {
+      // ticker 重启后 elapsed 归零，动画起点必须对齐，否则补间卡死在 from。
+      _animStart = Duration.zero;
+      _mode = _TurnMode.animating;
+      _ticker.start();
+    } else {
+      _animStart = _clock;
+      _mode = _TurnMode.animating;
+    }
   }
 
   void _finishTurn() {
@@ -368,7 +377,7 @@ class _PageCurlViewState extends State<PageCurlView>
           .addPostFrameCallback((_) => unawaited(_captureIdleFront()));
     }
     // 强制重绘终态：ticker 即将停止（无呼吸）时，补间末帧必须落到画布。
-    _notifier.notifyListeners();
+    _notifier.repaint();
     widget.onPageTurnEnd?.call(from, to, committed);
     if (!widget.idleBreath || _reducedMotion) _ticker.stop();
   }
@@ -383,7 +392,7 @@ class _PageCurlViewState extends State<PageCurlView>
     final target = _page + dir;
     if (target < 0 || target >= widget.pageCount) return;
     _startPos = d.localPosition;
-    _lastMoveTime = _ticker.elapsed;
+    _lastMoveTime = _clock;
     _vx = 0;
     _mode = _TurnMode.dragging;
     _beginTurn(dir);
@@ -393,7 +402,7 @@ class _PageCurlViewState extends State<PageCurlView>
     if (_mode != _TurnMode.dragging) return;
     final width = _viewWidth();
     if (width <= 0) return;
-    final now = _ticker.elapsed;
+    final now = _clock;
     final dt = (now - _lastMoveTime).inMicroseconds / 1e6;
     _lastMoveTime = now;
     if (dt > 0) {
@@ -401,11 +410,12 @@ class _PageCurlViewState extends State<PageCurlView>
       _vx = 0.7 * _vx + 0.3 * instV; // px/s 平滑（对齐参考实现）
     }
     final dx = d.localPosition.dx - _startPos.dx;
-    final raw = _dir * dx / width;
+    // 下一页（dir=+1）向左拖（dx<0）进度应递增，故取反号。
+    final raw = -_dir * dx / width;
     _drag = raw.clamp(0.0, 1.0);
     _curve = (_vx.abs() / 2600).clamp(0.0, 1.0);
     if (_frontImage != null && _backImage != null) {
-      _notifier.notifyListeners(); // 快照就绪：局部重绘，零重建
+      _notifier.repaint(); // 快照就绪：局部重绘，零重建
     } else {
       setState(() {}); // 截屏未就绪：底层 widget 显示（进度此时不可见）
     }
@@ -515,7 +525,11 @@ class _PageCurlViewState extends State<PageCurlView>
 }
 
 /// Painter 的 repaint 通知（进度/呼吸变化 → 局部重绘）。
-class _TurnNotifier extends ChangeNotifier {}
+class _TurnNotifier extends ChangeNotifier {
+  /// State 不继承 ChangeNotifier，经此公开方法触发局部重绘
+  /// （notifyListeners 是 protected 成员，外部类不可直调）。
+  void repaint() => notifyListeners();
+}
 
 /// 卷页绘制器：全部状态实时读自 [_PageCurlViewState]（painter 每帧重画时
 /// 拿到的就是当前值）；repaint 由 notifier 驱动，widget 重建不重绘。
@@ -574,6 +588,7 @@ class _CurlPainter extends CustomPainter {
             _ink.withValues(alpha: sh * 0.35),
             _ink.withValues(alpha: 0),
           ],
+          const <double>[0, 0.5, 1.0],
         ),
     );
 
@@ -607,7 +622,7 @@ class _CurlPainter extends CustomPainter {
         canvas.drawImageRect(
             front,
             ui.Rect.fromLTRB(
-                su0 * front.width, 0, su1 * front.width, front.height),
+                su0 * front.width, 0, su1 * front.width, front.height.toDouble()),
             dst,
             imgPaint);
         // 圆柱高光：折轴附近提亮。
@@ -640,6 +655,7 @@ class _CurlPainter extends CustomPainter {
                   alpha: 0.34 * (0.4 + 0.6 * math.sin(math.pi * p))),
               _foldInk.withValues(alpha: 0),
             ],
+            const <double>[0, 0.5, 1.0],
           ),
       );
       // 页缘细阴影（外缘）。

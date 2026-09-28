@@ -18,11 +18,9 @@ library;
 
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
-import 'layer_loader.dart' show kMaxLayers;
 import 'motion_uniforms.dart';
 
 /// shader 资源在包内的 asset 路径。
@@ -83,7 +81,6 @@ class _RealtimeMotionViewState extends State<RealtimeMotionView>
   late final Ticker _ticker;
   // 时钟 notifier：Ticker 每帧写入 elapsed，驱动 painter 重绘（避免 setState）。
   final ValueNotifier<Duration> _clock = ValueNotifier<Duration>(Duration.zero);
-  ui.FragmentProgram? _program;
   ui.FragmentShader? _shader;
   ui.Image? _emptyImage;
 
@@ -96,18 +93,21 @@ class _RealtimeMotionViewState extends State<RealtimeMotionView>
   }
 
   Future<void> _loadProgram() async {
-    final program = await ui.FragmentProgram.fromAsset(kShaderAsset);
-    final shader = program.fragmentShader();
-    final empty = await _makeEmptyImage();
-    if (!mounted) {
-      empty.dispose();
-      return;
+    try {
+      final program = await ui.FragmentProgram.fromAsset(kShaderAsset);
+      final shader = program.fragmentShader();
+      final empty = await _makeEmptyImage();
+      if (!mounted) {
+        empty.dispose();
+        return;
+      }
+      setState(() {
+        _shader = shader;
+        _emptyImage = empty;
+      });
+    } catch (_) {
+      // shader 资源缺失/运行时不支持时安全降级：build 保持空视图。
     }
-    setState(() {
-      _program = program;
-      _shader = shader;
-      _emptyImage = empty;
-    });
   }
 
   static Future<ui.Image> _makeEmptyImage() async {

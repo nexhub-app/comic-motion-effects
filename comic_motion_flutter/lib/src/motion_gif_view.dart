@@ -283,11 +283,14 @@ class _MotionGifViewState extends State<MotionGifView>
           children: [
             // GIF 帧（解码完成后出现；失败时保持占位）。
             if (_currentFrame != null)
-              RawImage(
-                image: _currentFrame,
-                fit: widget.fit,
-                semanticLabel: widget.semanticLabel,
-              )
+              // RawImage 无 semanticLabel 参数——仅在有标签时包 Semantics。
+              widget.semanticLabel == null
+                  ? RawImage(image: _currentFrame, fit: widget.fit)
+                  : Semantics(
+                      image: true,
+                      label: widget.semanticLabel,
+                      child: RawImage(image: _currentFrame, fit: widget.fit),
+                    )
             else if (placeholder != null && _failed)
               Image.memory(
                 placeholder,

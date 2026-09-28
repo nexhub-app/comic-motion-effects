@@ -25,7 +25,7 @@ class MotionUniforms {
     this.parallax = false,
     this.parallaxDx = 0,
     this.parallaxDy = 0,
-    List<double> depth = const <double>[],
+    this.depth = const <double>[],
     this.breathing = false,
     this.zoom = 0.02,
     this.phase = 0,
@@ -38,7 +38,7 @@ class MotionUniforms {
     this.vignetteSoftness = 0.5,
     this.canvasWidth = 1,
     this.canvasHeight = 1,
-  }) : depth = depth;
+  });
 
   /// 分层视差（远→近深度因子见 [depth]）。
   final bool parallax;
