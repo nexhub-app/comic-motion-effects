@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:comic_motion/comic_motion.dart';
@@ -6,10 +7,25 @@ import 'package:comic_motion/comic_motion.dart';
 /// 输出：DELIVERY/effect_showcase/<key>/{anim.gif, frame_0000.png}
 /// 同时写出 presets/*.json（经典/单效/组合预设，供 --config 使用与回滚）。
 ///
-/// 运行：dart run tool/generate_showcase.dart
+/// 第五轮 W2 追加预览产物：每个 demo 一张首帧 PNG + 一个低配短循环 GIF
+/// （360p / 8fps / 1.5s，体积目标 <300KB/个）进 `doc/previews/<key>/`，
+/// 并汇总 `doc/previews/index.json`（效果名 → 路径 → 分类，App 面板按
+/// 目录自动配图）。生成是确定性的：同 seed 同 config → 同产物字节。
+///
+/// 运行：dart run tool/generate_showcase.dart            # 全量
+///       dart run tool/generate_showcase.dart --previews-only
 Future<void> main(List<String> args) async {
-  final outRoot = args.isNotEmpty ? args[0] : 'DELIVERY/effect_showcase';
-  final presetDir = args.length > 1 ? args[1] : 'presets';
+  final previewsOnly = args.contains('--previews-only');
+  final positional = args.where((a) => !a.startsWith('--')).toList();
+  final outRoot =
+      positional.isNotEmpty ? positional[0] : 'DELIVERY/effect_showcase';
+  final presetDir = positional.length > 1 ? positional[1] : 'presets';
+
+  await _runShowcase(outRoot, presetDir, previewsOnly);
+}
+
+Future<void> _runShowcase(
+    String outRoot, String presetDir, bool previewsOnly) async {
   final root = Directory(outRoot)..createSync(recursive: true);
   // 只清「带 anim.gif 的演示目录」：图鉴 HTML 与启动脚本是手工资产，
   // 生成器无权抹掉（v1.3 之前是整树 delete，重新生成一次就丢一次 HTML）。
@@ -584,6 +600,35 @@ Future<void> main(List<String> args) async {
           maxDimension: 512,
           quality: QualityParams(tier: RenderTier.standard),
         ),
+    // ---- 第五轮 W2 补覆盖：底座 / 扫光 / 尘埃（dust 是 legacy 别名，
+    // 粒子渲染走 ambient；此处补齐目录里各自缺演示的效果）----
+    'classic_base': () => EffectConfig(
+          effects: [EffectKind.parallax, EffectKind.breathing],
+          fps: 12,
+          durationSec: 3,
+          maxDimension: 640,
+        ),
+    'light_sweep_hall': () => EffectConfig(
+          effects: [
+            EffectKind.parallax,
+            EffectKind.breathing,
+            EffectKind.lightSweep
+          ],
+          fps: 12,
+          durationSec: 3,
+          maxDimension: 640,
+        ),
+    'dust_motes': () => EffectConfig(
+          effects: [
+            EffectKind.parallax,
+            EffectKind.breathing,
+            EffectKind.ambient
+          ],
+          ambient: AmbientParams(particleCount: 36, mode: 'dust'),
+          fps: 12,
+          durationSec: 3,
+          maxDimension: 640,
+        ),
   };
 
   final inputs = <String, String>{
@@ -624,7 +669,17 @@ Future<void> main(List<String> args) async {
     'combo_manga_impact': 'sample_images/10_duel.png',
     'combo_night_battle': 'sample_images/07_night_city.png',
     'combo_peaceful_evening': 'sample_images/08_forest.png',
+    'classic_base': 'sample_images/01_portrait.png',
+    'light_sweep_hall': 'sample_images/05_closeup.png',
+    'dust_motes': 'sample_images/08_forest.png',
   };
+
+  // --previews-only：只产出 doc/previews 预览资产（跳过演示集渲染与
+  // presets 重写；presets 内容确定性，重复生成无差异，但没必要跑）。
+  if (previewsOnly) {
+    _generatePreviews(demos, inputs);
+    return;
+  }
 
   // 经典预设（v1.0.0 行为，回滚用）
   final classic = EffectConfig(fps: 12, durationSec: 3, maxDimension: 640);
@@ -665,4 +720,147 @@ Future<void> main(List<String> args) async {
         '$key: ${r.frameCount} frames, ${(File('${target.path}/anim.gif').lengthSync() / 1024).toStringAsFixed(0)} KB, ${sw.elapsedMilliseconds} ms');
   }
   stdout.writeln('DONE: $n demos -> $outRoot');
+  _generatePreviews(demos, inputs);
+}
+
+/// 预览产物分类（index.json 的 `category` 字段，App 面板分组用）。
+const Map<String, String> _kPreviewCategories = {
+  'classic_base': 'base',
+  'light_sweep_hall': 'light',
+  'dust_motes': 'ambient',
+  'rain_night_city': 'weather',
+  'snow_landscape': 'weather',
+  'sakura_portrait': 'weather',
+  'fireflies_forest': 'weather',
+  'godrays_forest': 'light',
+  'speedlines_action': 'manga',
+  'impact_duel': 'manga',
+  'heartbeat_closeup': 'motion',
+  'fog_landscape': 'atmosphere',
+  'embers_night_city': 'atmosphere',
+  'lightning_night_city': 'weather',
+  'toneshift_landscape': 'color',
+  'vignette_closeup': 'color',
+  'starlight_night_city': 'light',
+  'slowpush_portrait': 'motion',
+  'shimmer_landscape': 'light',
+  'combo_storm_night': 'combo',
+  'combo_campfire': 'combo',
+  'dither_compare_forest': 'quality',
+  'focus_lines_action': 'manga',
+  'screen_tone_closeup': 'manga',
+  'impact_burst': 'manga',
+  'brush_streak_run': 'manga',
+  'manga_shake_impact': 'manga',
+  'flame_campfire': 'atmosphere',
+  'smoke_indoor': 'atmosphere',
+  'bubbles_underwater': 'atmosphere',
+  'leaves_autumn': 'weather',
+  'meteors_night': 'weather',
+  'mood_tension_build': 'mood',
+  'mood_burst_impact': 'mood',
+  'combo_manga_impact': 'combo',
+  'combo_night_battle': 'combo',
+  'combo_peaceful_evening': 'combo',
+  'combo_rain_lanterns': 'combo',
+  'combo_sakura_light': 'combo',
+  'combo_full_action': 'combo',
+};
+
+/// 第五轮 W2：生成效果预览资产（首帧 PNG + 低配短循环 GIF）。
+///
+/// - 配置从各 demo 的 JSON 派生，仅覆写 `fps=8 / durationSec=1.5 /
+///   maxDimension=360`（360p、12 帧循环，体积目标 <300KB/个）；
+/// - 输出 `doc/previews/<key>/preview.png` + `preview.gif` +
+///   汇总 `doc/previews/index.json`（key → 路径 → 分类，含 GIF 字节数）；
+/// - 确定性：无时间戳等易变字段，同 seed 同 config 逐字节可复现。
+Future<void> _generatePreviews(
+    Map<String, EffectConfig Function()> demos, Map<String, String> inputs) async {
+  const previewRoot = 'doc/previews';
+  final tmpRoot = 'build/preview_tmp';
+  if (Directory(tmpRoot).existsSync()) {
+    Directory(tmpRoot).deleteSync(recursive: true);
+  }
+  Directory(tmpRoot).createSync(recursive: true);
+  Directory(previewRoot).createSync(recursive: true);
+
+  final entries = <Map<String, dynamic>>[];
+  var oversize = 0;
+  // 体积预算自适应降档：规则固定 → 同 seed 同产物，确定性保持。
+  // 粒子/速度线等帧间变化大的效果 GIF 压缩率低，按档位降分辨率直到达标。
+  const budgetBytes = 300 * 1024;
+  const dimensionLadder = [360, 280, 220, 170, 130];
+  for (final entry in demos.entries) {
+    final key = entry.key;
+    final input = inputs[key];
+    if (input == null) {
+      throw StateError('demo "$key" 缺少输入图映射');
+    }
+    final target = Directory('$previewRoot/$key')..createSync(recursive: true);
+    var chosenDim = dimensionLadder.last;
+    var chosenGif = '';
+    var chosenFrameDir = '';
+    var chosenTmpDir = '';
+    for (final dim in dimensionLadder) {
+      final tmpDir = '$tmpRoot/$key@$dim';
+      final previewCfg = EffectConfig.fromJson(<String, dynamic>{
+        ...entry.value().toJson(),
+        'fps': 8,
+        'durationSec': 1.5,
+        'maxDimension': dim,
+        'outputFormat': 'both',
+      });
+      final r = await MotionPipeline(previewCfg).processFile(input, tmpDir);
+      final gifBytes = File(r.outputGif).lengthSync();
+      // 替换上一档兜底：先删旧目录再记新路径（体积随分辨率单调降的反常
+      // 情形以最后一轮为准，规则固定即可确定性复现）。
+      if (chosenTmpDir.isNotEmpty) {
+        Directory(chosenTmpDir).deleteSync(recursive: true);
+      }
+      chosenDim = dim;
+      chosenGif = r.outputGif;
+      chosenFrameDir = r.frameDir;
+      chosenTmpDir = tmpDir;
+      if (gifBytes <= budgetBytes) break;
+    }
+    final gifFile = File(chosenGif);
+    if (!gifFile.existsSync()) {
+      throw StateError('demo "$key" 预览 GIF 缺失');
+    }
+    gifFile.copySync('${target.path}/preview.gif');
+    final frame0 = File('$chosenFrameDir/frame_0000.png');
+    if (!frame0.existsSync()) {
+      throw StateError('demo "$key" 预览首帧缺失');
+    }
+    frame0.copySync('${target.path}/preview.png');
+    Directory(chosenTmpDir).deleteSync(recursive: true);
+    final gifBytes = File('${target.path}/preview.gif').lengthSync();
+    if (gifBytes > budgetBytes) oversize++;
+    entries.add(<String, dynamic>{
+      'key': key,
+      'category': _kPreviewCategories[key] ?? 'misc',
+      'previewGif': 'doc/previews/$key/preview.gif',
+      'previewPng': 'doc/previews/$key/preview.png',
+      'maxDimension': chosenDim,
+      'gifBytes': gifBytes,
+    });
+    stdout.writeln(
+        'preview $key: ${(gifBytes / 1024).toStringAsFixed(0)} KB @${chosenDim}px${gifBytes > budgetBytes ? '  [OVER 300KB]' : ''}');
+  }
+
+  // 确定性索引：固定键序（Map 字面量插入序），无易变字段。
+  final index = <String, dynamic>{
+    'kind': 'previews',
+    'fps': 8,
+    'durationSec': 1.5,
+    'dimensionLadder': dimensionLadder,
+    'entries': entries,
+  };
+  File('$previewRoot/index.json').writeAsStringSync(
+      const JsonEncoder.withIndent('  ').convert(index));
+  if (Directory(tmpRoot).existsSync()) {
+    Directory(tmpRoot).deleteSync(recursive: true);
+  }
+  stdout.writeln(
+      'DONE: ${entries.length} previews -> $previewRoot${oversize > 0 ? '  [$oversize over 300KB budget]' : ''}');
 }

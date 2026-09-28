@@ -1,0 +1,334 @@
+{
+  "kind": "previews",
+  "fps": 8,
+  "durationSec": 1.5,
+  "dimensionLadder": [
+    360,
+    280,
+    220,
+    170,
+    130
+  ],
+  "entries": [
+    {
+      "key": "rain_night_city",
+      "category": "weather",
+      "previewGif": "doc/previews/rain_night_city/preview.gif",
+      "previewPng": "doc/previews/rain_night_city/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 209511
+    },
+    {
+      "key": "snow_landscape",
+      "category": "weather",
+      "previewGif": "doc/previews/snow_landscape/preview.gif",
+      "previewPng": "doc/previews/snow_landscape/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 68667
+    },
+    {
+      "key": "sakura_portrait",
+      "category": "weather",
+      "previewGif": "doc/previews/sakura_portrait/preview.gif",
+      "previewPng": "doc/previews/sakura_portrait/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 119798
+    },
+    {
+      "key": "fireflies_forest",
+      "category": "weather",
+      "previewGif": "doc/previews/fireflies_forest/preview.gif",
+      "previewPng": "doc/previews/fireflies_forest/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 241848
+    },
+    {
+      "key": "godrays_forest",
+      "category": "light",
+      "previewGif": "doc/previews/godrays_forest/preview.gif",
+      "previewPng": "doc/previews/godrays_forest/preview.png",
+      "maxDimension": 280,
+      "gifBytes": 240153
+    },
+    {
+      "key": "speedlines_action",
+      "category": "manga",
+      "previewGif": "doc/previews/speedlines_action/preview.gif",
+      "previewPng": "doc/previews/speedlines_action/preview.png",
+      "maxDimension": 280,
+      "gifBytes": 231825
+    },
+    {
+      "key": "impact_duel",
+      "category": "manga",
+      "previewGif": "doc/previews/impact_duel/preview.gif",
+      "previewPng": "doc/previews/impact_duel/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 74324
+    },
+    {
+      "key": "heartbeat_closeup",
+      "category": "motion",
+      "previewGif": "doc/previews/heartbeat_closeup/preview.gif",
+      "previewPng": "doc/previews/heartbeat_closeup/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 88322
+    },
+    {
+      "key": "combo_rain_lanterns",
+      "category": "combo",
+      "previewGif": "doc/previews/combo_rain_lanterns/preview.gif",
+      "previewPng": "doc/previews/combo_rain_lanterns/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 243293
+    },
+    {
+      "key": "combo_sakura_light",
+      "category": "combo",
+      "previewGif": "doc/previews/combo_sakura_light/preview.gif",
+      "previewPng": "doc/previews/combo_sakura_light/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 238339
+    },
+    {
+      "key": "combo_full_action",
+      "category": "combo",
+      "previewGif": "doc/previews/combo_full_action/preview.gif",
+      "previewPng": "doc/previews/combo_full_action/preview.png",
+      "maxDimension": 280,
+      "gifBytes": 226000
+    },
+    {
+      "key": "fog_landscape",
+      "category": "atmosphere",
+      "previewGif": "doc/previews/fog_landscape/preview.gif",
+      "previewPng": "doc/previews/fog_landscape/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 62858
+    },
+    {
+      "key": "embers_night_city",
+      "category": "atmosphere",
+      "previewGif": "doc/previews/embers_night_city/preview.gif",
+      "previewPng": "doc/previews/embers_night_city/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 202892
+    },
+    {
+      "key": "lightning_night_city",
+      "category": "weather",
+      "previewGif": "doc/previews/lightning_night_city/preview.gif",
+      "previewPng": "doc/previews/lightning_night_city/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 58136
+    },
+    {
+      "key": "toneshift_landscape",
+      "category": "color",
+      "previewGif": "doc/previews/toneshift_landscape/preview.gif",
+      "previewPng": "doc/previews/toneshift_landscape/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 41704
+    },
+    {
+      "key": "vignette_closeup",
+      "category": "color",
+      "previewGif": "doc/previews/vignette_closeup/preview.gif",
+      "previewPng": "doc/previews/vignette_closeup/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 124470
+    },
+    {
+      "key": "starlight_night_city",
+      "category": "light",
+      "previewGif": "doc/previews/starlight_night_city/preview.gif",
+      "previewPng": "doc/previews/starlight_night_city/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 164673
+    },
+    {
+      "key": "slowpush_portrait",
+      "category": "motion",
+      "previewGif": "doc/previews/slowpush_portrait/preview.gif",
+      "previewPng": "doc/previews/slowpush_portrait/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 112092
+    },
+    {
+      "key": "shimmer_landscape",
+      "category": "light",
+      "previewGif": "doc/previews/shimmer_landscape/preview.gif",
+      "previewPng": "doc/previews/shimmer_landscape/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 74527
+    },
+    {
+      "key": "combo_storm_night",
+      "category": "combo",
+      "previewGif": "doc/previews/combo_storm_night/preview.gif",
+      "previewPng": "doc/previews/combo_storm_night/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 81696
+    },
+    {
+      "key": "combo_campfire",
+      "category": "combo",
+      "previewGif": "doc/previews/combo_campfire/preview.gif",
+      "previewPng": "doc/previews/combo_campfire/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 193533
+    },
+    {
+      "key": "dither_compare_forest",
+      "category": "quality",
+      "previewGif": "doc/previews/dither_compare_forest/preview.gif",
+      "previewPng": "doc/previews/dither_compare_forest/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 279463
+    },
+    {
+      "key": "focus_lines_action",
+      "category": "manga",
+      "previewGif": "doc/previews/focus_lines_action/preview.gif",
+      "previewPng": "doc/previews/focus_lines_action/preview.png",
+      "maxDimension": 220,
+      "gifBytes": 248628
+    },
+    {
+      "key": "screen_tone_closeup",
+      "category": "manga",
+      "previewGif": "doc/previews/screen_tone_closeup/preview.gif",
+      "previewPng": "doc/previews/screen_tone_closeup/preview.png",
+      "maxDimension": 220,
+      "gifBytes": 238748
+    },
+    {
+      "key": "impact_burst",
+      "category": "manga",
+      "previewGif": "doc/previews/impact_burst/preview.gif",
+      "previewPng": "doc/previews/impact_burst/preview.png",
+      "maxDimension": 220,
+      "gifBytes": 221396
+    },
+    {
+      "key": "brush_streak_run",
+      "category": "manga",
+      "previewGif": "doc/previews/brush_streak_run/preview.gif",
+      "previewPng": "doc/previews/brush_streak_run/preview.png",
+      "maxDimension": 220,
+      "gifBytes": 275915
+    },
+    {
+      "key": "manga_shake_impact",
+      "category": "manga",
+      "previewGif": "doc/previews/manga_shake_impact/preview.gif",
+      "previewPng": "doc/previews/manga_shake_impact/preview.png",
+      "maxDimension": 220,
+      "gifBytes": 256082
+    },
+    {
+      "key": "flame_campfire",
+      "category": "atmosphere",
+      "previewGif": "doc/previews/flame_campfire/preview.gif",
+      "previewPng": "doc/previews/flame_campfire/preview.png",
+      "maxDimension": 220,
+      "gifBytes": 251522
+    },
+    {
+      "key": "smoke_indoor",
+      "category": "atmosphere",
+      "previewGif": "doc/previews/smoke_indoor/preview.gif",
+      "previewPng": "doc/previews/smoke_indoor/preview.png",
+      "maxDimension": 220,
+      "gifBytes": 191118
+    },
+    {
+      "key": "bubbles_underwater",
+      "category": "atmosphere",
+      "previewGif": "doc/previews/bubbles_underwater/preview.gif",
+      "previewPng": "doc/previews/bubbles_underwater/preview.png",
+      "maxDimension": 220,
+      "gifBytes": 222739
+    },
+    {
+      "key": "leaves_autumn",
+      "category": "weather",
+      "previewGif": "doc/previews/leaves_autumn/preview.gif",
+      "previewPng": "doc/previews/leaves_autumn/preview.png",
+      "maxDimension": 220,
+      "gifBytes": 174823
+    },
+    {
+      "key": "meteors_night",
+      "category": "weather",
+      "previewGif": "doc/previews/meteors_night/preview.gif",
+      "previewPng": "doc/previews/meteors_night/preview.png",
+      "maxDimension": 280,
+      "gifBytes": 265951
+    },
+    {
+      "key": "mood_tension_build",
+      "category": "mood",
+      "previewGif": "doc/previews/mood_tension_build/preview.gif",
+      "previewPng": "doc/previews/mood_tension_build/preview.png",
+      "maxDimension": 220,
+      "gifBytes": 283907
+    },
+    {
+      "key": "mood_burst_impact",
+      "category": "mood",
+      "previewGif": "doc/previews/mood_burst_impact/preview.gif",
+      "previewPng": "doc/previews/mood_burst_impact/preview.png",
+      "maxDimension": 220,
+      "gifBytes": 211554
+    },
+    {
+      "key": "combo_manga_impact",
+      "category": "combo",
+      "previewGif": "doc/previews/combo_manga_impact/preview.gif",
+      "previewPng": "doc/previews/combo_manga_impact/preview.png",
+      "maxDimension": 220,
+      "gifBytes": 260418
+    },
+    {
+      "key": "combo_night_battle",
+      "category": "combo",
+      "previewGif": "doc/previews/combo_night_battle/preview.gif",
+      "previewPng": "doc/previews/combo_night_battle/preview.png",
+      "maxDimension": 280,
+      "gifBytes": 268522
+    },
+    {
+      "key": "combo_peaceful_evening",
+      "category": "combo",
+      "previewGif": "doc/previews/combo_peaceful_evening/preview.gif",
+      "previewPng": "doc/previews/combo_peaceful_evening/preview.png",
+      "maxDimension": 220,
+      "gifBytes": 230283
+    },
+    {
+      "key": "classic_base",
+      "category": "base",
+      "previewGif": "doc/previews/classic_base/preview.gif",
+      "previewPng": "doc/previews/classic_base/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 109859
+    },
+    {
+      "key": "light_sweep_hall",
+      "category": "light",
+      "previewGif": "doc/previews/light_sweep_hall/preview.gif",
+      "previewPng": "doc/previews/light_sweep_hall/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 90672
+    },
+    {
+      "key": "dust_motes",
+      "category": "ambient",
+      "previewGif": "doc/previews/dust_motes/preview.gif",
+      "previewPng": "doc/previews/dust_motes/preview.png",
+      "maxDimension": 360,
+      "gifBytes": 155119
+    }
+  ]
+}

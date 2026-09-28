@@ -178,3 +178,75 @@ const List<ParamSpec> kRenderParamSpecs = [
 
 /// 效果名字目录（= [EffectKind.values] 的名称），供面板生成多选控件。
 List<String> get kEffectNames => EffectKind.values.map((e) => e.name).toList();
+
+/// 单个效果的预览资产引用（第五轮 W2）。
+///
+/// 路径相对核心包仓库根（`comic_motion/`），指向 `doc/previews/<demo>/`
+/// 下的「所见即所得」预览（首帧 PNG + 360p 低配短循环 GIF）。该目录由
+/// `tool/generate_showcase.dart` 单一真相源生成并随仓库提交；本表为
+/// **效果名 → 演示目录** 的交叉引用，App 面板据此自动配图。
+class EffectPreviewRef {
+  const EffectPreviewRef({
+    required this.effect,
+    required this.demoKey,
+    required this.category,
+  });
+
+  /// 效果名（= [EffectKind] 的 name / [kEffectNames] 的元素）。
+  final String effect;
+
+  /// 演示目录名：`doc/previews/<demoKey>/{preview.png, preview.gif}`。
+  final String demoKey;
+
+  /// 面板分组（base/weather/light/manga/motion/color/atmosphere/mood/
+  /// combo/quality/ambient）。
+  final String category;
+
+  /// 首帧 PNG 路径（仓库相对，`comic_motion/` 为根）。
+  String get previewPng => 'doc/previews/$demoKey/preview.png';
+
+  /// 低配短循环 GIF 路径（仓库相对）。
+  String get previewGif => 'doc/previews/$demoKey/preview.gif';
+}
+
+/// 效果 → 预览资产交叉引用（顺序与面板展示建议一致）。
+///
+/// 说明：
+/// - `dust` 是 legacy 别名（渲染走 ambient 粒子通路），与 `ambient` 共用
+///   `dust_motes` 演示；
+/// - `parallax` / `breathing` 是所有演示的底座，用 `classic_base`
+///   （纯底座）作代表预览。
+const List<EffectPreviewRef> kEffectPreviewRefs = [
+  EffectPreviewRef(effect: 'parallax', demoKey: 'classic_base', category: 'base'),
+  EffectPreviewRef(effect: 'breathing', demoKey: 'classic_base', category: 'base'),
+  EffectPreviewRef(effect: 'ambient', demoKey: 'dust_motes', category: 'ambient'),
+  EffectPreviewRef(effect: 'dust', demoKey: 'dust_motes', category: 'ambient'),
+  EffectPreviewRef(effect: 'lightSweep', demoKey: 'light_sweep_hall', category: 'light'),
+  EffectPreviewRef(effect: 'rain', demoKey: 'rain_night_city', category: 'weather'),
+  EffectPreviewRef(effect: 'snow', demoKey: 'snow_landscape', category: 'weather'),
+  EffectPreviewRef(effect: 'sakura', demoKey: 'sakura_portrait', category: 'weather'),
+  EffectPreviewRef(effect: 'fireflies', demoKey: 'fireflies_forest', category: 'weather'),
+  EffectPreviewRef(effect: 'godRays', demoKey: 'godrays_forest', category: 'light'),
+  EffectPreviewRef(effect: 'speedLines', demoKey: 'speedlines_action', category: 'manga'),
+  EffectPreviewRef(effect: 'impactFlash', demoKey: 'impact_duel', category: 'manga'),
+  EffectPreviewRef(effect: 'heartbeat', demoKey: 'heartbeat_closeup', category: 'motion'),
+  EffectPreviewRef(effect: 'fog', demoKey: 'fog_landscape', category: 'atmosphere'),
+  EffectPreviewRef(effect: 'embers', demoKey: 'embers_night_city', category: 'atmosphere'),
+  EffectPreviewRef(effect: 'lightning', demoKey: 'lightning_night_city', category: 'weather'),
+  EffectPreviewRef(effect: 'toneShift', demoKey: 'toneshift_landscape', category: 'color'),
+  EffectPreviewRef(effect: 'vignette', demoKey: 'vignette_closeup', category: 'color'),
+  EffectPreviewRef(effect: 'starlight', demoKey: 'starlight_night_city', category: 'light'),
+  EffectPreviewRef(effect: 'slowPush', demoKey: 'slowpush_portrait', category: 'motion'),
+  EffectPreviewRef(effect: 'shimmer', demoKey: 'shimmer_landscape', category: 'light'),
+  EffectPreviewRef(effect: 'focusLines', demoKey: 'focus_lines_action', category: 'manga'),
+  EffectPreviewRef(effect: 'screenTone', demoKey: 'screen_tone_closeup', category: 'manga'),
+  EffectPreviewRef(effect: 'mangaShake', demoKey: 'manga_shake_impact', category: 'manga'),
+  EffectPreviewRef(effect: 'impactRings', demoKey: 'impact_burst', category: 'manga'),
+  EffectPreviewRef(effect: 'brushStreak', demoKey: 'brush_streak_run', category: 'manga'),
+  EffectPreviewRef(effect: 'flame', demoKey: 'flame_campfire', category: 'atmosphere'),
+  EffectPreviewRef(effect: 'smoke', demoKey: 'smoke_indoor', category: 'atmosphere'),
+  EffectPreviewRef(effect: 'bubbles', demoKey: 'bubbles_underwater', category: 'atmosphere'),
+  EffectPreviewRef(effect: 'leaves', demoKey: 'leaves_autumn', category: 'weather'),
+  EffectPreviewRef(effect: 'meteors', demoKey: 'meteors_night', category: 'weather'),
+  EffectPreviewRef(effect: 'moodScript', demoKey: 'mood_tension_build', category: 'mood'),
+];
