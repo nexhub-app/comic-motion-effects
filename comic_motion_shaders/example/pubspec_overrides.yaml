@@ -1,5 +1,5 @@
 # example 经 path 依赖本包，本包又依赖核心包 comic_motion；开发期核心包
 # 未发布到 pub.dev 时，用 path override 直连 monorepo（与上层包同策略）。
-pubspec_overrides:
+dependency_overrides:
   comic_motion:
     path: ../../comic_motion
