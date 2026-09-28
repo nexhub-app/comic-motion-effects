@@ -1,0 +1,23 @@
+name: comic_motion_flutter_example
+description: >-
+  Usage examples for comic_motion_flutter: MotionGifView placeholder
+  crossfade + entrance frames, ParallaxGyroView with touch/tilt drivers.
+publish_to: none
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  comic_motion_flutter:
+    path: ../
+
+flutter:
+  uses-material-design: true
+  # 先用核心包 CLI 导出产物并拷入本目录（README「准备产物」一节）：
+  #   assets/
+  #     demo/<stem>_<hash>_<hash>/anim.gif | first_frame.png | anim.entrance/
+  #     demo_pan/<stem>_<hash>_<hash>_interactive/index.json | frame_NNNN.png
+  assets:
+    - assets/

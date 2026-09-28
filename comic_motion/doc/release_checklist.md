@@ -32,6 +32,13 @@
     时，server 必须在同一 PR 内升级依赖下限并同步发版。
   - 两包 CHANGELOG 各自独立维护；engine 的行为变化条目以 engine
     CHANGELOG 为准，server 只记录自身（CLI/HTTP/台账）变化。
+- `comic_motion_flutter`（0.1.0 起）与 server 同策略（`publish_to: none`
+  不适用于 flutter 包，发布到 pub.dev；path override 同第三节）。**发布
+  时序硬约束**：伴生包消费 V1/V2 新 API（`exportInteractionFrames` /
+  `exportEntranceFrames` / 产物 index.json 契约），这些 API 尚未随
+  engine 稳定版发布——伴生包发版前，engine 必须先发布包含对应 API 的
+  版本，并把伴生包 `pubspec.yaml` 的 `comic_motion: ^1.3.0` 下限提到
+  实际包含这些 API 的版本。
 
 ## 三、path override ↔ 版本依赖的切换时机
 

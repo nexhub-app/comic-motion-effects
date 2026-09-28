@@ -1,0 +1,7 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    # 与核心包保持一致的工程纪律。
+    avoid_print: true
+    prefer_single_quotes: true

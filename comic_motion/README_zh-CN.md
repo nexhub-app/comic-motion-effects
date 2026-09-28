@@ -481,6 +481,16 @@ dart run tool/bench.dart       # 性能基准 + 复现性 + 并行度扫描（�
 dart run tool/gif_check.dart   # GIF 严格逐帧解码校验
 ```
 
+## 生态
+
+单向依赖：核心包保持纯 Dart，对伴生包一无所知。
+
+| 包 | 职责 |
+|---|---|
+| **comic_motion**（本包） | 纯 Dart 渲染引擎——深度分层、动效、编码 |
+| [comic_motion_server](../comic_motion_server) | CLI（单图/批量）+ HTTP API 服务 |
+| [comic_motion_flutter](../comic_motion_flutter) | Flutter widgets：`MotionGifView`（占位 crossfade、播放控制、入场帧）、`ParallaxGyroView`（陀螺仪/触摸/注入流视差），以及资产/磁盘帧集加载工具 |
+
 ## 兼容与废弃（deprecation）流程
 
 公共 API 的破坏性变更走 `@Deprecated` 周期：旧接口先标注废弃并附迁移说明，

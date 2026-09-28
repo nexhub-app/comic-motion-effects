@@ -14,3 +14,7 @@ presets/.json
 
 # agent session artifacts
 .mimosa/
+
+# example assets are user-supplied render outputs; keep dir marker only
+comic_motion_flutter/example/assets/*
+!comic_motion_flutter/example/assets/.gitkeep

@@ -623,6 +623,17 @@ dart run tool/bench.dart       # perf + reproducibility + parallelism scan (exit
 dart run tool/gif_check.dart   # strict per-frame GIF decode verification
 ```
 
+## Ecosystem
+
+One-way dependency: the core stays pure Dart and knows nothing about its
+companions.
+
+| Package | Role |
+|---|---|
+| **comic_motion** (this package) | Pure-Dart rendering engine — depth layers, effects, encoding |
+| [comic_motion_server](../comic_motion_server) | CLI (single/batch) + HTTP API service |
+| [comic_motion_flutter](../comic_motion_flutter) | Flutter widgets: `MotionGifView` (placeholder crossfade, playback control, entrance frames), `ParallaxGyroView` (gyro/touch/injected-stream parallax), plus asset/disk frame-set loaders |
+
 ## Compatibility and deprecation policy
 
 Breaking changes to the public API follow a `@Deprecated` cycle: the old

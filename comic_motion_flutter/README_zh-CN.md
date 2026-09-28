@@ -1,0 +1,90 @@
+# comic_motion_flutter
+
+[English](README.md) | [简体中文](README_zh-CN.md)
+
+核心包 [**comic_motion**](../comic_motion) 的 Flutter 伴生包——提供直接
+消费引擎渲染产物的即用 widgets，嵌入方无需自己写解码与动画代码。
+
+核心包保持**纯 Dart**（零 Flutter 依赖）；本包为单向依赖的伴生包：
+
+```
+comic_motion（纯 Dart 引擎）  ←  comic_motion_flutter（widgets）
+                              ←  comic_motion_server（CLI / HTTP）
+```
+
+## Widgets
+
+### MotionGifView —— 全量渲染产物的播放视图
+
+| 能力 | 说明 |
+|---|---|
+| 占位无缝过渡 | `firstFramePng` 立即上屏，GIF 首帧解码完成后 crossfade 淡出（默认 150ms，`Duration.zero` = 直切） |
+| 播放控制 | `playing` 外部驱动暂停/恢复；`loop: false` 播完停在末帧 |
+| 减弱动态 | 跟随 `MediaQuery.disableAnimations`——静帧占位、不解码动画（`respectReducedMotion`） |
+| 入场帧 | 可选的 V2 入场 PNG 序列前置播放（模糊 → 清晰浮现），随后无缝切入 GIF 循环 |
+
+```dart
+MotionGifView(
+  gifBytes: gif,            // MemoryPipelineResult.gifBytes / anim.gif
+  firstFramePng: cover,     // MemoryPipelineResult.firstFramePng
+  entranceFrames: entrance, // 可选：exportEntranceFrames 产物
+)
+```
+
+### ParallaxGyroView —— V1 交互帧集的跟手视差视图
+
+三种输入驱动（注入流非空时优先）：
+
+1. **陀螺仪**（默认）——加速度计 → 归一化倾斜相位（`maxTiltDeg`，默认
+   15° 满偏），~60fps 节流 + 0.01 死区；
+2. **触摸回退**（`touchFallback`）——平移手势按「半视口拖动 = 满相位」
+   换算；桌面端 / 无传感器设备开箱即用；
+3. **注入流**（`tiltStream`）——`Stream<Offset>`，值域 [-1,1]；不订阅
+   传感器。这是测试 mock 与自定义驱动（摇杆等）的挂点。
+
+插值（`smooth`）：`true`（默认）相邻两帧 alpha 混合，慢速倾斜顺滑；
+`false` 最近帧直切，零开销基线。
+
+```dart
+final sets = await loadInteractionSets(interactiveDir); // 磁盘
+// 或：loadInteractionSetsFromIndexJson(indexBytes, loadFrame: ...) // 资产
+
+ParallaxGyroView(frames: sets.first) // both 导出：按展示位各取一组
+```
+
+## 纯 Dart 辅助工具（不依赖 Flutter 即可单测）
+
+- `loadInteractionSets(dir)`——从磁盘加载 `<...>_interactive/` 目录；
+- `loadInteractionSetsFromIndexJson(bytes, loadFrame:)`——任意字节存储
+  （资产、网络、WASM）经取字节回调加载；
+- `tiltToPhase(ax, ay, az, maxTiltRad)`——加速度计 → `(phaseX, phaseY)`，
+  参考倾斜模型（roll/pitch 的 atan2 归一化）。
+
+## 内存提示
+
+- 帧集 PNG 经 `Image` 的解码缓存常驻（受全局 `ImageCache` 上限约束）；
+  帧集分辨率建议 ≤ 显示尺寸的 1.5 倍。
+- `MotionGifView` 经 `ui.instantiateImageCodec` 解码；重渲染活属于核心包
+  的后台入口（`processFileInBackground` 等）——见核心包 README「线程模型」。
+
+## 安装
+
+```yaml
+dependencies:
+  comic_motion_flutter: ^0.1.0
+```
+
+monorepo 内各包以 `pubspec_overrides.yaml` 的 path 依赖互联，见
+`comic_motion_flutter/pubspec_overrides.yaml`。
+
+## 环境要求
+
+| 项目 | 要求 |
+|---|---|
+| Flutter | ≥ 3.22（Dart ≥ 3.4.0） |
+| 核心包 | `comic_motion: ^1.3.0` |
+| 传感器（可选） | `sensors_plus ^6.1.1`——仅 `tiltStream` 为空时使用 |
+
+## 许可
+
+Apache-2.0，见 [LICENSE](LICENSE)。
