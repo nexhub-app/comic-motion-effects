@@ -12,6 +12,7 @@ one-way dependent companion:
 ```
 comic_motion (pure Dart engine)  ←  comic_motion_flutter (widgets)
                                  ←  comic_motion_server (CLI / HTTP)
+                                 ←  comic_motion_shaders (GPU realtime)
 ```
 
 ## Widgets

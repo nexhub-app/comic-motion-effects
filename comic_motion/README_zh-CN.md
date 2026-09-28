@@ -26,8 +26,11 @@ CLI（单图 / 批处理）与 HTTP API 服务在姊妹包 **[comic_motion_serve
   由伴生 widget 逐帧回放。
 - 仓库根的 `realtime/index.html` 仅是**翻页手势的参考实现**（Canvas 2D
   演示），不由本引擎产出、也不通过本引擎消费。
-- 实时 GPU 路径（Flutter FragmentShader）已列入路线图，将作为独立 shader
-  伴生包实现；见 [doc/roadmap.md](doc/roadmap.md)。
+- 实时 GPU 路径已落地为**独立 shader 伴生包**
+  [`comic_motion_shaders`](../comic_motion_shaders)——MVP 以单一
+  uber-shader 实时渲染 `exportLayers` 分层纹理集的 parallax / breathing /
+  lightSweep / vignette 四件变换效果；粒子类效果仍在路线图，见
+  [doc/roadmap.md](doc/roadmap.md)。
 
 ## 作为库嵌入 Flutter 工程
 

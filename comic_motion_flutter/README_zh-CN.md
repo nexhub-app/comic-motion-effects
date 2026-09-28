@@ -10,6 +10,7 @@
 ```
 comic_motion（纯 Dart 引擎）  ←  comic_motion_flutter（widgets）
                               ←  comic_motion_server（CLI / HTTP）
+                              ←  comic_motion_shaders（GPU 实时渲染）
 ```
 
 ## Widgets

@@ -38,9 +38,11 @@ decoupled — embedding the engine pulls in no HTTP stack at all.
 - `realtime/index.html` at the repo root is a **reference implementation of
   page-turn gestures** (Canvas 2D demo) only — it is not produced by, or
   consumed through, this engine.
-- A real-time GPU path (Flutter FragmentShader) is on the roadmap, as a
-  separate shader companion package; see
-  [doc/roadmap.md](doc/roadmap.md).
+- A real-time GPU path exists as a **separate shader companion package**,
+  [`comic_motion_shaders`](../comic_motion_shaders) — MVP renders
+  parallax / breathing / lightSweep / vignette in real time over the
+  `exportLayers` texture set via a single uber-shader. Particle-class
+  effects remain on the roadmap; see [doc/roadmap.md](doc/roadmap.md).
 
 ## Embedding into a Flutter app
 
