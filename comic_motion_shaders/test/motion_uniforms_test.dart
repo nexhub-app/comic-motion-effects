@@ -16,11 +16,11 @@ void main() {
     });
 
     test('开关与参数按布局契约落位', () {
-      final f = MotionUniforms(
+      final f = const MotionUniforms(
         parallax: true,
         parallaxDx: 0.02,
         parallaxDy: 0.03,
-        depth: const [0, 0.5, 1.0],
+        depth: [0, 0.5, 1.0],
         breathing: true,
         zoom: 0.04,
         phase: 0.25,
@@ -57,7 +57,7 @@ void main() {
     });
 
     test('数值钳制：视差/缩放/强度/带宽越界收敛', () {
-      final f = MotionUniforms(
+      final f = const MotionUniforms(
         parallax: true,
         parallaxDx: -3,
         parallaxDy: 5,
@@ -80,7 +80,8 @@ void main() {
       expect(f[MotionUniforms.kIndexZoom], 0.5);
       expect(f[MotionUniforms.kIndexPhase], 1.0);
       expect(f[MotionUniforms.kIndexSweepPos], -0.5);
-      expect(f[MotionUniforms.kIndexSweepWidth], 1e-4);
+      expect(f[MotionUniforms.kIndexSweepWidth], closeTo(1e-4, 1e-9),
+          reason: 'Float32List 有 float32 舍入，用 closeTo');
       expect(f[MotionUniforms.kIndexSweepIntensity], 1.0);
       expect(f[MotionUniforms.kIndexVignetteStrength], 0.0);
       expect(f[MotionUniforms.kIndexVignetteSoftness], 1.0);
@@ -89,9 +90,9 @@ void main() {
     });
 
     test('深度数组定长化：截断 + 补 0 + 逐项钳制', () {
-      final f = MotionUniforms(
+      final f = const MotionUniforms(
         parallax: true,
-        depth: const [0.0, 2.0, 0.5, -0.3, 0.9], // 5 项截到 4，2/-0.3 钳制
+        depth: [0.0, 2.0, 0.5, -0.3, 0.9], // 5 项截到 4，2/-0.3 钳制
       ).toFloats();
       expect(f[MotionUniforms.kIndexDepth0], 0.0);
       expect(f[MotionUniforms.kIndexDepth1], 1.0);

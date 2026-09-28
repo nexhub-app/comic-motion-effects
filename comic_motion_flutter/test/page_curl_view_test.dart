@@ -18,7 +18,11 @@ Widget _host(
       data: MediaQueryData(disableAnimations: disableAnimations),
       child: Directionality(
         textDirection: TextDirection.ltr,
-        child: SizedBox(width: 200, height: 300, child: child),
+        // pumpWidget 根节点拿到的是整个测试表面的紧约束，SizedBox 会被
+        // 拉成全屏 —— Center 提供松约束后 200x300 才生效。
+        child: Center(
+          child: SizedBox(width: 200, height: 300, child: child),
+        ),
       ),
     );
 
@@ -54,6 +58,12 @@ void main() {
   double progress(WidgetTester tester) =>
       PageCurlView.progressOf(tester.element(find.byType(PageCurlView)));
 
+  /// 卷页视图矩形与坐标（宿主居中，坐标相对矩形计算）。
+  Rect rect(WidgetTester tester) =>
+      tester.getRect(find.byType(PageCurlView));
+  double px(WidgetTester tester, double frac) =>
+      rect(tester).left + rect(tester).width * frac;
+
   setUp(() => rec = _Recorder());
 
   group('回调触发', () {
@@ -62,7 +72,7 @@ void main() {
       await tester.pumpAndSettle(); // idle 首抓
       expect(rec.starts, isEmpty);
 
-      await tester.tapAt(const Offset(150, 150)); // 右半屏
+      await tester.tapAt(Offset(px(tester, 0.75), rect(tester).center.dy)); // 右半屏
       await tester.pump();
       expect(rec.starts, ['0->1'], reason: '翻页开始即触发 Start');
       expect(rec.ends, isEmpty);
@@ -76,7 +86,7 @@ void main() {
       await tester.pumpWidget(_host(view()));
       await tester.pumpAndSettle();
 
-      await tester.tapAt(const Offset(50, 150)); // 左半屏
+      await tester.tapAt(Offset(px(tester, 0.25), rect(tester).center.dy)); // 左半屏
       await tester.pump();
       await tester.pumpAndSettle();
       expect(rec.starts, isEmpty, reason: '越界方向不触发翻页');
@@ -89,8 +99,13 @@ void main() {
       await tester.pumpWidget(_host(view()));
       await tester.pumpAndSettle();
 
-      final gesture = await tester.startGesture(const Offset(150, 150));
-      await gesture.moveBy(const Offset(-40, 0)); // 40/200 = 0.2 < 0.32
+      final gesture = await tester.startGesture(Offset(px(tester, 0.75), rect(tester).center.dy));
+      await tester.pump();
+      // 分事件下发：首个事件越过 slop 激活拖拽（startPos = 激活点），
+      // 后续事件的位移才计入 dx。
+      await gesture.moveBy(const Offset(-20, 0));
+      await tester.pump();
+      await gesture.moveBy(const Offset(-20, 0)); // 40/200 = 0.2 < 0.32
       await tester.pump();
       expect(rec.starts, ['0->1'], reason: '拖拽起步即触发 Start');
       await gesture.up();
@@ -104,8 +119,11 @@ void main() {
       await tester.pumpWidget(_host(view()));
       await tester.pumpAndSettle();
 
-      final gesture = await tester.startGesture(const Offset(180, 150));
-      await gesture.moveBy(const Offset(-100, 0)); // 0.5 > 0.32
+      final gesture = await tester.startGesture(Offset(px(tester, 0.9), rect(tester).center.dy));
+      await tester.pump();
+      await gesture.moveBy(const Offset(-20, 0)); // 激活
+      await tester.pump();
+      await gesture.moveBy(const Offset(-80, 0)); // 100/200 = 0.5 > 0.32
       await tester.pump();
       await gesture.up();
       await tester.pumpAndSettle();
@@ -118,12 +136,14 @@ void main() {
       await tester.pumpWidget(_host(view()));
       await tester.pumpAndSettle();
 
-      final gesture = await tester.startGesture(const Offset(180, 150));
-      // 首 ~18px 是水平拖拽 slop，不计入进度。
-      await gesture.moveBy(const Offset(-80, 0)); // (80-18)/200 ≈ 0.31
+      final gesture = await tester.startGesture(Offset(px(tester, 0.9), rect(tester).center.dy));
+      await tester.pump();
+      // 首 ~18px 是水平拖拽 slop：首个 move 事件只负责激活（startPos 取
+      // 激活点），后续 move 的位移才计入卷页进度。
+      await gesture.moveBy(const Offset(-20, 0));
       await tester.pump();
       await tester.pump(); // 截屏完成帧
-      await gesture.moveBy(const Offset(-40, 0)); // (120-18)/200 ≈ 0.51
+      await gesture.moveBy(const Offset(-100, 0)); // dx≈-100 → 进度 ≈0.5
       await tester.pump();
 
       expect(progress(tester), closeTo(0.51, 0.06));
@@ -138,7 +158,7 @@ void main() {
       await tester.pumpWidget(_host(view(), disableAnimations: true));
       await tester.pumpAndSettle();
 
-      await tester.tapAt(const Offset(150, 150));
+      await tester.tapAt(Offset(px(tester, 0.75), rect(tester).center.dy));
       await tester.pump();
       expect(rec.starts, ['0->1']);
       await tester.pumpAndSettle();
@@ -153,7 +173,7 @@ void main() {
       await tester.pumpAndSettle();
       final buildsAfterIdle = rec.frontBuilds;
 
-      final gesture = await tester.startGesture(const Offset(180, 150));
+      final gesture = await tester.startGesture(Offset(px(tester, 0.9), rect(tester).center.dy));
       for (var i = 0; i < 6; i++) {
         await gesture.moveBy(const Offset(-10, 0));
         await tester.pump();

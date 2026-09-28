@@ -35,19 +35,25 @@ Widget _host(Widget child) => Directionality(
       child: SizedBox.expand(child: child),
     );
 
-/// 注入一个相位并等待真实时钟越过 16ms 节流窗。
+/// 注入一个相位并等待真实时钟越过 16ms 节流窗（widget 侧 DateTime.now
+/// 防抖走真实时钟）。注意：testWidgets 的 FakeAsync 区内裸 `await
+/// Future.delayed` 永不完成，必须经 `runAsync` 冲刷真实时间。
 Future<void> inject(
   StreamController<Offset> ctrl,
   Offset phase,
   WidgetTester tester,
 ) async {
   ctrl.add(phase);
-  await Future<void>.delayed(const Duration(milliseconds: 20));
+  await tester.runAsync(() =>
+      Future<void>.delayed(const Duration(milliseconds: 20)));
   await tester.pump();
 }
 
 Uint8List _shownBytes(WidgetTester tester) {
-  final images = tester.widgetList<Image>(find.byType(Image)).toList();
+  // skipOffstage: false —— 滚出视口但仍在 cacheExtent 内的元素会被
+  // 默认 finder 当作 offstage 过滤掉，而断言对象恰是"静帧仍在树中"。
+  final images =
+      tester.widgetList<Image>(find.byType(Image, skipOffstage: false)).toList();
   expect(images, isNotEmpty);
   final provider = images.first.image as MemoryImage;
   return provider.bytes;
@@ -177,10 +183,10 @@ void main() {
   });
 
   testWidgets('空帧集：兜底显示 semanticLabel', (tester) async {
-    final empty = InteractionFrameSet(
+    const empty = InteractionFrameSet(
       axis: InteractionAxis.horizontal,
-      phases: const [],
-      pngBytes: const [],
+      phases: [],
+      pngBytes: [],
     );
     await tester.pumpWidget(_host(ParallaxGyroView(
       frames: empty,
@@ -266,8 +272,9 @@ void main() {
     await tester.pump();
     expect(_shownBytes(tester), same(frames.pngBytes[2]));
 
-    // 滚出（item 0..100 在 offset=300 时屏外，cache 内保留）。
-    controller.jumpTo(300);
+    // 滚出（item 0..100 在 offset=200 时屏外，与视口前缘空隙 100 <
+    // cacheExtent(250)，元素保留；300 会超出缓存区把 item 整个回收）。
+    controller.jumpTo(200);
     await tester.pump(const Duration(milliseconds: 50));
     await inject(ctrl, const Offset(0.9, 0), tester);
     expect(_shownBytes(tester), same(frames.pngBytes[2]),
