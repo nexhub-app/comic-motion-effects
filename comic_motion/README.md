@@ -29,6 +29,19 @@ decoupled — embedding the engine pulls in no HTTP stack at all.
 | OS | Windows / Linux / macOS (pure Dart) |
 | Network | Only for `dart pub get` |
 
+## ⚠️ Capability boundary
+
+- This library outputs **pre-rendered animation assets** (GIF / APNG / frame
+  sequences). It is **not** a real-time interactive rendering engine — even
+  the interactive parallax path (V1) is a pre-rendered frame set sampled at
+  discrete phases, played back frame-by-frame by the companion widgets.
+- `realtime/index.html` at the repo root is a **reference implementation of
+  page-turn gestures** (Canvas 2D demo) only — it is not produced by, or
+  consumed through, this engine.
+- A real-time GPU path (Flutter FragmentShader) is on the roadmap, as a
+  separate shader companion package; see
+  [doc/roadmap.md](doc/roadmap.md).
+
 ## Embedding into a Flutter app
 
 ### Installation

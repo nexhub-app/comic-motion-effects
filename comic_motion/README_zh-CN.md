@@ -19,6 +19,16 @@ CLI（单图 / 批处理）与 HTTP API 服务在姊妹包 **[comic_motion_serve
 | 操作系统 | Windows / Linux / macOS（纯 Dart） |
 | 网络 | 仅 `dart pub get` 时需要 |
 
+## ⚠️ 能力边界
+
+- 本库输出的是**预渲染动图资产**（GIF / APNG / 帧序列），**不是**实时交互
+  渲染引擎——即使是交互视差路径（V1），本质也是按离散相位预渲染的帧集，
+  由伴生 widget 逐帧回放。
+- 仓库根的 `realtime/index.html` 仅是**翻页手势的参考实现**（Canvas 2D
+  演示），不由本引擎产出、也不通过本引擎消费。
+- 实时 GPU 路径（Flutter FragmentShader）已列入路线图，将作为独立 shader
+  伴生包实现；见 [doc/roadmap.md](doc/roadmap.md)。
+
 ## 作为库嵌入 Flutter 工程
 
 ### 引入方式
