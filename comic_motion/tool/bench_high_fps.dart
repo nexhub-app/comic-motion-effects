@@ -107,7 +107,7 @@ Future<void> main(List<String> args) async {
   final rerun = await MotionPipeline(cfg).processFile(input, '$out/det_check');
   final detBytes = File(rerun.outputApng).lengthSync();
   final baseRow =
-      rows.firstWhere((r) => r['scenario'] == checkName) as Map<String, dynamic>;
+      rows.firstWhere((r) => r['scenario'] == checkName);
   final deterministic = detBytes == (baseRow['outputBytes'] as int);
   stdout.writeln('determinism size check: $deterministic');
 

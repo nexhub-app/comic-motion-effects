@@ -34,7 +34,6 @@ import 'dart:io' as io;
 import 'dart:typed_data';
 
 import 'cancellation.dart';
-import 'effect_config.dart';
 import 'frame_compositor.dart';
 import 'image_io.dart';
 import 'image_model.dart';

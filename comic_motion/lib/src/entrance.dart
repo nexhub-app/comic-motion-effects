@@ -26,7 +26,6 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'cancellation.dart';
-import 'effect_config.dart';
 import 'image_io.dart';
 import 'image_model.dart';
 import 'pipeline.dart';

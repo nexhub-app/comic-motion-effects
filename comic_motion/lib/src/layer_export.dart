@@ -17,7 +17,6 @@ import 'dart:io' as io;
 import 'dart:typed_data';
 
 import 'apng_writer.dart' show PixelRect;
-import 'depth_splitter.dart';
 import 'image_io.dart';
 import 'image_model.dart';
 import 'pipeline.dart';

@@ -297,6 +297,3 @@ int _crc32Of(_Chunk c) {
   return (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF;
 }
 
-extension<T> on T {
-  R let<R>(R Function(T) f) => f(this);
-}
