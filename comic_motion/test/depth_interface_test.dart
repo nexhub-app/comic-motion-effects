@@ -6,6 +6,23 @@ import 'package:test/test.dart';
 
 import 'package:comic_motion/comic_motion.dart';
 
+/// 自定义估算器：垂直线性深度（上远下近），与启发式输出必然不同。
+/// （Dart 不允许函数体内声明局部类，须置于顶层。）
+class LinearDepthEstimator implements DepthEstimator {
+  const LinearDepthEstimator();
+
+  @override
+  DepthMap estimate(RgbaImage img) {
+    final dm = DepthMap(img.width, img.height);
+    for (var y = 0; y < img.height; y++) {
+      for (var x = 0; x < img.width; x++) {
+        dm.data[y * img.width + x] = y / (img.height - 1);
+      }
+    }
+    return dm;
+  }
+}
+
 /// W6：AI 深度接口化 —— DepthEstimator 抽象接口、注入、exportLayers 纹理集。
 ///
 /// 红线锚点：显式注入默认启发式 == 隐式缺省（逐字节）；自定义 estimator
@@ -26,22 +43,6 @@ void main() {
     return im;
   }
 
-  /// 自定义估算器：垂直线性深度（上远下近），与启发式输出必然不同。
-  class LinearDepthEstimator implements DepthEstimator {
-    const LinearDepthEstimator();
-
-    @override
-    DepthMap estimate(RgbaImage img) {
-      final dm = DepthMap(img.width, img.height);
-      for (var y = 0; y < img.height; y++) {
-        for (var x = 0; x < img.width; x++) {
-          dm.data[y * img.width + x] = y / (img.height - 1);
-        }
-      }
-      return dm;
-    }
-  }
-
   Map<String, dynamic> cfgJson() => <String, dynamic>{
         'effects': ['parallax'],
         'fps': 12,
@@ -57,8 +58,7 @@ void main() {
           Uint8List.fromList(ImageIO.encodePngFrame(gradientRaster()));
       final implicit = await MotionPipeline(EffectConfig.fromJson(cfgJson()))
           .processBytes(input: bytes);
-      final explicit = await MotionPipeline(
-              EffectConfig.fromJson(cfgJson()),
+      final explicit = await MotionPipeline(EffectConfig.fromJson(cfgJson()),
               depthEstimator: const HeuristicDepthEstimator())
           .processBytes(input: bytes);
       expect(explicit.gifBytes, implicit.gifBytes,
@@ -129,8 +129,8 @@ void main() {
         for (var x = 0; x < 120; x++) {
           final o = (y * 120 + x) * 4;
           im.data[o + 3] = 255;
-          final dark = (y < 90 && x > 10 && x < 110) ||
-              (y > 110 && x > 20 && x < 100);
+          final dark =
+              (y < 90 && x > 10 && x < 110) || (y > 110 && x > 20 && x < 100);
           im.data[o] = dark ? 30 : 255;
           im.data[o + 1] = dark ? 30 : 255;
           im.data[o + 2] = dark ? 30 : 255;
@@ -139,21 +139,18 @@ void main() {
       final export = MotionPipeline(cfg).exportLayers(im);
       expect(export.layers.length, greaterThanOrEqualTo(6),
           reason: '多格图应产出格数×layerCount 层');
-      final withClip =
-          export.layers.where((l) => l.clip != null).length;
+      final withClip = export.layers.where((l) => l.clip != null).length;
       expect(withClip, export.layers.length, reason: 'panelAware 层带 clip');
       // 索引记录 clip。
       final index = jsonDecode(export.indexJson) as Map<String, dynamic>;
       final entries = index['layers'] as List;
-      expect(
-          entries.every((e) => (e as Map).containsKey('clip')), isTrue);
+      expect(entries.every((e) => (e as Map).containsKey('clip')), isTrue);
     });
 
     test('文件入口落盘 layer_NN.png + index.json', () async {
       final tmp = await Directory.systemTemp.createTemp('w6_layers');
       try {
-        final input =
-            '${tmp.path}${Platform.pathSeparator}in.png';
+        final input = '${tmp.path}${Platform.pathSeparator}in.png';
         File(input).writeAsBytesSync(
             Uint8List.fromList(ImageIO.encodePngFrame(gradientRaster())));
         final export = await MotionPipeline(EffectConfig.fromJson(cfgJson()))
@@ -162,8 +159,7 @@ void main() {
         final dir = Directory(export.dir);
         expect(dir.existsSync(), isTrue);
         final files = dir.listSync().map((f) => f.path).toList();
-        expect(
-            files.where((f) => f.endsWith('.png')), isNotEmpty);
+        expect(files.where((f) => f.endsWith('.png')), isNotEmpty);
         expect(files.any((f) => f.endsWith('index.json')), isTrue);
       } finally {
         await tmp.delete(recursive: true);
