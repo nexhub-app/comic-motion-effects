@@ -172,7 +172,7 @@ void main() {
           img.setPixel(x, y, v, v, v);
         }
       }
-      final depth = DepthEstimator().estimate(img);
+      final depth = HeuristicDepthEstimator().estimate(img);
       expect(depth.data.any((d) => d > 0.7), isTrue);
       expect(depth.data.any((d) => d < 0.3), isTrue);
       final layers = LayerSplitter(layerCount: 3).split(img, depth);
@@ -188,7 +188,7 @@ void main() {
 
     test('层数 2 与 4 均可工作', () {
       final img = _flatWithBlob();
-      final depth = DepthEstimator().estimate(img);
+      final depth = HeuristicDepthEstimator().estimate(img);
       expect(LayerSplitter(layerCount: 2).split(img, depth).length, 2);
       expect(LayerSplitter(layerCount: 4).split(img, depth).length, 4);
     });
@@ -196,7 +196,7 @@ void main() {
 
   group('v1.3 层掩码质量：双线性深度、羽化、边缘外扩', () {
     final img = _flatWithBlob();
-    final depth = DepthEstimator(workScale: 0.5).estimate(img);
+    final depth = HeuristicDepthEstimator(workScale: 0.5).estimate(img);
 
     /// 水平 alpha 突跳（>90）出现的列号。最近邻 2× 放大把深度按 2×2 方块复制，
     /// 跳变只可能落在偶数列；双线性插值会在奇数列也产生过渡。
@@ -354,7 +354,7 @@ void main() {
     test('同一帧 t 相同则像素完全一致（确定性）', () {
       final img = _flatWithBlob();
       final cfg = EffectConfig(fps: 8, durationSec: 1, seed: 7);
-      final depth = DepthEstimator().estimate(img);
+      final depth = HeuristicDepthEstimator().estimate(img);
       final layers = LayerSplitter(layerCount: 3).split(img, depth);
       final c1 = FrameCompositor(layers, img, cfg);
       final c2 = FrameCompositor(layers, img, cfg);
@@ -366,7 +366,7 @@ void main() {
     test('不同 t 帧产生运动（帧间差异）', () {
       final img = _flatWithBlob();
       final cfg = EffectConfig(fps: 8, durationSec: 1);
-      final depth = DepthEstimator().estimate(img);
+      final depth = HeuristicDepthEstimator().estimate(img);
       final layers = LayerSplitter(layerCount: 3).split(img, depth);
       final c = FrameCompositor(layers, img, cfg);
       final f0 = c.renderFrame(0.0);
@@ -380,7 +380,7 @@ void main() {
 
     test('修改幅度参数改变输出', () {
       final img = _flatWithBlob();
-      final depth = DepthEstimator().estimate(img);
+      final depth = HeuristicDepthEstimator().estimate(img);
       final layers = LayerSplitter(layerCount: 3).split(img, depth);
       final quiet = EffectConfig(
           parallax: ParallaxParams(amplitude: 0.0), fps: 8, durationSec: 1);
@@ -1921,7 +1921,7 @@ void main() {
     }
 
     List<LayerImage> layersOf(RgbaImage img) {
-      final depth = DepthEstimator().estimate(img);
+      final depth = HeuristicDepthEstimator().estimate(img);
       return LayerSplitter(layerCount: 3).split(img, depth);
     }
 
@@ -2095,7 +2095,7 @@ void main() {
     }
 
     List<LayerImage> layers12(RgbaImage img) {
-      final depth = DepthEstimator().estimate(img);
+      final depth = HeuristicDepthEstimator().estimate(img);
       return LayerSplitter(layerCount: 3).split(img, depth);
     }
 
@@ -2418,7 +2418,7 @@ void main() {
     RgbaImage render(List<EffectKind> kinds, RenderTier tier, double t) {
       final img = scene();
       final layers = LayerSplitter(layerCount: 3)
-          .split(img, DepthEstimator().estimate(img));
+          .split(img, HeuristicDepthEstimator().estimate(img));
       return FrameCompositor(layers, img, qcfg(kinds, tier)).renderFrame(t);
     }
 
@@ -2491,7 +2491,7 @@ void main() {
 
     final img = scene();
     final layers =
-        LayerSplitter(layerCount: 3).split(img, DepthEstimator().estimate(img));
+        LayerSplitter(layerCount: 3).split(img, HeuristicDepthEstimator().estimate(img));
 
     EffectConfig fcfg({
       FocusLinesParams focus = const FocusLinesParams(),
@@ -2645,10 +2645,10 @@ void main() {
 
     final img = scene();
     final layers =
-        LayerSplitter(layerCount: 3).split(img, DepthEstimator().estimate(img));
+        LayerSplitter(layerCount: 3).split(img, HeuristicDepthEstimator().estimate(img));
     final flat = flatScene();
     final flatLayers = LayerSplitter(layerCount: 3)
-        .split(flat, DepthEstimator().estimate(flat));
+        .split(flat, HeuristicDepthEstimator().estimate(flat));
 
     EffectConfig tcfg({
       ScreenToneParams tone = const ScreenToneParams(),
@@ -2821,7 +2821,7 @@ void main() {
 
     final img = scene();
     final layers =
-        LayerSplitter(layerCount: 3).split(img, DepthEstimator().estimate(img));
+        LayerSplitter(layerCount: 3).split(img, HeuristicDepthEstimator().estimate(img));
 
     EffectConfig scfg({
       MangaShakeParams shake = const MangaShakeParams(),
@@ -2974,7 +2974,7 @@ void main() {
 
     final img = scene();
     final layers =
-        LayerSplitter(layerCount: 3).split(img, DepthEstimator().estimate(img));
+        LayerSplitter(layerCount: 3).split(img, HeuristicDepthEstimator().estimate(img));
 
     EffectConfig rcfg({
       ImpactRingsParams rings = const ImpactRingsParams(),
@@ -3124,7 +3124,7 @@ void main() {
 
     final img = scene();
     final layers =
-        LayerSplitter(layerCount: 3).split(img, DepthEstimator().estimate(img));
+        LayerSplitter(layerCount: 3).split(img, HeuristicDepthEstimator().estimate(img));
 
     EffectConfig bcfg({
       BrushStreakParams brush = const BrushStreakParams(),
@@ -3312,7 +3312,7 @@ void main() {
 
     final img = scene();
     final layers =
-        LayerSplitter(layerCount: 3).split(img, DepthEstimator().estimate(img));
+        LayerSplitter(layerCount: 3).split(img, HeuristicDepthEstimator().estimate(img));
 
     const ts = [0.1, 0.35, 0.6, 0.85];
 
@@ -3688,7 +3688,7 @@ void main() {
 
     final img = scene();
     final layers =
-        LayerSplitter(layerCount: 3).split(img, DepthEstimator().estimate(img));
+        LayerSplitter(layerCount: 3).split(img, HeuristicDepthEstimator().estimate(img));
 
     EffectConfig of(List<EffectKind> kinds,
             {MoodScriptParams? mood,

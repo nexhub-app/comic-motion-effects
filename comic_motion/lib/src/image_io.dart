@@ -253,6 +253,18 @@ class ImageIO {
     return img.encodePng(_toPackage(frame)).toList();
   }
 
+  /// Encode one frame as RGBA PNG（保留 alpha 通道；W6 exportLayers 用——
+  /// 分层遮罩的羽化/成员度 alpha 是 shader 混合的必要信息，丢 alpha 会让
+  /// GPU 侧无法复现合成）。与 [encodePngFrame]（RGB、字节契约锁定）不同
+  /// 通道数，二者不可混用。
+  static List<int> encodePngFrameRgba(RgbaImage frame) {
+    return img.encodePng(img.Image.fromBytes(
+        width: frame.width,
+        height: frame.height,
+        bytes: frame.data.buffer,
+        numChannels: 4)).toList();
+  }
+
   /// 帧序列的统一命名：串行、worker、调色板探针三条路径必须写同一个路径，
   /// 否则并行会产出不同文件名。
   static String pngPathFor(String dir, int index) =>

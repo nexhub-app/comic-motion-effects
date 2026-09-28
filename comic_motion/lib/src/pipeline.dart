@@ -214,9 +214,19 @@ class MotionPipeline {
     this.cancelToken,
     this.timeout,
     this.keepPartial = false,
+    DepthEstimator? depthEstimator,
   }) : _parallel = parallel ??
             math.min(
-                kDefaultParallel, math.max(1, io.Platform.numberOfProcessors));
+                kDefaultParallel, math.max(1, io.Platform.numberOfProcessors)),
+        _depthEstimator = depthEstimator;
+
+  /// 深度估算器注入（W6）：null = 内置启发式（[HeuristicDepthEstimator]，
+  /// 与接口化前像素输出逐字节一致）。执行期依赖，不参与 configHash。
+  final DepthEstimator? _depthEstimator;
+
+  /// 当前生效的估算器（注入优先，缺省启发式）。
+  DepthEstimator get effectiveDepthEstimator =>
+      _depthEstimator ?? const HeuristicDepthEstimator();
 
   final EffectConfig config;
 
@@ -885,7 +895,7 @@ class MotionPipeline {
         return (working, _splitPerPanel(working, panels));
       }
     }
-    final depth = DepthEstimator(workScale: 0.5).estimate(working);
+    final depth = effectiveDepthEstimator.estimate(working);
     final splitter = LayerSplitter(
       layerCount: config.layerCount,
       tier: config.quality.tier,
@@ -908,7 +918,7 @@ class MotionPipeline {
         sub.data.setRange(y * panel.width * 4, (y + 1) * panel.width * 4,
             working.data, srcBase);
       }
-      final depth = DepthEstimator(workScale: 0.5).estimate(sub);
+      final depth = effectiveDepthEstimator.estimate(sub);
       final splitter = LayerSplitter(
         layerCount: config.layerCount,
         tier: config.quality.tier,

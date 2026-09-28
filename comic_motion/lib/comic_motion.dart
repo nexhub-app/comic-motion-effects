@@ -21,6 +21,7 @@ export 'src/image_io.dart';
 export 'src/image_model.dart';
 export 'src/interaction.dart';
 export 'src/json_compat.dart';
+export 'src/layer_export.dart';
 export 'src/motion_math.dart';
 export 'src/ledger.dart';
 export 'src/param_catalog.dart';

@@ -65,16 +65,33 @@ class LayerImage {
   final PixelRect? clip;
 }
 
-/// Depth estimation tuned for comic/line art:
+/// 深度估算接口（W6 接口化）：抽象 `estimate(RgbaImage) → DepthMap`。
+///
+/// 内置启发式实现为默认（[HeuristicDepthEstimator]）；外部 ML（App 侧
+/// tflite 深度模型等）实现本接口后经 `MotionPipeline(depthEstimator:)`
+/// 注入——核心包保持零原生依赖，模型运行在嵌入方。适配指南见
+/// `doc/external-depth.md`。
+abstract class DepthEstimator {
+  const DepthEstimator();
+
+  /// 估算深度图：返回值各像素 ∈ [0,1]（0 = 远，1 = 近），尺寸任意
+  /// （合成时按 [DepthMap.at]/sampleBilinear 映射回工作分辨率）。
+  DepthMap estimate(RgbaImage img);
+}
+
+/// 默认启发式深度估算，针对漫画/线稿调优：
 ///  - salient dark ink strokes and high local contrast read as foreground
 ///  - faces/characters: skin-tone and high-saturation blobs read as foreground
 ///  - flat low-detail areas read as background
 /// The result is smoothed with a separable box blur (approximating Gaussian).
-class DepthEstimator {
-  DepthEstimator({this.workScale = 0.5});
+///
+/// 接口化前的具体实现原样搬入 —— 默认路径像素输出逐字节不变（测试锁定）。
+class HeuristicDepthEstimator implements DepthEstimator {
+  const HeuristicDepthEstimator({this.workScale = 0.5});
 
   final double workScale;
 
+  @override
   DepthMap estimate(RgbaImage img) {
     final w = img.width, h = img.height;
     final dw = math.max(8, (w * workScale).round());
