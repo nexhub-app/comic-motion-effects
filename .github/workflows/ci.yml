@@ -66,15 +66,20 @@ jobs:
       - name: Run tests
         run: dart test
 
-  # 伴生包含 Flutter widgets（MotionGifView / ParallaxGyroView），widget test
+  # 伴生包含 Flutter widgets（comic_motion_flutter: MotionGifView / ParallaxGyroView；
+  # comic_motion_shaders: RealtimeMotionView + fragment shader 资产），widget test
   # 需 Flutter tester，独立于纯 Dart 矩阵。stable 通道跟随本仓库锁定的
   # Flutter 版本线（>=3.22 / Dart 3.4），与核心包 environment 约束一致。
   flutter-package:
-    name: flutter analyze + test (comic_motion_flutter)
+    name: flutter analyze + test (${{ matrix.package }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [comic_motion_flutter, comic_motion_shaders]
     defaults:
       run:
-        working-directory: comic_motion_flutter
+        working-directory: ${{ matrix.package }}
     steps:
       - uses: actions/checkout@v4
 
