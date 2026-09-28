@@ -25,6 +25,8 @@ class CostEstimate {
     required this.frameCount,
     required this.workingWidth,
     required this.workingHeight,
+    this.minOutputKb = 0,
+    this.maxOutputKb = 0,
   });
 
   /// 估算峰值内存下界（MB，parallel=1 模型画像）。
@@ -46,6 +48,14 @@ class CostEstimate {
   final int workingWidth;
   final int workingHeight;
 
+  /// 估算产物体积下界（KB，经验系数拟合自 tool/bench_high_fps 实测）。
+  /// 0 = 无法估算（未知源尺寸时仍可估算；仅 frames-only 无容器产物）。
+  final int minOutputKb;
+
+  /// 估算产物体积上界（KB）。rect 差分的收益取决于动效空间占比（未知），
+  /// 上界按全量编码保守取值。
+  final int maxOutputKb;
+
   /// 固定声明：经验估算、非承诺。
   String get note =>
       'empirical estimate fitted from desktop bench data; not a performance '
@@ -59,6 +69,8 @@ class CostEstimate {
         'frameCount': frameCount,
         'workingWidth': workingWidth,
         'workingHeight': workingHeight,
+        if (minOutputKb > 0) 'minOutputKb': minOutputKb,
+        if (minOutputKb > 0) 'maxOutputKb': maxOutputKb,
         'note': note,
       };
 
@@ -66,7 +78,8 @@ class CostEstimate {
   String toString() =>
       'CostEstimate(mem ${minPeakMemoryMb}..${maxPeakMemoryMb}MB, '
       'time ${minDurationMs}..${maxDurationMs}ms, '
-      'frames $frameCount, working ${workingWidth}x$workingHeight)';
+      'frames $frameCount, working ${workingWidth}x$workingHeight'
+      '${minOutputKb > 0 ? ', out ${minOutputKb}..${maxOutputKb}KB' : ''})';
 }
 
 /// 估算一次渲染的内存/耗时区间。
@@ -108,11 +121,41 @@ CostEstimate estimateCost(EffectConfig config,
   // 耗时：bench 拟合的 ns/帧像素。legacy 桌面多核 ~12ns、低端单核 ~100ns；
   // standard+（抗锯齿 + 面积平均）与重特效上探更高。
   final standard = config.quality.tier.atLeastStandard;
-  final nsPerFramePxMin = standard ? 22.0 : 12.0;
-  final nsPerFramePxMax = standard ? 160.0 : 100.0;
+  var nsPerFramePxMin = standard ? 22.0 : 12.0;
+  var nsPerFramePxMax = standard ? 160.0 : 100.0;
+
+  // 容器路径系数（W3，锚定 tool/bench_high_fps 实测：720p/60fps/120 帧）。
+  // APNG：PNG 编码 + exact 延迟 ≈ GIF 编码同量级；rect 差分加 O(帧×px)
+  // 主 isolate 比较（局部动效实测 1.2-1.3×，全画面动效 1.8-2.0×）。
+  final isApng = config.outputFormat == OutputFormat.apng;
+  final isGif = config.outputFormat == OutputFormat.gif ||
+      config.outputFormat == OutputFormat.both;
+  final apngRect = isApng && config.encoding.diffMode == 'rect';
+  final apngFull = isApng && config.encoding.diffMode != 'rect';
+  if (apngRect) {
+    nsPerFramePxMin *= 1.3;
+    nsPerFramePxMax *= 1.9;
+  } else if (apngFull) {
+    nsPerFramePxMin *= 1.1;
+    nsPerFramePxMax *= 1.4;
+  }
+
   final framePx = px.toDouble() * frames;
   final minMs = (framePx * nsPerFramePxMin / 1e6).round().clamp(1, 1 << 40);
   final maxMs = (framePx * nsPerFramePxMax / 1e6).round();
+
+  // 产物体积（B/px/帧 经验系数，拟合自 bench_high_fps：GIF 24fps 全量
+  // 0.118、APNG 60fps 全量 0.295、APNG rect 局部动效 0.127）。rect 收益
+  // 取决于动效空间占比（估算期未知）→ 上界按全量保守取值。
+  int? minOutKb;
+  int? maxOutKb;
+  if (isGif || isApng) {
+    final bytesPerFramePxMin = isApng ? 0.13 : 0.10;
+    final bytesPerFramePxMax = isApng ? 0.35 : 0.20;
+    minOutKb =
+        (px * frames * bytesPerFramePxMin / 1024).round().clamp(0, 1 << 40);
+    maxOutKb = (px * frames * bytesPerFramePxMax / 1024).round();
+  }
 
   return CostEstimate(
     minPeakMemoryMb: minMem,
@@ -122,5 +165,7 @@ CostEstimate estimateCost(EffectConfig config,
     frameCount: frames,
     workingWidth: w,
     workingHeight: h,
+    minOutputKb: minOutKb ?? 0,
+    maxOutputKb: maxOutKb ?? 0,
   );
 }

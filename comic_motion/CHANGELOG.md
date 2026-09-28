@@ -6,6 +6,11 @@
 
 发布导向改造（第一轮：包拆分、跨平台路径、解码安全、错误码体系、fail-fast 校验、内存预算、台账可关闭）+ 运行时生命周期接口（第二轮：全内存管线、取消/进度/超时、后台 isolate、并发防护、渲染参数/效果选择 API、条漫 strip 模式）。逐字节复现契约全程未破坏（legacy 档像素路径与编码字节零改动，测试护栏扩至 174+6 例）。
 
+### 第五轮：高帧率与生态扩展（W1–W8）
+
+- **高帧率预渲染档位（W3，核心包验证 + 文档）**：`encoding.apngDelay: 'exact'`（opt-in）——APNG fcTL 帧延迟写精确分数 `delay_num = 1 / delay_den = fps`（fcTL 为 16.16 定点数），60fps 精确表达 16.67ms；默认 `cs` 口径（厘秒 den=100）输出与 v1.3 逐字节一致、configHash 条件序列化不写入（默认指纹不变）。**APNG rect 帧间差分**（`diffMode: rect` 扩展到 APNG 路径）：worker 回传整帧 RGBA（`wantRgba` opt-in），主 isolate 逐字节差分出变化包围矩形 → 区域帧进容器（fcTL 区域 + x/y offset，dispose=NONE/blend=SOURCE 跨帧合成；无变化帧 1x1 占位保住帧时序），内存 O(单帧)。新增 `tool/bench_high_fps.dart`（60fps/2s/120 帧基准：局部动效 rect 省 41–57%，全画面动效零收益 + 耗时 ~2×，体积确定性抽查）与 `doc/high-fps.md`（实测数据 + maxDimension/fps/diffMode/dither 推荐矩阵）。`estimateCost` 纳入 APNG/rect 路径：产物体积区间（`minOutputKb`/`maxOutputKb`，B/px/帧 经验系数拟合自 bench）与耗时系数。新增 `test/high_fps_test.dart`（exact fcTL 解析、区域帧逐像素还原、管线端到端 rect ≤ full、确定性、configHash 稳定性）。
+- **确定性效果预览资产（W2）**：`tool/generate_showcase.dart --previews-only` 单一真相源产出 40 份低配预览（8fps、1.5s、≤360px，自适应降档梯子 360→280→220→170→130 保证单 GIF < 300KB）至 `doc/previews/<demo>/`（preview.png + preview.gif + 确定性 index.json：key → 分类 → 路径 → 实际档位 → 体积），两轮生成逐字节一致（sha1 锁定）；`kEffectPreviewRefs`（`EffectPreviewRef`，32 项效果映射）交叉引用预览路径；README 效果目录章节链接预览资产。
+
 ### 第四轮：鸿蒙阅读效果对齐（V1–V5）
 
 - **路线图与能力边界声明（V5，文档）**：新增 `doc/roadmap.md`——GPU 实时路径（Flutter FragmentShader 实时化参数化变换类效果，独立 shader 伴生包，粒子类二期）、AI 深度/主体检测（服务端/可选伴生包落位优先，守护核心零原生依赖卖点）、分格感知分层（R2 中间态：分格线检测 → 逐格分层）、animated WebP 备选（引用 `doc/webp_research.md`，激活条件与 APNG 的流式内存决策记录），每项标注价值/工作量级/依赖决策点，附非目标清单。README（中英）「环境要求」旁新增**能力边界声明**：本库输出为预渲染动图（GIF/APNG/帧集）而非实时交互渲染，V1 交互视差是离散相位帧集；`realtime/index.html` 仅为翻页手势 Canvas 2D 参考实现；实时路径见 roadmap。修 `.gitignore` 笔误行 `presets/.json`（无实际作用、语义误导；presets 必须保持被跟踪）。

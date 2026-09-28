@@ -1156,7 +1156,7 @@ class QualityParams {
 
 /// GIF 编码参数（T5）。
 class EncodingParams {
-  const EncodingParams({this.diffMode = 'none'});
+  const EncodingParams({this.diffMode = 'none', this.apngDelay = 'cs'});
 
   /// 帧间差分模式：
   /// - `none`（默认）——每帧全画布 LZW 编码（v1.3 行为，逐字节契约由该
@@ -1167,16 +1167,29 @@ class EncodingParams {
   ///   扩散逐帧独立、无跨帧污染，与差分正交，确定性保持。
   final String diffMode;
 
-  bool get isDefault => diffMode == 'none';
+  /// APNG 帧延迟口径（W3，opt-in）：
+  /// - `cs`（默认）——厘秒定点：delay_num = (100/fps).round()、delay_den =
+  ///   100，与 GIF 同口径（v1.3 行为；60fps 会取整到 20ms = 50fps）；
+  /// - `exact`——精确分数：delay_num = 1、delay_den = fps（fcTL 为 16.16
+  ///   定点数，60fps 精确表达 16.67ms；仅影响 APNG 路径，GIF 不受影响）。
+  final String apngDelay;
 
-  EncodingParams copyWith({String? diffMode}) =>
-      EncodingParams(diffMode: diffMode ?? this.diffMode);
+  bool get isDefault => diffMode == 'none' && apngDelay == 'cs';
 
-  Map<String, dynamic> toJson() =>
-      {if (diffMode != 'none') 'diffMode': diffMode};
+  EncodingParams copyWith({String? diffMode, String? apngDelay}) =>
+      EncodingParams(
+          diffMode: diffMode ?? this.diffMode,
+          apngDelay: apngDelay ?? this.apngDelay);
 
-  static EncodingParams fromJson(Map<String, dynamic> j) =>
-      EncodingParams(diffMode: (j['diffMode'] == 'rect') ? 'rect' : 'none');
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        if (diffMode != 'none') 'diffMode': diffMode,
+        // 条件序列化：默认 cs 不写入 → 关闭时 configHash 与旧版完全一致。
+        if (apngDelay != 'cs') 'apngDelay': apngDelay,
+      };
+
+  static EncodingParams fromJson(Map<String, dynamic> j) => EncodingParams(
+      diffMode: (j['diffMode'] == 'rect') ? 'rect' : 'none',
+      apngDelay: (j['apngDelay'] == 'exact') ? 'exact' : 'cs');
 }
 
 class EffectConfig {

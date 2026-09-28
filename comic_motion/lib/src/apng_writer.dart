@@ -31,16 +31,26 @@ import 'image_model.dart';
 /// 也可以是已编码的 PNG 字节（[addEncodedPngFrame]——管线并行路径下
 /// worker 已回传 PNG 字节，直接复用零重复编码）。
 class StreamingApngBuilder {
+  /// [exactDelay] = true 时（W3）帧延迟写精确分数 delay_num = 1、
+  /// delay_den = [fps]（fcTL 为 16.16 定点数，60fps 精确表达 16.67ms）；
+  /// 默认 false 保持厘秒口径（delay_num = (100/fps).round()、den = 100），
+  /// 输出与 v1.3 逐字节一致。exact 模式下 [addFrame]/[addEncodedPngFrame]
+  /// 的 [delayCs] 覆盖不生效（厘秒表达不了精确分数，两者互斥）。
   StreamingApngBuilder(this.width, this.height,
-      {required int fps, bool loopForever = true})
-      : defaultDelayCs = (100 / fps).round().clamp(2, 100),
+      {required int fps, bool exactDelay = false, bool loopForever = true})
+      : _fps = fps,
+        defaultDelayCs = exactDelay ? -1 : (100 / fps).round().clamp(2, 100),
+        _exactDelay = exactDelay,
         loopForever = loopForever;
 
   final int width;
   final int height;
+  final int _fps;
 
   /// 与 GIF StreamingGifBuilder 同口径的默认帧延迟（厘秒）。
+  /// exact 模式下为 -1（哨兵，不代表有效厘秒值）。
   final int defaultDelayCs;
+  final bool _exactDelay;
   final bool loopForever;
 
   final BytesBuilder _body = BytesBuilder();
@@ -51,7 +61,8 @@ class StreamingApngBuilder {
 
   Uint8List _ihdrPayload = Uint8List(0);
 
-  /// 提交一帧（栅格入口）。[delayCs] 可覆盖默认帧延迟（厘秒）。
+  /// 提交一帧（栅格入口）。[delayCs] 可覆盖默认帧延迟（厘秒；exact 模式
+  /// 下忽略——精确分数与厘秒覆盖互斥）。
   void addFrame(RgbaImage frame, {int? delayCs}) {
     if (frame.width != width || frame.height != height) {
       throw ArgumentError(
@@ -65,24 +76,80 @@ class StreamingApngBuilder {
   /// 提交一帧（已编码 PNG 入口）：解析 IHDR/IDAT，IDAT 载荷重包为 fcTL +
   /// fdAT。与 [ImageIO.encodePngFrame] 同源的 PNG 字节可零转换复用。
   void addEncodedPngFrame(Uint8List pngBytes, {int? delayCs}) {
+    _submit(pngBytes,
+        region: null, delayCs: delayCs, delayNum: null, delayDen: null);
+  }
+
+  /// 提交一帧**区域帧**（W3 rect 差分）：[region] 为相对全画布的变化矩形，
+  /// 只编码该区域的 PNG 并在 fcTL 写入区域与偏移。dispose = NONE +
+  /// blend = SOURCE 语义下，区域帧直接覆盖其矩形、其余像素保留上一帧内容
+  /// ——首帧必须已是全画布帧。引擎帧渲染是确定性的，逐字节差分安全。
+  void addRectFrame(RgbaImage fullFrame, {required PixelRect region}) {
+    if (fullFrame.width != width || fullFrame.height != height) {
+      throw ArgumentError(
+          '帧尺寸 ${fullFrame.width}x${fullFrame.height} 与编码器 ${width}x$height 不一致');
+    }
+    final r = region.clampTo(PixelRect(0, 0, width - 1, height - 1));
+    if (r.width < 1 || r.height < 1) {
+      // 无变化帧：以 1x1 占位保住帧时序（与 GIF rect 模式同策略），像素取
+      // 原点——SOURCE 覆盖同色像素无视觉影响。
+      final px = fullFrame.data;
+      final stub = RgbaImage(width: 1, height: 1)
+        ..data[0] = px[0]
+        ..data[1] = px[1]
+        ..data[2] = px[2]
+        ..data[3] = px[3];
+      _submit(Uint8List.fromList(ImageIO.encodePngFrame(stub)),
+          region: const PixelRect(0, 0, 0, 0),
+          delayCs: null,
+          delayNum: null,
+          delayDen: null);
+      return;
+    }
+    // 裁剪区域 → 小图编码（逐行拷贝，O(region)）。
+    final crop = RgbaImage(width: r.width, height: r.height);
+    for (var y = 0; y < r.height; y++) {
+      final srcBase = ((r.y + y) * width + r.x) * 4;
+      final dstBase = y * r.width * 4;
+      crop.data.setRange(
+          dstBase, dstBase + r.width * 4, fullFrame.data, srcBase);
+    }
+    _submit(Uint8List.fromList(ImageIO.encodePngFrame(crop)),
+        region: r, delayCs: null, delayNum: null, delayDen: null);
+  }
+
+  void _submit(Uint8List pngBytes,
+      {required PixelRect? region, required int? delayCs, required int? delayNum, required int? delayDen}) {
     final parsed = _parsePngFrame(pngBytes);
     final ihdr = parsed.ihdr;
     if (_frames == 0) {
       _ihdrPayload = ihdr;
-    } else if (!_listEquals(ihdr, _ihdrPayload)) {
+      if (region != null) {
+        throw ArgumentError('首帧必须为全画布帧（rect 差分的前置条件）');
+      }
+    } else if (region == null && !_listEquals(ihdr, _ihdrPayload)) {
       throw ArgumentError('帧 IHDR 与首帧不一致（尺寸/位深/色彩类型必须固定）');
     }
-    final cs = (delayCs ?? defaultDelayCs).clamp(1, 0xffff);
-    // fcTL：序号 + 区域（全画布）+ 延迟 + dispose=0(NONE) + blend=0(SOURCE)。
+    // 区域帧 IHDR 尺寸与主 IHDR 不同是常态；位深/色彩类型等后 5 字节必须一致。
+    if (region != null && _frames > 0) {
+      for (var i = 8; i < 13; i++) {
+        if (ihdr[i] != _ihdrPayload[i]) {
+          throw ArgumentError('区域帧 IHDR 位深/色彩类型与首帧不一致');
+        }
+      }
+    }
+    // fcTL 延迟：exact 模式 1/fps 精确分数；厘秒模式（num=cs, den=100）。
+    final num = _exactDelay ? 1 : (delayCs ?? defaultDelayCs).clamp(1, 0xffff);
+    final den = _exactDelay ? _fps : 100;
     final fcTL = <int>[
       ..._be32(_sequence++),
-      ..._be32(width),
-      ..._be32(height),
-      ..._be32(0), // x offset
-      ..._be32(0), // y offset
-      cs >> 8, cs & 0xff, // delay_num（大端 16 位）
-      100 >> 8, 100 & 0xff, // delay_den = 100
-      0, // dispose_op: APNG_DISPOSE_OP_NONE
+      ..._be32(region?.width ?? width),
+      ..._be32(region?.height ?? height),
+      ..._be32(region?.x ?? 0), // x offset
+      ..._be32(region?.y ?? 0), // y offset
+      num >> 8, num & 0xff, // delay_num（大端 16 位）
+      den >> 8, den & 0xff, // delay_den（大端 16 位）
+      0, // dispose_op: APNG_DISPOSE_OP_NONE（区域保留、区域帧覆盖）
       0, // blend_op: APNG_BLEND_OP_SOURCE
     ];
     _body.add(_chunk('fcTL', fcTL));
@@ -210,8 +277,7 @@ int _crc32(List<int> data) {
 /// 测试与嵌入方校验用：把 fdAT/IDAT 的 zlib 数据流还原为 8-bit RGB 像素
 /// 行（含 PNG 自适应 filter 反演，类型 0-4）。引擎对外帧一律 RGB 3 通道、
 /// 非隔行，本函数只覆盖该口径。
-Uint8List decodeApngScanlines(Uint8List compressed, int width, int height) {
-  final raw = ZLibCodec().decode(compressed);
+Uint8List decodeApngScanlines(Uint8List compressed, int width, int height) {  final raw = ZLibCodec().decode(compressed);
   final stride = width * 3;
   final expected = height * (stride + 1);
   if (raw.length != expected) {
@@ -261,4 +327,22 @@ Uint8List decodeApngScanlines(Uint8List compressed, int width, int height) {
     prevRow = cur;
   }
   return out;
+}
+
+/// 全画布内的整数矩形（W3 区域帧）：[x]/[y] 为左上角，[width]/[height]
+/// 为尺寸。[clampTo] 收拢到画布内；宽度或高度非正表示无变化。
+class PixelRect {
+  const PixelRect(this.x, this.y, this.width, this.height);
+  final int x;
+  final int y;
+  final int width;
+  final int height;
+
+  PixelRect clampTo(PixelRect bounds) {
+    final nx = x.clamp(bounds.x, bounds.x + bounds.width);
+    final ny = y.clamp(bounds.y, bounds.y + bounds.height);
+    final right = (x + width - 1).clamp(bounds.x, bounds.x + bounds.width);
+    final bottom = (y + height - 1).clamp(bounds.y, bounds.y + bounds.height);
+    return PixelRect(nx, ny, right - nx + 1, bottom - ny + 1);
+  }
 }

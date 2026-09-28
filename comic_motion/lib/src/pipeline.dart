@@ -581,8 +581,12 @@ class MotionPipeline {
     // APNG（第四轮 V3，opt-in 新路径）：全画布真彩色帧容器，复用 worker 的
     // PNG 回传通路（wantPngBytes），默认 outputFormat 行为零变化。
     final wantApng = config.outputFormat == OutputFormat.apng;
+    // APNG exact 延迟（W3 opt-in）：encoding.apngDelay = 'exact' 时 fcTL 写
+    // 精确分数 1/fps；默认 cs 口径输出与 v1.3 逐字节一致。
     final apng = wantApng
-        ? StreamingApngBuilder(working.width, working.height, fps: config.fps)
+        ? StreamingApngBuilder(working.width, working.height,
+            fps: config.fps,
+            exactDelay: config.encoding.apngDelay == 'exact')
         : null;
     // PNG 帧序列只属于磁盘模式；内存模式没有可落盘处（wantFrames 恒 false）。
     final wantFrames = jobDir != null &&
@@ -602,7 +606,11 @@ class MotionPipeline {
     final n = config.frameCount;
     // rect 帧间差分（T5，opt-in）：worker 回传量化索引图，差分 + LZW 在主
     // isolate 按帧序做（差分状态在构建器内）。none 模式路径零改动。
+    // APNG rect 差分（W3）：同一 opt-in 开关下的另一容器路径——worker 回传
+    // 整帧 RGBA，主 isolate 逐字节差分出变化矩形，区域帧进 APNG 容器。
     final rectMode = gif != null && config.encoding.diffMode == 'rect';
+    final apngRect =
+        wantApng && !wantGif && config.encoding.diffMode == 'rect';
     // 调色板探针必须在派工之前定板（worker 只共享板，不建板）。
     // legacy = v1.2 的「首帧建板」；standard+ = 首/中/末三帧，避免只在中间帧
     // 出现的动效亮色挤不进 256 色。renderFrame 是 t 的纯函数，乱序预渲染安全。
@@ -640,12 +648,14 @@ class MotionPipeline {
       firstFrameRgba = compositor.renderFrame(0);
       if (wantFrames) ImageIO.writePngFrame(frameDir, 0, firstFrameRgba);
       // apng 模式需要帧 PNG 字节进容器（onFrame 回调同样复用）。
+      // apng rect 模式首帧仍走全画布 PNG 字节进容器，rgba 供差分状态初始化。
       final pngNeeded = wantApng || onFrame != null;
       presolved[0] = FrameOutput(
         0,
         null,
         pngBytes:
             pngNeeded ? Uint8List.fromList(ImageIO.encodePngFrame(firstFrameRgba)) : null,
+        rgba: apngRect ? Uint8List.fromList(firstFrameRgba.data) : null,
       );
     }
     final firstFramePng = includeFirstFrame
@@ -658,9 +668,11 @@ class MotionPipeline {
       config: config,
       pngDir: wantFrames ? frameDir : null,
       gif: gif == null ? null : GifEncoderSpec.from(gif),
-      // apng 容器需要每帧 PNG 字节回传（worker 侧编码一次，复用帧流通路）。
-      wantPngBytes: onFrame != null || wantApng,
+      // apng 容器需要每帧 PNG 字节回传（worker 侧编码一次，复用帧流通路）；
+      // apng rect 模式容器改走 rgba 差分区域帧，全帧 PNG 只在 onFrame 需要时回传。
+      wantPngBytes: onFrame != null || (wantApng && !apngRect),
       rectMode: rectMode,
+      wantRgba: apngRect,
     );
     final allIndices = [for (var i = 0; i < n; i++) i];
     final pendingCount = n - presolved.length;
@@ -679,6 +691,9 @@ class MotionPipeline {
       progressCb(written, n);
     }
 
+    // apng rect 差分状态：按序消费时保留上一帧 RGBA（O(单帧) 内存）。
+    Uint8List? apngPrev;
+
     void emit(FrameOutput out) {
       checkCancel(); // 每帧回包处检查（含串行、worker、探针三条路径）
       hold[out.index] = out;
@@ -692,17 +707,52 @@ class MotionPipeline {
           final body = o.gifBody;
           if (gif != null && body != null) gif.addEncodedBody(body);
         }
-        // APNG 容器按帧序吞 PNG 字节（worker/串行/预解三路同源同字节）。
-        final pb = o.pngBytes;
-        if (apng != null && pb != null) {
-          apng.addEncodedPngFrame(pb);
+        // APNG 容器按帧序吞帧。rect 模式（W3）：主 isolate 持有上一帧
+        // RGBA 做逐字节差分 → 区域帧进容器（首帧全画布 PNG 字节直进）；
+        // 普通模式按帧序吞 PNG 字节（worker/串行/预解三路同源同字节）。
+        if (apng != null) {
+          if (apngRect) {
+            final rgba = o.rgba;
+            final prev = apngPrev;
+            if (rgba != null) {
+              if (prev == null) {
+                final pb0 = o.pngBytes;
+                if (pb0 != null) {
+                  apng.addEncodedPngFrame(pb0);
+                } else {
+                  apng.addFrame(
+                      RgbaImage.fromBytes(
+                          width: working.width,
+                          height: working.height,
+                          data: rgba),
+                  );
+                }
+              } else {
+                final region =
+                    _diffRect(prev, rgba, working.width, working.height);
+                apng.addRectFrame(
+                    RgbaImage.fromBytes(
+                        width: working.width,
+                        height: working.height,
+                        data: rgba),
+                    region: region);
+              }
+              apngPrev = rgba;
+            }
+          } else {
+            final pb = o.pngBytes;
+            if (pb != null) {
+              apng.addEncodedPngFrame(pb);
+            }
+          }
         }
         // 帧流回调：按帧号有序（drain 顺序即帧序），取消后不再触发。
+        final cbBytes = o.pngBytes;
         if (frameCb != null &&
-            pb != null &&
+            cbBytes != null &&
             !cancelled &&
             !(token?.isCancelled ?? false)) {
-          frameCb(o.index, pb);
+          frameCb(o.index, cbBytes);
         }
       }
       reportProgress();
@@ -721,7 +771,8 @@ class MotionPipeline {
             pngDir: spec.pngDir,
             encoder: gif?.newFrameEncoder(),
             wantPngBytes: spec.wantPngBytes,
-            rectMode: spec.rectMode);
+            rectMode: spec.rectMode,
+            wantRgba: spec.wantRgba);
         for (final out in presolved.values) {
           emit(out);
         }
@@ -872,4 +923,28 @@ class MotionPipeline {
       return -1; // unsupported platform marker
     }
   }
+}
+
+/// APNG rect 差分（W3）：两帧 RGBA 逐字节比较，返回变化的包围矩形
+/// （相对全画布，含右下边界）；无变化返回 0 尺寸矩形。引擎帧渲染是
+/// 确定性纯函数，无压缩噪声，逐字节比较安全。O(宽×高) 每帧。
+PixelRect _diffRect(Uint8List prev, Uint8List cur, int width, int height) {
+  var minX = width, minY = height, maxX = -1, maxY = -1;
+  for (var y = 0; y < height; y++) {
+    final rowBase = y * width * 4;
+    for (var x = 0; x < width; x++) {
+      final b = rowBase + x * 4;
+      if (prev[b] != cur[b] ||
+          prev[b + 1] != cur[b + 1] ||
+          prev[b + 2] != cur[b + 2] ||
+          prev[b + 3] != cur[b + 3]) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return const PixelRect(0, 0, 0, 0);
+  return PixelRect(minX, minY, maxX - minX + 1, maxY - minY + 1);
 }

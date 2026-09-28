@@ -345,6 +345,22 @@ content (measure with your own material); the decoded result is
 pixel-identical to `none` — locked by tests using a spec-compliant
 compositor.
 
+### High-fps APNG (opt-in, 60 fps)
+
+`outputFormat: apng` supports two extra encoding knobs (see
+[doc/high-fps.md](doc/high-fps.md) for measured numbers and the full
+recommendation matrix):
+
+- `encoding.apngDelay: 'exact'` writes the fcTL delay as the precise
+  fraction `1/fps` — required at 60 fps, where the default centisecond
+  tier silently degrades to 20 ms (50 fps). Default output stays
+  byte-identical to v1.3.
+- `encoding.diffMode: 'rect'` on the APNG path diffs consecutive frames
+  byte-exact in RGBA and encodes only the changed region (fcTL region
+  frames, `dispose_op = NONE` compositing). Local-motion effects
+  (lightSweep, impact accents) shrink 40–57% at 60 fps; full-frame motion
+  (rain, snow, mangaShake) gains nothing — keep `none` there.
+
 ### Recommended mobile parameters
 
 | Parameter | Recommendation | Why |

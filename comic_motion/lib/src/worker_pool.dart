@@ -67,6 +67,7 @@ class FrameJobSpec {
     this.gif,
     this.wantPngBytes = false,
     this.rectMode = false,
+    this.wantRgba = false,
   });
 
   factory FrameJobSpec.fromLayers({
@@ -77,6 +78,7 @@ class FrameJobSpec {
     GifEncoderSpec? gif,
     bool wantPngBytes = false,
     bool rectMode = false,
+    bool wantRgba = false,
   }) =>
       FrameJobSpec(
         width: base.width,
@@ -88,6 +90,7 @@ class FrameJobSpec {
         gif: gif,
         wantPngBytes: wantPngBytes,
         rectMode: rectMode,
+        wantRgba: wantRgba,
       );
 
   final int width;
@@ -108,6 +111,10 @@ class FrameJobSpec {
   /// LZW 在主 isolate 按帧序进行（差分状态在构建器内，无法乱序并行）。
   final bool rectMode;
 
+  /// APNG rect 差分（W3）：worker 额外回传整帧 RGBA 栅格（O(单帧) 内存，
+  /// 与 wantPngBytes 同模式 opt-in），差分在主 isolate 按帧序进行。
+  final bool wantRgba;
+
   /// 每个 worker 常驻的栅格字节数（底图 + 各层 + 在途帧 + 索引帧）。
   int get rasterBytesPerWorker => width * height * 4 * (layerPixels.length + 3);
 }
@@ -117,13 +124,14 @@ class FrameJobSpec {
 /// 代替 GIF 片段（差分在主 isolate 做）。PNG 落盘仍是就地副作用。
 class FrameOutput {
   FrameOutput(this.index, this.gifBody,
-      {this.from, this.pngBytes, this.indexed})
+      {this.from, this.pngBytes, this.indexed, this.rgba})
       : error = null;
   FrameOutput.failed(this.index, this.error)
       : gifBody = null,
         from = null,
         pngBytes = null,
-        indexed = null;
+        indexed = null,
+        rgba = null;
 
   final int index;
   final Uint8List? gifBody;
@@ -133,6 +141,10 @@ class FrameOutput {
 
   /// rect 模式：量化索引图（行主序 width×height），差分在主 isolate 按序做。
   final Uint8List? indexed;
+
+  /// APNG rect 模式：整帧 RGBA 栅格（width×height×4），差分在主 isolate
+  /// 按序做。仅 wantRgba 时非 null。
+  final Uint8List? rgba;
   final String? error;
 
   /// worker 用来把自己归还给空闲池；串行路径为 null。
@@ -146,7 +158,11 @@ class FrameOutput {
 /// 记忆，只影响速度）。
 class FrameJob {
   FrameJob(this.compositor,
-      {this.pngDir, this.encoder, this.wantPngBytes = false, this.rectMode = false});
+      {this.pngDir,
+      this.encoder,
+      this.wantPngBytes = false,
+      this.rectMode = false,
+      this.wantRgba = false});
 
   factory FrameJob.fromSpec(FrameJobSpec s) => FrameJob(
         FrameCompositor.fromRasters(
@@ -160,6 +176,7 @@ class FrameJob {
         encoder: s.gif?.build(),
         wantPngBytes: s.wantPngBytes,
         rectMode: s.rectMode,
+        wantRgba: s.wantRgba,
       );
 
   final FrameCompositor compositor;
@@ -167,6 +184,7 @@ class FrameJob {
   final GifFrameEncoder? encoder;
   final bool wantPngBytes;
   final bool rectMode;
+  final bool wantRgba;
 
   FrameOutput run(int index, {SendPort? from}) {
     final frame = compositor.renderFrame(index / compositor.config.fps);
@@ -189,6 +207,7 @@ class FrameJob {
       pngBytes: pngBytes,
       indexed:
           (rectMode && enc != null) ? enc.quantizeIndices(frame) : null,
+      rgba: wantRgba ? Uint8List.fromList(frame.data) : null,
     );
   }
 }
