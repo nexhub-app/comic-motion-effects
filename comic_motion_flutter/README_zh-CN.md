@@ -52,6 +52,33 @@ final sets = await loadInteractionSets(interactiveDir); // 磁盘
 ParallaxGyroView(frames: sets.first) // both 导出：按展示位各取一组
 ```
 
+### PageCurlView —— 仿真卷页翻页视图（W1）
+
+`realtime/index.html` Canvas 参考实现的 Flutter 移植，对齐鸿蒙翻页手感：
+
+- **卷页曲率**——当前页按纵向条带绘制，折轴附近按圆柱投影压缩；拖拽速度
+  决定页面软硬（`curlStrips`，默认 28 条）；
+- **拖拽跟手**——进度 = 水平位移 / 视宽，钳制 [0,1]；
+- **松手回弹过冲**——越过 `commitThreshold`（0.32）或甩动速度阈值，
+  以峰值 1.045 的 rubber-band 缓动落页，否则原路弹回；
+- **双层光影**——条带高光、纸背透色、折轴落影（投在下一页）、页缘阴影；
+- **idle 呼吸微动**——整页 ±0.4%、6s 周期浮沉（`idleBreath`）。
+
+页面内容**翻页开始的瞬间按需截屏**（RepaintBoundary → front/back 两页
+`ui.Image`）；手势帧经 `CustomPainter` + repaint listenable 局部重绘——
+零 widget 重建、builder 不重调。`onPageTurnStart` / `onPageTurnEnd` 供
+App 自接音效/触觉（本包不引 audio/vibration 依赖）。系统「减弱动态」
+回退为平移淡入淡出。
+
+```dart
+PageCurlView(
+  pageCount: chapters.length,
+  frontBuilder: (context, i) => ChapterPage(i),
+  backBuilder: (context, i) => ChapterPage(i),
+  onPageTurnStart: (from, to) => Haptics.lightImpact(),
+)
+```
+
 ## 纯 Dart 辅助工具（不依赖 Flutter 即可单测）
 
 - `loadInteractionSets(dir)`——从磁盘加载 `<...>_interactive/` 目录；

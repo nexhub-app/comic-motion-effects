@@ -54,6 +54,38 @@ final sets = await loadInteractionSets(interactiveDir); // disk
 ParallaxGyroView(frames: sets.first) // both-export: pick axis per view
 ```
 
+### PageCurlView — simulated page-curl page turn (W1)
+
+Port of `realtime/index.html`'s Canvas reference to Flutter, matching the
+HarmonyOS reader page-turn feel:
+
+- **Curl curvature** — the front page is drawn in vertical strips with
+  cylinder-projection compression toward the fold axis; drag speed controls
+  page stiffness (`curlStrips`, default 28);
+- **Drag tracking** — progress = horizontal offset / view width, clamped [0,1];
+- **Overshoot release** — past `commitThreshold` (0.32) or fling velocity,
+  the turn lands with a 1.045-peak rubber-band ease; otherwise it springs back;
+- **Layered lighting** — strip highlight, paper back-tint, fold shadow cast on
+  the next page, edge shadow;
+- **Idle breathing** — the whole page sways ±0.4% on a 6s cycle
+  (`idleBreath`).
+
+Content is captured **on demand at turn start** (RepaintBoundary → `ui.Image`
+snapshots of front/back); gestures repaint through `CustomPainter` with a
+repaint listenable — no widget rebuilds, no builder re-invocations per frame.
+`onPageTurnStart` / `onPageTurnEnd` are hooks for sound/haptics (the package
+does not pull audio/vibration deps). Reduced motion falls back to a plain
+slide+fade turn.
+
+```dart
+PageCurlView(
+  pageCount: chapters.length,
+  frontBuilder: (context, i) => ChapterPage(i),
+  backBuilder: (context, i) => ChapterPage(i),
+  onPageTurnStart: (from, to) => Haptics.lightImpact(),
+)
+```
+
 ## Pure-Dart helpers (unit-testable without Flutter)
 
 - `loadInteractionSets(dir)` — load `<...>_interactive/` from disk;

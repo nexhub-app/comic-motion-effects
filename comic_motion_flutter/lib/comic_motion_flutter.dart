@@ -13,6 +13,7 @@
 library;
 
 export 'src/motion_gif_view.dart';
+export 'src/page_curl_view.dart';
 export 'src/parallax_frames.dart';
 export 'src/parallax_gyro_view.dart';
 export 'src/parallax_math.dart';

@@ -107,6 +107,23 @@ class _ExamplePageState extends State<ExamplePage> {
             : ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
+                  const _SectionTitle('PageCurlView：仿真卷页翻页（拖拽 / 点击）'),
+                  SizedBox(
+                    height: 380,
+                    child: PageCurlView(
+                      pageCount: 8,
+                      onPageTurnStart: (from, to) =>
+                          debugPrint('page turn $from -> $to'),
+                      frontBuilder: (context, i) => _CurlDemoPage(page: i),
+                      backBuilder: (context, i) => _CurlDemoPage(page: i),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '左右拖拽或点击半屏翻页；松手回弹过冲，idle 呼吸微动。',
+                    style: TextStyle(color: Colors.black54),
+                  ),
+                  const SizedBox(height: 24),
                   const _SectionTitle('MotionGifView：占位过渡 + 入场帧'),
                   AspectRatio(
                     aspectRatio: 1,
@@ -165,6 +182,58 @@ class _ExamplePageState extends State<ExamplePage> {
     return Scaffold(
       appBar: AppBar(title: const Text('comic_motion_flutter example')),
       body: body,
+    );
+  }
+}
+
+/// 翻页演示页：纸面 + 页眉页脚 + 占位正文行（纯 widget，无资产依赖）。
+class _CurlDemoPage extends StatelessWidget {
+  const _CurlDemoPage({required this.page});
+
+  final int page;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(20),
+      color: const Color(0xFFF7F5F0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('第 ${page + 1} 页',
+              style: const TextStyle(
+                  fontSize: 22, fontWeight: FontWeight.w600, height: 1.4)),
+          const SizedBox(height: 12),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) => Column(
+                children: [
+                  for (var i = 0;
+                      i < (constraints.maxHeight / 26).floor();
+                      i++)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: FractionallySizedBox(
+                        widthFactor: i.isEven ? 1.0 : 0.86,
+                        alignment: Alignment.centerLeft,
+                        child: Container(
+                          height: 8,
+                          color: const Color(0x3326241F),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Text('PageCurlView demo · $page/7',
+                style: const TextStyle(fontSize: 11, color: Colors.black38)),
+          ),
+        ],
+      ),
     );
   }
 }
