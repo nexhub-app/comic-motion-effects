@@ -57,7 +57,8 @@ void main() {
   late StreamController<Offset> ctrl;
 
   setUp(() {
-    ctrl = StreamController<Offset>();
+    // broadcast：抑制期（未订阅）注入事件直接丢弃，符合"断流"语义。
+    ctrl = StreamController<Offset>.broadcast();
   });
   tearDown(() async {
     await ctrl.close();
@@ -189,5 +190,94 @@ void main() {
     await tester.pump();
 
     expect(find.text('no frames'), findsOneWidget);
+  });
+
+  // ---- W4 功耗感知：生命周期 / 视口 / App 钩子三路径的静帧-恢复 ----
+  // 静帧断言：抑制期间注入新相位不更新显示帧；恢复后注入立即生效。
+
+  testWidgets('enableMotion 钩子 false 断流静帧、rebuild 恢复', (tester) async {
+    final frames = _set(InteractionAxis.horizontal);
+    var allowed = false;
+    Widget buildHost() => _host(ParallaxGyroView(
+          frames: frames,
+          tiltStream: ctrl.stream,
+          smooth: false,
+          enableMotion: () => allowed,
+        ));
+    await tester.pumpWidget(buildHost());
+    await tester.pump();
+    expect(_shownBytes(tester), same(frames.pngBytes[2]));
+
+    await inject(ctrl, const Offset(-0.9, 0), tester);
+    expect(_shownBytes(tester), same(frames.pngBytes[2]),
+        reason: '钩子 false：注入不更新（订阅已断）');
+
+    allowed = true; // App rebuild 触发重估 → 重连订阅
+    await tester.pumpWidget(buildHost());
+    await inject(ctrl, const Offset(-0.9, 0), tester);
+    expect(_shownBytes(tester), same(frames.pngBytes[0]),
+        reason: '恢复后注入应生效');
+  });
+
+  testWidgets('生命周期 paused 断流静帧、resumed 恢复', (tester) async {
+    final frames = _set(InteractionAxis.horizontal);
+    await tester.pumpWidget(_host(ParallaxGyroView(
+      frames: frames,
+      tiltStream: ctrl.stream,
+      smooth: false,
+    )));
+    await tester.pump();
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    await inject(ctrl, const Offset(0.9, 0), tester);
+    expect(_shownBytes(tester), same(frames.pngBytes[2]),
+        reason: '后台时注入不更新');
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    await inject(ctrl, const Offset(0.9, 0), tester);
+    expect(_shownBytes(tester), same(frames.pngBytes[4]),
+        reason: '回到前台注入生效');
+  });
+
+  testWidgets('pauseWhenNotVisible：滚出视口断流、滚回重连', (tester) async {
+    final frames = _set(InteractionAxis.horizontal);
+    final controller = ScrollController();
+    Widget buildHost() => Directionality(
+          textDirection: TextDirection.ltr,
+          child: ListView(
+            controller: controller,
+            children: [
+              SizedBox(
+                height: 100,
+                child: ParallaxGyroView(
+                  frames: frames,
+                  tiltStream: ctrl.stream,
+                  smooth: false,
+                  pauseWhenNotVisible: true,
+                ),
+              ),
+              const SizedBox(height: 900),
+            ],
+          ),
+        );
+    await tester.pumpWidget(buildHost());
+    await tester.pump();
+    expect(_shownBytes(tester), same(frames.pngBytes[2]));
+
+    // 滚出（item 0..100 在 offset=300 时屏外，cache 内保留）。
+    controller.jumpTo(300);
+    await tester.pump(const Duration(milliseconds: 50));
+    await inject(ctrl, const Offset(0.9, 0), tester);
+    expect(_shownBytes(tester), same(frames.pngBytes[2]),
+        reason: '滚出视口后注入不更新');
+
+    // 滚回。
+    controller.jumpTo(0);
+    await tester.pump(const Duration(milliseconds: 50));
+    await inject(ctrl, const Offset(0.9, 0), tester);
+    expect(_shownBytes(tester), same(frames.pngBytes[4]),
+        reason: '滚回视口后注入生效');
   });
 }

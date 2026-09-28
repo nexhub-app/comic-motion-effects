@@ -24,6 +24,7 @@ comic_motion (pure Dart engine)  ←  comic_motion_flutter (widgets)
 | Playback control | `playing` externally driven pause/resume; `loop: false` holds on the last frame |
 | Reduced motion | Honors `MediaQuery.disableAnimations` — static placeholder, no codec (`respectReducedMotion`) |
 | Entrance frames | Optional V2 entrance PNG sequence plays first (blur → sharp reveal), then hands over to the GIF loop |
+| Power awareness (W4) | Auto-freeze on `AppLifecycleState` leaving resumed; optional `pauseWhenNotVisible` (freeze off-viewport on scroll notifications, resume when visible again); `enableMotion` hook hands the policy to the app (e.g. low battery) — **no battery dependency in this package** |
 
 ```dart
 MotionGifView(
@@ -46,6 +47,11 @@ Three input drivers (injected stream wins if provided):
 
 Interpolation (`smooth`): `true` (default) blends the two neighboring frames
 with alpha; `false` switches to the nearest frame (zero-overhead baseline).
+
+Power awareness (W4): same trio as MotionGifView — lifecycle freeze (default),
+`pauseWhenNotVisible` scroll-based viewport check (opt-in), and the
+`enableMotion` app hook; suppression disconnects the sensor/stream
+subscription entirely (zero standing cost), restoration reconnects.
 
 ```dart
 final sets = await loadInteractionSets(interactiveDir); // disk

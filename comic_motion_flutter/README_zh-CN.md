@@ -22,6 +22,7 @@ comic_motion（纯 Dart 引擎）  ←  comic_motion_flutter（widgets）
 | 播放控制 | `playing` 外部驱动暂停/恢复；`loop: false` 播完停在末帧 |
 | 减弱动态 | 跟随 `MediaQuery.disableAnimations`——静帧占位、不解码动画（`respectReducedMotion`） |
 | 入场帧 | 可选的 V2 入场 PNG 序列前置播放（模糊 → 清晰浮现），随后无缝切入 GIF 循环 |
+| 功耗感知（W4） | 生命周期离开 resumed 自动静帧；`pauseWhenNotVisible` 开启后滚出视口即静帧、滚回恢复；`enableMotion` 钩子把策略决策权交给 App（如低电量）——**本包不引 battery 依赖** |
 
 ```dart
 MotionGifView(
@@ -44,6 +45,10 @@ MotionGifView(
 
 插值（`smooth`）：`true`（默认）相邻两帧 alpha 混合，慢速倾斜顺滑；
 `false` 最近帧直切，零开销基线。
+
+功耗感知（W4）：与 MotionGifView 同款三路信号——生命周期静帧（默认）、
+`pauseWhenNotVisible` 滚动视口检测（opt-in）、`enableMotion` App 钩子；
+抑制时**完全断开**传感器/注入流订阅（零持续开销），恢复自动重连。
 
 ```dart
 final sets = await loadInteractionSets(interactiveDir); // 磁盘

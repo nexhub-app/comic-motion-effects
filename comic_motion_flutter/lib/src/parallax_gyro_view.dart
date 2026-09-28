@@ -26,6 +26,7 @@ import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 import 'parallax_math.dart';
+import 'power_aware.dart';
 
 class ParallaxGyroView extends StatefulWidget {
   const ParallaxGyroView({
@@ -36,6 +37,8 @@ class ParallaxGyroView extends StatefulWidget {
     this.smooth = true,
     this.touchFallback = true,
     this.returnToCenter = true,
+    this.pauseWhenNotVisible = false,
+    this.enableMotion,
     this.fit = BoxFit.contain,
     this.semanticLabel,
   });
@@ -61,6 +64,14 @@ class ParallaxGyroView extends StatefulWidget {
   /// 拖动结束后相位回中（true，默认；立即回中）。
   final bool returnToCenter;
 
+  /// 视口外自动暂停（W4，默认 false 向后兼容）：滚出视口即断开传感器/
+  /// 注入流订阅（静帧），滚回重连。基于滚动通知 + RenderBox 视口求交。
+  final bool pauseWhenNotVisible;
+
+  /// App 策略钩子（W4）：返回 false 即断开输入订阅（静帧，如低电量）。
+  /// 决策权在 App，本包不引 battery 依赖。返回值变化后 rebuild 触发重估。
+  final bool Function()? enableMotion;
+
   final BoxFit fit;
   final String? semanticLabel;
 
@@ -68,7 +79,8 @@ class ParallaxGyroView extends StatefulWidget {
   State<ParallaxGyroView> createState() => _ParallaxGyroViewState();
 }
 
-class _ParallaxGyroViewState extends State<ParallaxGyroView> {
+class _ParallaxGyroViewState extends State<ParallaxGyroView>
+    with MotionPowerAware<ParallaxGyroView> {
   static const double _phaseEpsilon = 0.01;
 
   double _phase = 0; // [-1, 1]
@@ -77,9 +89,16 @@ class _ParallaxGyroViewState extends State<ParallaxGyroView> {
   DateTime _lastPhaseUpdate = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
+  bool Function()? get enableMotion => widget.enableMotion;
+
+  @override
+  bool get pauseWhenNotVisible => widget.pauseWhenNotVisible;
+
+  @override
   void initState() {
     super.initState();
-    _subscribe();
+    motionPowerInit();
+    _syncInput();
   }
 
   @override
@@ -89,13 +108,37 @@ class _ParallaxGyroViewState extends State<ParallaxGyroView> {
       _phase = widget.frames.phases.first == 0 ? 0 : _clamp(_phase);
       setState(() {});
     }
-    if (widget.tiltStream != oldWidget.tiltStream) {
-      _unsubscribe();
-      _subscribe();
+    if (widget.tiltStream != oldWidget.tiltStream ||
+        widget.enableMotion != oldWidget.enableMotion ||
+        widget.pauseWhenNotVisible != oldWidget.pauseWhenNotVisible) {
+      // 订阅状态由功耗聚合统一驱动（抑制态不订阅）。
+      _syncInput();
     }
     if (widget.maxTiltDeg != oldWidget.maxTiltDeg) {
       _lastPhaseUpdate = DateTime.fromMillisecondsSinceEpoch(0);
     }
+    // 钩子/开关变化后重估功耗聚合。
+    reassessMotion();
+  }
+
+  // ---- W4 功耗感知：静帧 = 断开输入订阅；恢复 = 重连 ----
+
+  @override
+  void onMotionSuppressed() {
+    _unsubscribe();
+  }
+
+  @override
+  void onMotionRestored() {
+    _syncInput();
+  }
+
+  /// 依据功耗聚合状态重建订阅：允许时连（注入流优先，否则传感器），
+  /// 抑制时全断（零持续开销）。
+  void _syncInput() {
+    _unsubscribe();
+    if (!motionActive) return;
+    _subscribe();
   }
 
   void _subscribe() {
@@ -164,6 +207,7 @@ class _ParallaxGyroViewState extends State<ParallaxGyroView> {
 
   @override
   void dispose() {
+    motionPowerDispose();
     _unsubscribe();
     super.dispose();
   }
@@ -212,7 +256,13 @@ class _ParallaxGyroViewState extends State<ParallaxGyroView> {
             child: child,
           )
         : child;
-    return SizedBox.expand(child: ClipRect(child: gesture));
+    Widget content = SizedBox.expand(child: ClipRect(child: gesture));
+    // W4 视口暂停：滚动通知驱动惰性视口自检（opt-in）。
+    if (!widget.pauseWhenNotVisible) return content;
+    return NotificationListener<ScrollNotification>(
+      onNotification: onMotionScrollNotification,
+      child: content,
+    );
   }
 
   Widget _frameImage(Uint8List bytes) => Image.memory(

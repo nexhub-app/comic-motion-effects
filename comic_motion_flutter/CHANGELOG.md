@@ -24,6 +24,23 @@ Dart、零 Flutter 依赖）。
   （注入流相位→帧映射、smooth 混合、触摸回退与回中、空帧集兜底、占位
   过渡、减弱动态、入场序列、字节变更重置）。
 
+### 第五轮 W4：功耗感知策略
+
+- **三路信号聚合 mixin `MotionPowerAware`**（新文件 `lib/src/power_aware.dart`，
+  自定义视图可复用）：生命周期（离开 `resumed` 即抑制，默认启用）、视口
+  （`pauseWhenNotVisible` opt-in——滚动通知驱动惰性自检：RenderBox 全局
+  矩形与窗口求交，滚出即静帧、滚回恢复；仅覆盖滚动可见性，静态遮挡不
+  检测）、App 策略钩子（`enableMotion: bool Function()?`——低电量等策略
+  由 App 决定，**本包不引 battery 依赖**）。聚合结果切换时回调
+  `onMotionSuppressed` / `onMotionRestored`。
+- **MotionGifView**：抑制 = 泵帧循环终止（generation 失效，与
+  `playing: false` 同路径）；bootstrap 启动泵帧前检查聚合状态。默认参数
+  （`pauseWhenNotVisible: false`、钩子 null）行为与 W4 之前等价。
+- **ParallaxGyroView**：抑制 = **完全断开**传感器/注入流订阅（零持续
+  开销），恢复自动重连；订阅状态统一由 `_syncInput` 按聚合驱动。
+- 测试：三路径（视口 / 生命周期 / 钩子）静帧-恢复切换各 3 例
+  （GIF 用多帧 GIF 泵帧推进断言，Gyro 用注入相位-帧映射断言）。
+
 ### 第五轮 W1：PageCurlView 仿真卷页翻页
 
 - **PageCurlView**：`realtime/index.html` Canvas 参考实现的 Flutter 移植，

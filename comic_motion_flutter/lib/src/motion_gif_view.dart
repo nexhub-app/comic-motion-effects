@@ -12,6 +12,11 @@
 /// - **入场帧前置播放**：传入 V2 `exportEntranceFrames` 的 PNG 帧序列，
 ///   先按 `entranceDelayMs` 逐帧播放（模糊→清晰浮现），结束后无缝切入
 ///   GIF 循环（入场末帧 = 清晰原图 ≈ GIF 视觉基调）。
+/// - **功耗感知（W4）**：`AppLifecycleState` 离开 resumed 自动静帧；
+///   `pauseWhenNotVisible` 开启后滚出视口即静帧、滚回恢复（滚动通知 +
+///   RenderBox 视口求交，覆盖滚动可见性；静态遮挡不检测）；`enableMotion`
+///   钩子把策略决策权交给 App（如低电量静帧），本包不引 battery 依赖。
+///   静帧 = 停止泵帧循环（generation 失效），恢复按需重启，零持续开销。
 ///
 /// 线程模型：本组件只消费已编码字节。渲染（解码前的动效生成）属重活，
 /// 请用核心包的后台 isolate 入口（processBytesInBackground 等）在后台
@@ -24,6 +29,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/widgets.dart';
 
+import 'power_aware.dart';
+
 class MotionGifView extends StatefulWidget {
   const MotionGifView({
     super.key,
@@ -35,6 +42,8 @@ class MotionGifView extends StatefulWidget {
     this.loop = true,
     this.crossfadeDuration = const Duration(milliseconds: 150),
     this.respectReducedMotion = true,
+    this.pauseWhenNotVisible = false,
+    this.enableMotion,
     this.fit = BoxFit.contain,
     this.width,
     this.height,
@@ -67,6 +76,15 @@ class MotionGifView extends StatefulWidget {
   /// 系统减弱动态开启时静帧（true，默认）。
   final bool respectReducedMotion;
 
+  /// 视口外自动暂停（W4，默认 false 向后兼容）：滚出视口即静帧、滚回
+  /// 恢复。基于滚动通知 + RenderBox 视口求交，覆盖滚动可见性；静态遮挡
+  /// （Stack 深处被盖住等）不检测。
+  final bool pauseWhenNotVisible;
+
+  /// App 策略钩子（W4）：返回 false 即静帧（如低电量）。决策权在 App，
+  /// 本包不引 battery 依赖。返回值变化后 App rebuild 触发重估。
+  final bool Function()? enableMotion;
+
   final BoxFit fit;
   final double? width;
   final double? height;
@@ -76,7 +94,8 @@ class MotionGifView extends StatefulWidget {
   State<MotionGifView> createState() => _MotionGifViewState();
 }
 
-class _MotionGifViewState extends State<MotionGifView> {
+class _MotionGifViewState extends State<MotionGifView>
+    with MotionPowerAware<MotionGifView> {
   ui.Codec? _codec;
   ui.Image? _currentFrame;
   bool _gifLoaded = false;
@@ -87,8 +106,15 @@ class _MotionGifViewState extends State<MotionGifView> {
   bool _reducedMotion = false;
 
   @override
+  bool Function()? get enableMotion => widget.enableMotion;
+
+  @override
+  bool get pauseWhenNotVisible => widget.pauseWhenNotVisible;
+
+  @override
   void initState() {
     super.initState();
+    motionPowerInit();
     // 延后到首帧 build 之后：_reducedMotion 依赖 didChangeDependencies 里
     // 的 MediaQuery 读取，直接在 initState 跑会读到初始 false。
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -113,11 +139,25 @@ class _MotionGifViewState extends State<MotionGifView> {
     }
     if (widget.playing != oldWidget.playing) {
       if (widget.playing) {
-        _resume();
+        if (motionActive) _resume();
       } else {
         _generation++; // 暂停：终止在途泵帧循环
       }
     }
+    // 钩子/视口开关变化后重估功耗聚合（可能触发恢复/静帧）。
+    reassessMotion();
+  }
+
+  // ---- W4 功耗感知：静帧 = 终止泵帧循环；恢复 = 按需重启 ----
+
+  @override
+  void onMotionSuppressed() {
+    _generation++; // 终止在途泵帧循环（与 playing=false 同路径）
+  }
+
+  @override
+  void onMotionRestored() {
+    if (widget.playing) _resume();
   }
 
   void _reset() {
@@ -154,7 +194,9 @@ class _MotionGifViewState extends State<MotionGifView> {
         return;
       }
       _showFrame(first.image);
-      if (widget.playing) {
+      // W4：功耗聚合不允许时（后台/屏外/钩子 false）不启动泵帧循环；
+      // 恢复路径由 onMotionRestored 接管。
+      if (widget.playing && motionActive) {
         unawaited(_pump(codec, startAt: 1));
       }
     } catch (_) {
@@ -215,6 +257,7 @@ class _MotionGifViewState extends State<MotionGifView> {
 
   @override
   void dispose() {
+    motionPowerDispose();
     _generation++;
     _codec?.dispose();
     _currentFrame?.dispose();
@@ -231,7 +274,7 @@ class _MotionGifViewState extends State<MotionGifView> {
         entrance.isNotEmpty &&
         _entranceIndex < entrance.length;
 
-    return SizedBox(
+    Widget content = SizedBox(
       width: widget.width,
       height: widget.height,
       child: ClipRect(
@@ -278,6 +321,12 @@ class _MotionGifViewState extends State<MotionGifView> {
           ],
         ),
       ),
+    );
+    // W4 视口暂停：滚动通知驱动惰性视口自检（opt-in）。
+    if (!widget.pauseWhenNotVisible) return content;
+    return NotificationListener<ScrollNotification>(
+      onNotification: onMotionScrollNotification,
+      child: content,
     );
   }
 }
