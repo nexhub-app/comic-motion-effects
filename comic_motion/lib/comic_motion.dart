@@ -24,6 +24,7 @@ export 'src/json_compat.dart';
 export 'src/motion_math.dart';
 export 'src/ledger.dart';
 export 'src/param_catalog.dart';
+export 'src/panel_splitter.dart';
 export 'src/pipeline.dart';
 export 'src/render/envelope.dart';
 export 'src/render/quality.dart';

@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'apng_writer.dart' show PixelRect;
 import 'image_model.dart';
 import 'render/quality.dart';
 
@@ -55,9 +56,13 @@ class LayerMap {
 /// are transparent. The near layer (last) is filled opaque so edges never show
 /// holes during parallax.
 class LayerImage {
-  LayerImage(this.image, this.depthRank);
+  LayerImage(this.image, this.depthRank, {this.clip});
   final RgbaImage image;
   final int depthRank; // 0 = far ... layerCount-1 = near
+
+  /// 分格感知裁剪（W5，画布坐标）：层内容只允许写入该矩形（格边界裁剪，
+  /// 根除跨格串色）；null = 全画布（既有路径零变化）。
+  final PixelRect? clip;
 }
 
 /// Depth estimation tuned for comic/line art:

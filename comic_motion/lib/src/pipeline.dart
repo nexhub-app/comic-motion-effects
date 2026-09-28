@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'cancellation.dart';
 import 'apng_writer.dart';
+import 'panel_splitter.dart';
 import 'effect_config.dart';
 import 'frame_compositor.dart';
 import 'gif_writer.dart';
@@ -869,11 +870,21 @@ class MotionPipeline {
   /// 用同一实现，保证 t=0 静帧与 GIF 首帧逐像素同源。目标尺寸两档算法一致，
   /// 只有滤波器不同：legacy 沿 v1.2 双线性，standard+ 走面积平均（细线稿
   /// 不再产生锯齿与摩尔纹）；legacy 档保持 v1.2 的最近邻掩码（不羽化、不外扩）。
+  ///
+  /// panelAware（W5，仅 autoLayers 路径）：先横向白带分格检测；多格图逐格
+  /// 独立估算深度与分层（层写回全图坐标并携带格边界裁剪，合成时跨格串色
+  /// 根除）；单格/无白带图自动回退整页分层（与 panelAware 关闭逐字节等价）。
   (RgbaImage, List<LayerImage>) _downscaleAndSplit(
       RgbaImage src, int effectiveMaxDim) {
     final working = config.quality.tier.atLeastStandard
         ? boxDownscale(src, effectiveMaxDim)
         : _downscaleTo(src, effectiveMaxDim);
+    if (config.panelAware && config.depthMode == DepthMode.autoLayers) {
+      final panels = const PanelSplitter().split(working);
+      if (panels.length >= 2) {
+        return (working, _splitPerPanel(working, panels));
+      }
+    }
     final depth = DepthEstimator(workScale: 0.5).estimate(working);
     final splitter = LayerSplitter(
       layerCount: config.layerCount,
@@ -881,6 +892,41 @@ class MotionPipeline {
       edgeStretchPx: config.quality.edgeStretchPx,
     );
     return (working, splitter.split(working, depth));
+  }
+
+  /// W5 分格感知：逐格裁剪子图 → 独立 DepthEstimator + LayerSplitter →
+  /// 层内容写回全图尺寸透明画布（格区域），携带格内 rank 与格边界裁剪。
+  /// 层序列 = 格序 × 格内 rank 序（合成器按 rank 归一视差倍率，跨格一致）。
+  List<LayerImage> _splitPerPanel(
+      RgbaImage working, List<PixelRect> panels) {
+    final layers = <LayerImage>[];
+    for (final panel in panels) {
+      // 裁剪子图（逐行拷贝）。
+      final sub = RgbaImage(width: panel.width, height: panel.height);
+      for (var y = 0; y < panel.height; y++) {
+        final srcBase = ((panel.y + y) * working.width + panel.x) * 4;
+        sub.data.setRange(y * panel.width * 4, (y + 1) * panel.width * 4,
+            working.data, srcBase);
+      }
+      final depth = DepthEstimator(workScale: 0.5).estimate(sub);
+      final splitter = LayerSplitter(
+        layerCount: config.layerCount,
+        tier: config.quality.tier,
+        edgeStretchPx: config.quality.edgeStretchPx,
+      );
+      for (final l in splitter.split(sub, depth)) {
+        // 写回全图坐标：透明画布 + 子图区域内容（格边界由 clip 在合成期
+        // 裁剪——层内容本就只落在格内，clip 兜住视差位移后的越界绘制）。
+        final full = RgbaImage(width: working.width, height: working.height);
+        for (var y = 0; y < panel.height; y++) {
+          final dstBase = ((panel.y + y) * working.width + panel.x) * 4;
+          full.data.setRange(dstBase, dstBase + panel.width * 4,
+              l.image.data, y * panel.width * 4);
+        }
+        layers.add(LayerImage(full, l.depthRank, clip: panel));
+      }
+    }
+    return layers;
   }
 
   /// 导出类入口（交互帧集 / 入场帧序列，见 `interaction.dart`）与渲染管线

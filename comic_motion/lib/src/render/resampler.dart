@@ -9,8 +9,10 @@
 ///    这条曲线拉回接近原始锐度，抽点成本靠可分离滤波压到约 8 个。
 library;
 
+import 'dart:math' as math;
 import 'dart:typed_data';
 
+import '../apng_writer.dart' show PixelRect;
 import '../image_model.dart';
 import 'quality.dart';
 
@@ -95,28 +97,37 @@ void _spanSums(Uint8List src, int base, int i0, int i1, double a, double b,
 /// 把 [srcData]（sw×sh 的 RGBA 栅格）按 [scale] 与位移 (dx,dy) 逆映射贴进 [dst]。
 ///
 /// [tier] 为 legacy 时逐字节复现 v1.2；standard+ 走 Catmull-Rom。
+/// [clip]（W5，画布坐标）：目标像素钳制矩形——只有矩形内的画布像素会被
+/// 写入（分格感知层的格边界裁剪）；null = 全画布，循环范围与旧实现相同
+/// （既有路径逐字节零变化）。
 /// 注意：scale 远小于 0.5 时 Catmull-Rom 会欠采样——本引擎的 scale 恒在
 /// `1±呼吸幅度` 与 `cover(>=1)` 区间，真正的降采样由 [boxDownscale] 一次性完成。
 void drawLayer(RgbaImage dst, Uint8List srcData, int sw, int sh, double dx,
     double dy, double scale, double anchorY,
-    {required RenderTier tier}) {
+    {required RenderTier tier, PixelRect? clip}) {
   if (scale <= 0) return;
   if (tier.atLeastStandard) {
-    _drawCatmullRom(dst, srcData, sw, sh, dx, dy, scale, anchorY);
+    _drawCatmullRom(dst, srcData, sw, sh, dx, dy, scale, anchorY, clip: clip);
     return;
   }
-  _drawBilinear(dst, srcData, sw, sh, dx, dy, scale, anchorY);
+  _drawBilinear(dst, srcData, sw, sh, dx, dy, scale, anchorY, clip: clip);
 }
 
 /// v1.2 原样通路（逆映射双线性 + 越界抽点按权重 0 跳过）。
 void _drawBilinear(RgbaImage dst, Uint8List srcData, int sw, int sh, double dx,
-    double dy, double scale, double anchorY) {
+    double dy, double scale, double anchorY,
+    {PixelRect? clip}) {
   final w = dst.width, h = dst.height;
   final cx = sw / 2.0, cy = sh * anchorY;
   final inv = 1.0 / scale;
   final dstData = dst.data;
   final sxStep = inv;
-  for (var y = 0; y < h; y++) {
+  // W5 画布坐标钳制：clip 非空时只遍历矩形内的目标像素。
+  final yStart = clip?.y ?? 0;
+  final yEnd = clip == null ? h : math.min(h, clip.y + clip.height);
+  final xStart = clip?.x ?? 0;
+  final xEnd = clip == null ? w : math.min(w, clip.x + clip.width);
+  for (var y = yStart; y < yEnd; y++) {
     final sy = (y + 0.5 - (h * anchorY)) * inv + cy + dy - 0.5;
     final sy0 = sy.floor();
     final ty = sy - sy0;
@@ -124,8 +135,8 @@ void _drawBilinear(RgbaImage dst, Uint8List srcData, int sw, int sh, double dx,
     final y1 = sy0 + 1;
     final y1_ok = y1 >= 0 && y1 < sh;
     if (!y0_ok && !y1_ok) continue;
-    var sx = (0 + 0.5 - (w * 0.5)) * inv + cx + dx - 0.5;
-    for (var x = 0; x < w; x++, sx += sxStep) {
+    var sx = (xStart + 0.5 - (w * 0.5)) * inv + cx + dx - 0.5;
+    for (var x = xStart; x < xEnd; x++, sx += sxStep) {
       final sx0 = sx.floor();
       final tx = sx - sx0;
       final x1 = sx0 + 1;
@@ -179,18 +190,24 @@ void _drawBilinear(RgbaImage dst, Uint8List srcData, int sw, int sh, double dx,
 /// 复用（本引擎 scale≈1，每个源行实际只滤一次）。边界语义与逐点版一致：
 /// 越界抽点权重记 0，越界源行整条跳过。
 void _drawCatmullRom(RgbaImage dst, Uint8List srcData, int sw, int sh,
-    double dx, double dy, double scale, double anchorY) {
+    double dx, double dy, double scale, double anchorY,
+    {PixelRect? clip}) {
   final w = dst.width, h = dst.height;
   final inv = 1.0 / scale;
   final dstData = dst.data;
   final rowBytes = sw * 4;
+  // W5 画布坐标钳制。
+  final yStart = clip?.y ?? 0;
+  final yEnd = clip == null ? h : math.min(h, clip.y + clip.height);
+  final xStart = clip?.x ?? 0;
+  final xEnd = clip == null ? w : math.min(w, clip.x + clip.width);
 
   // sx 随 x 单调递增 => 命中源区的列是一段连续区间，区间外整列跳过。
   final colOff = Int32List(w * 4);
   final colW = Float64List(w * 4);
   final wt = Float64List(4);
   var xFirst = -1, xLast = -1;
-  for (var x = 0; x < w; x++) {
+  for (var x = xStart; x < xEnd; x++) {
     final sx = (x + 0.5 - (w * 0.5)) * inv + sw / 2.0 + dx - 0.5;
     final sx0 = sx.floor();
     _fillCrWeights(sx - sx0, wt);
@@ -215,7 +232,7 @@ void _drawCatmullRom(RgbaImage dst, Uint8List srcData, int sw, int sh,
   final acc = Float64List(w * 4);
   final from = xFirst * 4, to = (xLast + 1) * 4;
 
-  for (var y = 0; y < h; y++) {
+  for (var y = yStart; y < yEnd; y++) {
     final sy = (y + 0.5 - (h * anchorY)) * inv + sh * anchorY + dy - 0.5;
     final sy0 = sy.floor();
     _fillCrWeights(sy - sy0, wt);

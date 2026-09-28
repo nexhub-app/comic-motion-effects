@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'depth_splitter.dart';
+import 'apng_writer.dart' show PixelRect;
 import 'effect_config.dart';
 import 'frame_compositor.dart';
 import 'gif_writer.dart';
@@ -68,6 +69,8 @@ class FrameJobSpec {
     this.wantPngBytes = false,
     this.rectMode = false,
     this.wantRgba = false,
+    this.layerRanks,
+    this.layerClips,
   });
 
   factory FrameJobSpec.fromLayers({
@@ -91,6 +94,10 @@ class FrameJobSpec {
         wantPngBytes: wantPngBytes,
         rectMode: rectMode,
         wantRgba: wantRgba,
+        // W5 分格感知：层可能带格内 rank 与格边界裁剪（跨 isolate 传给
+        // worker 重建合成器）。null 元素/列表 = 全画布（既有路径零变化）。
+        layerRanks: layers.map((l) => l.depthRank).toList(),
+        layerClips: layers.map((l) => l.clip).toList(),
       );
 
   final int width;
@@ -114,6 +121,12 @@ class FrameJobSpec {
   /// APNG rect 差分（W3）：worker 额外回传整帧 RGBA 栅格（O(单帧) 内存，
   /// 与 wantPngBytes 同模式 opt-in），差分在主 isolate 按帧序进行。
   final bool wantRgba;
+
+  /// W5 分格感知：每层格内深度 rank（null = 层序即 rank，旧行为）。
+  final List<int>? layerRanks;
+
+  /// W5 分格感知：每层画布坐标裁剪矩形（null 元素 = 全画布）。
+  final List<PixelRect?>? layerClips;
 
   /// 每个 worker 常驻的栅格字节数（底图 + 各层 + 在途帧 + 索引帧）。
   int get rasterBytesPerWorker => width * height * 4 * (layerPixels.length + 3);
@@ -171,6 +184,8 @@ class FrameJob {
           w: s.width,
           h: s.height,
           config: s.config,
+          ranks: s.layerRanks,
+          clips: s.layerClips,
         ),
         pngDir: s.pngDir,
         encoder: s.gif?.build(),

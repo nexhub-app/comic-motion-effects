@@ -345,6 +345,32 @@ content (measure with your own material); the decoded result is
 pixel-identical to `none` — locked by tests using a spec-compliant
 compositor.
 
+### Panel-aware layering (opt-in, W5)
+
+Heuristic depth across panel borders is the main quality culprit for
+multi-panel comic pages: panels slide against each other and content
+bleeds across gutters. `panelAware: true` detects panel bands first
+(horizontal white-gutter scan; sensitivity: near-white row ≥ 90% pixels
+at luminance ≥ 245, gutter ≥ 0.5% page height, panel ≥ 6% page height,
+fewer than 2 panels falls back to whole-page layering), then estimates
+depth and splits layers **per panel**. Layers carry their panel bounds
+(`LayerImage.clip`) and the compositor clips drawing to the panel —
+cross-panel bleed is eliminated, and per-panel parallax amplitude is
+normalized by in-panel depth rank so all panels move consistently.
+
+```dart
+final config = EffectConfig(
+  fps: 24, durationSec: 2, maxDimension: 1080,
+  effects: [EffectKind.parallax],
+  panelAware: true, // off by default; configHash unchanged when absent
+);
+```
+
+Single-panel / no-gutter images fall back to whole-page layering
+byte-identical to `panelAware: false`. Orthogonal with strip mode (each
+slice runs the standard pipeline, panel detection applies within the
+slice). Nested vertical sub-panels are future work.
+
 ### High-fps APNG (opt-in, 60 fps)
 
 `outputFormat: apng` supports two extra encoding knobs (see

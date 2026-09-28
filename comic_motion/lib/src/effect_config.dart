@@ -1240,6 +1240,7 @@ class EffectConfig {
     this.maxDimension = 1600,
     this.maxFrames = 96,
     this.reducedMotion = false,
+    this.panelAware = false,
 
     /// ---- R5 顶层便捷参数（null = 不触碰对应嵌套字段）----
     /// 嵌入方在一处设齐全部渲染参数；非 null 时映射到既有字段，与显式
@@ -1362,6 +1363,12 @@ class EffectConfig {
   /// 减弱动态降级：true 时输出单帧静态图（关闭全部动效，内容完整）。
   bool reducedMotion;
 
+  /// 分格感知分层（W5，opt-in）：true 时先做横向白带分格检测，多格图
+  /// 逐格独立估算深度与分层、层以格边界裁剪（根除启发式深度跨格错位
+  /// 与串色）；单格/无白带图自动回退整页分层（结果与 false 等价）。
+  /// 条件序列化：默认 false 不写入 → configHash 与旧版完全一致。
+  final bool panelAware;
+
   int get frameCount =>
       reducedMotion ? 1 : (fps * durationSec).round().clamp(2, maxFrames);
 
@@ -1439,6 +1446,7 @@ class EffectConfig {
         'maxDimension': maxDimension,
         'maxFrames': maxFrames,
         if (reducedMotion) 'reducedMotion': true,
+        if (panelAware) 'panelAware': true,
       };
 
   String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
@@ -1511,6 +1519,7 @@ class EffectConfig {
         maxDimension: maxDimension,
         maxFrames: maxFrames,
         reducedMotion: reducedMotion,
+        panelAware: panelAware,
       );
 
   /// 启用一个效果（已启用则为无变化的等价新实例）。
@@ -1699,6 +1708,7 @@ class EffectConfig {
       maxDimension: (j['maxDimension'] as num?)?.toInt() ?? 1600,
       maxFrames: (j['maxFrames'] as num?)?.toInt() ?? 96,
       reducedMotion: j['reducedMotion'] == true,
+      panelAware: j['panelAware'] == true,
     );
   }
 }

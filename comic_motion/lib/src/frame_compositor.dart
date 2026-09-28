@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'apng_writer.dart' show PixelRect;
 import 'depth_splitter.dart';
 import 'effect_config.dart';
 import 'image_model.dart';
@@ -27,17 +28,29 @@ class FrameCompositor {
                 strength: config.moodScript.strength,
                 cycles: config.moodScript.cycles)
             : null {
+    // 层视差倍率：panelAware（W5）下各格层集独立、层按格分块排布，倍率按
+    // 格内 depthRank 归一（同 rank 同幅度，跨格一致）；否则沿用 v1.3 的
+    // 全局序号线性插值（逐字节契约）。
+    final maxRank = layers.isEmpty
+        ? 0
+        : layers.map((l) => l.depthRank).reduce(math.max);
     _mult = List<double>.generate(
         layers.length,
         (i) => layers.isEmpty
             ? 1.0
-            : 0.25 + 0.75 * i / math.max(1, layers.length - 1));
+            : config.panelAware
+                ? 0.25 +
+                    0.75 *
+                        layers[i].depthRank /
+                        math.max(1, maxRank)
+                : 0.25 + 0.75 * i / math.max(1, layers.length - 1));
     _rng = DeterministicRandom(config.seed);
     // Reference the rasters directly — they are read-only for the whole
     // animation (frames render into fresh buffers), so copying would just
     // duplicate (layerCount + 1) full-resolution buffers per job.
     _basePixels = base.data;
     _layerPixels = layers.map((l) => l.image.data).toList();
+    _layerClips = layers.map((l) => l.clip).toList();
     _initParticles();
     _initNewEffects();
   }
@@ -51,10 +64,14 @@ class FrameCompositor {
     required int w,
     required int h,
     required EffectConfig config,
+    List<int>? ranks,
+    List<PixelRect?>? clips,
   }) {
     final ls = [
       for (var i = 0; i < layers.length; i++)
-        LayerImage(RgbaImage.fromBytes(width: w, height: h, data: layers[i]), i)
+        LayerImage(RgbaImage.fromBytes(width: w, height: h, data: layers[i]),
+            ranks == null ? i : ranks[i],
+            clip: clips == null ? null : clips[i])
     ];
     return FrameCompositor(
         ls, RgbaImage.fromBytes(width: w, height: h, data: base), config);
@@ -476,6 +493,7 @@ class FrameCompositor {
   late List<_Particle> _particles;
   late List<Uint8List>
       _layerPixels; // per-layer cached raster (no per-frame copy)
+  late List<PixelRect?> _layerClips; // W5 分格裁剪（null = 全画布）
   late Uint8List _basePixels;
 
   void _initParticles() {
@@ -575,7 +593,8 @@ class FrameCompositor {
       // Scale slightly beyond 1 so shifted layers still cover the canvas.
       final cover = 1.0 + 2 * (dx.abs() + dy.abs()) / math.min(w, h);
       _drawLayer(frame, _layerPixels[li], layers[li].image.width,
-          layers[li].image.height, dx, dy, zoom * cover, _anchorY(), tier);
+          layers[li].image.height, dx, dy, zoom * cover, _anchorY(), tier,
+          clip: _layerClips[li]);
     }
 
     if (config.effects.contains(EffectKind.ambient) && config.ambient.enabled) {
@@ -682,8 +701,10 @@ class FrameCompositor {
           double dy,
           double scale,
           double anchorY,
-          RenderTier tier) =>
-      drawLayer(dst, srcData, sw, sh, dx, dy, scale, anchorY, tier: tier);
+          RenderTier tier,
+          {PixelRect? clip}) =>
+      drawLayer(dst, srcData, sw, sh, dx, dy, scale, anchorY,
+          tier: tier, clip: clip);
 
   void _drawParticles(RgbaImage frame, double tSec) {
     final amb = config.ambient;
