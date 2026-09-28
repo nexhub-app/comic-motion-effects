@@ -5,6 +5,8 @@ import 'dart:io' as io;
 /// 产物目录形态（1.3.1 起，见 README「Output naming & content fingerprint」）：
 /// - 单图：`<stem>_<contentHash8>_<configHash8>`
 /// - strip 片级：`<stem>_slice<NNN>_<contentHash8>_<configHash8>`
+/// - 导出类（第四轮）：`<stem>_<contentHash8>_<configHash8>_interactive` /
+///   `<stem>_<contentHash8>_<configHash8>_entrance`（条目 kind 字段标注）
 ///
 /// 本组件只把**直接位于 [MotionCacheManager.rootDir] 下、且完整匹配上述
 /// 契约的目录**当作缓存条目；其余文件与目录（嵌入方自己的东西）一律跳过、
@@ -33,6 +35,18 @@ class MotionCacheManager {
 
   /// 解析目录名；非契约形态返回 null（调用方跳过，绝不删除）。
   _ParsedName? _parse(String name) {
+    // 导出类产物目录（第四轮）：`<stem>_<ch8>_<cf8>_interactive` /
+    // `<stem>_<ch8>_<cf8>_entrance`——先剥 kind 尾缀再走常规解析，
+    // 使导出目录同样可被 LRU / prefix / all 清理。
+    String? kind;
+    for (final k in const ['interactive', 'entrance']) {
+      final suffix = '_$k';
+      if (name.endsWith(suffix)) {
+        kind = k;
+        name = name.substring(0, name.length - suffix.length);
+        break;
+      }
+    }
     if (name.length < 19) return null; // 最短：1 字符 stem + '_' + ch8 + '_' + cf8
     if (!name.contains('_')) return null;
     final cf = _cf8.matchAsPrefix(name, name.length - 8);
@@ -51,7 +65,7 @@ class MotionCacheManager {
       stem = stem.substring(0, slice.start);
     }
     if (stem.isEmpty) return null; // 库不会写出空 stem 目录，防御性跳过
-    return _ParsedName(stem, contentHash, configHash, sliceIndex);
+    return _ParsedName(stem, contentHash, configHash, sliceIndex, kind);
   }
 
   /// 扫描 [rootDir] 下的全部契约条目。无法识别的文件 / 目录一律忽略。
@@ -69,6 +83,7 @@ class MotionCacheManager {
         contentHash: parsed.contentHash,
         configHash: parsed.configHash,
         sliceIndex: parsed.sliceIndex,
+        kind: parsed.kind,
         byteSize: stat.$1,
         modifiedAt: stat.$2,
         directory: e.path,
@@ -155,11 +170,15 @@ class MotionCacheManager {
 
 /// 解析中间结果。
 class _ParsedName {
-  _ParsedName(this.stem, this.contentHash, this.configHash, this.sliceIndex);
+  _ParsedName(
+      this.stem, this.contentHash, this.configHash, this.sliceIndex, this.kind);
   final String stem;
   final String contentHash;
   final String configHash;
   final int? sliceIndex;
+
+  /// 导出类产物的 kind 尾缀（`interactive` / `entrance`）；常规产物为 null。
+  final String? kind;
 }
 
 /// 一个可识别的缓存条目（= 一个契约产物目录）。
@@ -169,6 +188,7 @@ class MotionCacheEntry {
     required this.contentHash,
     required this.configHash,
     required this.sliceIndex,
+    this.kind,
     required this.byteSize,
     required this.modifiedAt,
     required this.directory,
@@ -186,6 +206,10 @@ class MotionCacheEntry {
 
   /// strip 片序号；单图条目为 null。
   final int? sliceIndex;
+
+  /// 导出类产物的 kind（`interactive` / `entrance`，第四轮）；常规
+  /// GIF/帧序列产物为 null。
+  final String? kind;
 
   /// 目录内全部文件字节总数。
   final int byteSize;

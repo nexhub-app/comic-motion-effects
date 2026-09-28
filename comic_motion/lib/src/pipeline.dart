@@ -781,6 +781,12 @@ class MotionPipeline {
     return (working, splitter.split(working, depth));
   }
 
+  /// 导出类入口（交互帧集 / 入场帧序列，见 `interaction.dart`）与渲染管线
+  /// 共享的前置段：同一条降采样 + 深度 + 分层主干，保证导出帧与既有产物
+  /// 同源（工作分辨率、分层口径完全一致）。
+  (RgbaImage, List<LayerImage>) downscaleAndSplitForExport(RgbaImage src) =>
+      _downscaleAndSplit(src, config.maxDimension);
+
   RgbaImage _downscaleTo(RgbaImage src, int maxDim) {
     final maxSide = src.width > src.height ? src.width : src.height;
     if (maxSide <= maxDim) return src;

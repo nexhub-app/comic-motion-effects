@@ -450,6 +450,14 @@ class FrameCompositor {
   final RgbaImage base; // original image at working resolution
   final EffectConfig config;
 
+  /// 交互式视差覆盖（第四轮 V1）：非 null 时，parallax 层位移不再由时间相位
+  /// 驱动，而由这里直接指定的归一化偏移决定（水平 `dx = amplitude · phaseX ·
+  /// w · 层倍率`，垂直 `dy = amplitude · phaseY · verticalRatio · w · 层倍率`，
+  /// phase ∈ [-1, 1]，0 = 无位移）。其余效果全部冻结在 t=0 参考相位——
+  /// 调用方以 `renderFrame(0)` 渲染交互帧。默认 null：时间驱动路径与
+  /// v1.3 逐字节一致（legacy 契约不受影响）。
+  ParallaxOverride? parallaxOverride;
+
   final int w;
   final int h;
 
@@ -542,16 +550,27 @@ class FrameCompositor {
 
     // Layers far-to-near with parallax offsets.
     final p = config.effects.contains(EffectKind.parallax);
+    final pOverride = parallaxOverride;
     for (var li = 0; li < layers.length; li++) {
       var dx = shakeX, dy = shakeY;
       if (p) {
-        final ampPx = config.parallax.amplitude * _env.motion * w * _mult[li];
-        final phase = 2 * math.pi * tSec / config.parallax.periodSec;
-        dx += math.sin(phase + li * 0.35) * ampPx * dxDir;
-        dy += math.sin(phase * 0.8 + li * 0.5 + 0.9) *
-            ampPx *
-            config.parallax.verticalRatio *
-            dyDir;
+        if (pOverride != null) {
+          // 交互式视差（第四轮 V1）：层位移直接由调用方指定，替代时间驱动的
+          // 视差相位。不乘 _env.motion——情绪包络属于时间域，交互帧冻结在
+          // 参考相位（renderFrame(0) 语义）。phase=0 时两项均为精确 0.0，
+          // 与「无 parallax 效果」的层位移逐位一致（测试锁定）。
+          final ampPx = config.parallax.amplitude * w * _mult[li];
+          dx += ampPx * pOverride.phaseX;
+          dy += ampPx * config.parallax.verticalRatio * pOverride.phaseY;
+        } else {
+          final ampPx = config.parallax.amplitude * _env.motion * w * _mult[li];
+          final phase = 2 * math.pi * tSec / config.parallax.periodSec;
+          dx += math.sin(phase + li * 0.35) * ampPx * dxDir;
+          dy += math.sin(phase * 0.8 + li * 0.5 + 0.9) *
+              ampPx *
+              config.parallax.verticalRatio *
+              dyDir;
+        }
       }
       // Scale slightly beyond 1 so shifted layers still cover the canvas.
       final cover = 1.0 + 2 * (dx.abs() + dy.abs()) / math.min(w, h);
@@ -1268,6 +1287,20 @@ class _Particle {
   final double alpha;
   final double drift;
   final double phase;
+}
+
+/// 交互式视差覆盖参数（第四轮 V1）：两个分量彼此独立，各轴取值 [-1, 1]，
+/// 0 = 该轴无位移。仅在使用方显式设置 [FrameCompositor.parallaxOverride]
+/// 时生效；默认 null 下渲染路径逐字节不变。
+class ParallaxOverride {
+  const ParallaxOverride({this.phaseX = 0.0, this.phaseY = 0.0});
+
+  /// 水平归一化偏移（[-1, 1]）。正值 = 层向右位移。
+  final double phaseX;
+
+  /// 垂直归一化偏移（[-1, 1]）。正值 = 层向下位移（受
+  /// `parallax.verticalRatio` 缩放，与时间路径同一耦合系数）。
+  final double phaseY;
 }
 
 // ---- v1.1 新动效粒子状态 ----

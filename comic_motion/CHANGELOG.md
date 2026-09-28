@@ -6,6 +6,10 @@
 
 发布导向改造（第一轮：包拆分、跨平台路径、解码安全、错误码体系、fail-fast 校验、内存预算、台账可关闭）+ 运行时生命周期接口（第二轮：全内存管线、取消/进度/超时、后台 isolate、并发防护、渲染参数/效果选择 API、条漫 strip 模式）。逐字节复现契约全程未破坏（legacy 档像素路径与编码字节零改动，测试护栏扩至 174+6 例）。
 
+### 第四轮：鸿蒙阅读效果对齐（V1–V5）
+
+- **交互式视差帧集（V1）**：`FrameCompositor` 新增 `parallaxOverride`（`ParallaxOverride{phaseX, phaseY}`，phase ∈ [-1,1]）——非 null 时视差层位移由调用方直接指定（`dx = amplitude · phaseX · w · 层倍率`，垂直轴经 `verticalRatio` 缩放），替代时间驱动相位；其余效果冻结在 t=0 参考相位。默认 null 下时间驱动路径与 1.3.1 逐字节一致（红线：新旧行为 8 项产物逐字节比对通过，legacy/standard/rect-diff/静帧/混搭效果全同）。新增导出入口 `exportInteractionFrames`（内存）与 `exportInteractionFramesFile`（落盘，`MotionPipeline` 扩展方法）：`steps`（默认 16，均匀采样 [-1,1] 含端点）× `axis`（horizontal/vertical/both——both 输出两组一维帧集）；返回 `InteractionExportResult`（帧集 PNG 字节 + 索引 JSON + 宽高 + configHash/contentHash），索引 JSON（`kind: interactive`）嵌入方加载即用。落盘目录 `<stem>_<contentHash8>_<configHash8>_interactive/`（frame_NNNN.png + index.json），`MotionCacheManager` 识别该契约（条目新增 `kind` 字段），purgeLRU/purgePrefix/purgeAll 正常清理。与 cancelToken/timeout/keepPartial 兼容（检查点：入口 + 每帧渲染前后，粒度帧边界；取消默认清理半成品，异常 code `E_CANCELLED`/`E_TIMEOUT`）。`phase=0` 帧 ≡ 去掉 parallax 效果的 t=0 静帧（逐字节测试锁定）。新增 `lib/src/interaction.dart` 与 `test/interaction_test.dart`。
+
 ### 第二轮：运行时生命周期接口（R1–R10）
 
 - **全内存管线 API**：`MotionPipeline.processBytes({required Uint8List input, int? maxPixels})` → `MemoryPipelineResult`（`gifBytes` / `paramsJsonBytes` + 对齐 `PipelineResult` 的元信息，无路径）。渲染主干抽出共享 `_runCore`，`processFile` 只剩薄封装——同输入同配置下内存产物与落盘产物逐字节一致（有测试，含并行路径）。`outputFormat: frames` 在内存模式返回 `gifBytes: null`。

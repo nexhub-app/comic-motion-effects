@@ -17,6 +17,7 @@ export 'src/gif_writer.dart';
 export 'src/guard.dart';
 export 'src/image_io.dart';
 export 'src/image_model.dart';
+export 'src/interaction.dart';
 export 'src/json_compat.dart';
 export 'src/motion_math.dart';
 export 'src/ledger.dart';
