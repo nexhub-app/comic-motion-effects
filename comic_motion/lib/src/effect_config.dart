@@ -63,7 +63,7 @@ EffectKind effectKindFromName(Object? name) {
 
 enum DepthMode { autoLayers, singleLayer }
 
-enum OutputFormat { gif, frames, both }
+enum OutputFormat { gif, frames, both, apng }
 
 class ParallaxParams {
   const ParallaxParams({

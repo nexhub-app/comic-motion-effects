@@ -5,6 +5,7 @@
 library;
 
 export 'src/background.dart';
+export 'src/apng_writer.dart';
 export 'src/batch_runner.dart';
 export 'src/cache_manager.dart';
 export 'src/cancellation.dart';

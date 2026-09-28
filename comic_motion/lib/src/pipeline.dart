@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'cancellation.dart';
+import 'apng_writer.dart';
 import 'effect_config.dart';
 import 'frame_compositor.dart';
 import 'gif_writer.dart';
@@ -37,12 +38,17 @@ class PipelineResult {
     this.parallel = 1,
     this.parallelFallback = false,
     this.warnings = const [],
+    this.outputApng = '',
   });
 
   final String inputPath;
-  final String outputGif; // '' when frames-only
-  final String frameDir; // '' when gif-only
+  final String outputGif; // '' when frames-only / apng-only
+  final String frameDir; // '' when gif-only / apng-only
   final String paramsFile; // 参数回放文件（params.json）
+
+  /// APNG 产物路径（`outputFormat: apng` 磁盘模式非空；执行期产物，
+  /// 不进 [toJson] 除非非空——既有格式 JSON 键序零变化）。
+  final String outputApng;
   final int width;
   final int height;
   final int layerCount;
@@ -88,6 +94,7 @@ class PipelineResult {
         'parallel': parallel,
         'parallelFallback': parallelFallback,
         if (warnings.isNotEmpty) 'warnings': warnings,
+        if (outputApng.isNotEmpty) 'outputApng': outputApng,
       };
 }
 
@@ -111,11 +118,15 @@ class MemoryPipelineResult {
     this.parallel = 1,
     this.parallelFallback = false,
     this.warnings = const [],
+    this.apngBytes,
   });
 
   /// Encoded GIF bytes. Null when the config requests frames-only output
   /// (`outputFormat: frames`) — memory mode never persists PNG frames.
   final Uint8List? gifBytes;
+
+  /// APNG 容器字节（`outputFormat: apng` 时非 null，此时 [gifBytes] 为 null）。
+  final Uint8List? apngBytes;
 
   /// Exact params.json equivalent (parameter replay payload).
   final Uint8List paramsJsonBytes;
@@ -163,10 +174,17 @@ class _CoreOutput {
     required this.parallel,
     required this.parallelFallback,
     required this.warnings,
+    this.apngBytes,
+    this.apngPath = '',
   });
 
   /// null = frames-only（无 GIF 产物）。
   final Uint8List? gifBytes;
+
+  /// APNG 产物（`outputFormat: apng` 时非 null；apngPath 仅磁盘模式非空）。
+  final Uint8List? apngBytes;
+  final String apngPath;
+
   final String paramsJson;
 
   /// 磁盘模式的产物路径；内存模式一律为空串。
@@ -314,6 +332,7 @@ class MotionPipeline {
       parallel: core.parallel,
       parallelFallback: core.parallelFallback,
       warnings: core.warnings,
+      outputApng: core.apngPath,
     );
   }
 
@@ -358,6 +377,7 @@ class MotionPipeline {
       parallel: core.parallel,
       parallelFallback: core.parallelFallback,
       warnings: core.warnings,
+      outputApng: core.apngPath,
     );
   }
 
@@ -386,6 +406,7 @@ class MotionPipeline {
     sw.stop();
     return MemoryPipelineResult(
       gifBytes: core.gifBytes,
+      apngBytes: core.apngBytes,
       paramsJsonBytes: Uint8List.fromList(convert.utf8.encode(core.paramsJson)),
       width: src.width,
       height: src.height,
@@ -557,6 +578,12 @@ class MotionPipeline {
     var frameDir = '';
     final wantGif = config.outputFormat == OutputFormat.gif ||
         config.outputFormat == OutputFormat.both;
+    // APNG（第四轮 V3，opt-in 新路径）：全画布真彩色帧容器，复用 worker 的
+    // PNG 回传通路（wantPngBytes），默认 outputFormat 行为零变化。
+    final wantApng = config.outputFormat == OutputFormat.apng;
+    final apng = wantApng
+        ? StreamingApngBuilder(working.width, working.height, fps: config.fps)
+        : null;
     // PNG 帧序列只属于磁盘模式；内存模式没有可落盘处（wantFrames 恒 false）。
     final wantFrames = jobDir != null &&
         (config.outputFormat == OutputFormat.frames ||
@@ -607,12 +634,19 @@ class MotionPipeline {
       });
       probes.clear();
     } else if (includeFirstFrame) {
-      // frames-only 路径没有探针段：主 isolate 预渲染第 0 帧充当封面帧并
-      // 记入 presolved（派工跳过该帧），与 GIF 路径一样只渲染一次。
+      // frames-only / apng 路径没有探针段：主 isolate 预渲染第 0 帧充当
+      // 封面帧并记入 presolved（派工跳过该帧），与 GIF 路径一样只渲染一次。
       checkCancel(); // 探针帧渲染前检查
       firstFrameRgba = compositor.renderFrame(0);
       if (wantFrames) ImageIO.writePngFrame(frameDir, 0, firstFrameRgba);
-      presolved[0] = FrameOutput(0, null);
+      // apng 模式需要帧 PNG 字节进容器（onFrame 回调同样复用）。
+      final pngNeeded = wantApng || onFrame != null;
+      presolved[0] = FrameOutput(
+        0,
+        null,
+        pngBytes:
+            pngNeeded ? Uint8List.fromList(ImageIO.encodePngFrame(firstFrameRgba)) : null,
+      );
     }
     final firstFramePng = includeFirstFrame
         ? Uint8List.fromList(ImageIO.encodePngFrame(firstFrameRgba!))
@@ -624,7 +658,8 @@ class MotionPipeline {
       config: config,
       pngDir: wantFrames ? frameDir : null,
       gif: gif == null ? null : GifEncoderSpec.from(gif),
-      wantPngBytes: onFrame != null,
+      // apng 容器需要每帧 PNG 字节回传（worker 侧编码一次，复用帧流通路）。
+      wantPngBytes: onFrame != null || wantApng,
       rectMode: rectMode,
     );
     final allIndices = [for (var i = 0; i < n; i++) i];
@@ -657,13 +692,17 @@ class MotionPipeline {
           final body = o.gifBody;
           if (gif != null && body != null) gif.addEncodedBody(body);
         }
+        // APNG 容器按帧序吞 PNG 字节（worker/串行/预解三路同源同字节）。
+        final pb = o.pngBytes;
+        if (apng != null && pb != null) {
+          apng.addEncodedPngFrame(pb);
+        }
         // 帧流回调：按帧号有序（drain 顺序即帧序），取消后不再触发。
-        final png = o.pngBytes;
         if (frameCb != null &&
-            png != null &&
+            pb != null &&
             !cancelled &&
             !(token?.isCancelled ?? false)) {
-          frameCb(o.index, png);
+          frameCb(o.index, pb);
         }
       }
       reportProgress();
@@ -712,6 +751,16 @@ class MotionPipeline {
       }
       gifBytes = Uint8List.fromList(bytes);
     }
+    Uint8List? apngBytes;
+    var apngPath = '';
+    if (apng != null) {
+      final bytes = apng.finish();
+      if (jobDir != null) {
+        apngPath = '$jobDir/anim.apng';
+        io.File(apngPath).writeAsBytesSync(bytes);
+      }
+      apngBytes = Uint8List.fromList(bytes);
+    }
 
     // Persist the exact params next to outputs (reproducibility contract).
     final paramsJson = config.toJsonString();
@@ -723,6 +772,8 @@ class MotionPipeline {
 
     return _CoreOutput(
       gifBytes: gifBytes,
+      apngBytes: apngBytes,
+      apngPath: apngPath,
       paramsJson: paramsJson,
       gifPath: gifPath,
       frameDir: frameDir,
