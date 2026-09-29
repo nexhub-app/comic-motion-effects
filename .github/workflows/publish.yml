@@ -54,6 +54,7 @@ jobs:
     name: publish comic_motion_flutter
     if: startsWith(github.ref_name, 'comic_motion_flutter-v')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: comic_motion_flutter
@@ -63,6 +64,12 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+
+      # 发布客户端与 core job 对齐（setup-dart 固定版本；PATH 顺序在后，dart 优先），
+      # flutter 仅负责 pub get / test。
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.13.0
 
       - name: Install dependencies
         run: flutter pub get
@@ -80,6 +87,7 @@ jobs:
     name: publish comic_motion_shaders
     if: startsWith(github.ref_name, 'comic_motion_shaders-v')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: comic_motion_shaders
@@ -89,6 +97,12 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+
+      # 发布客户端与 core job 对齐（setup-dart 固定版本；PATH 顺序在后，dart 优先），
+      # flutter 仅负责 pub get / test。
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.13.0
 
       - name: Install dependencies
         run: flutter pub get
