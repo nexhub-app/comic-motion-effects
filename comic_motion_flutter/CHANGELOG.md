@@ -1,71 +1,101 @@
 # Changelog
 
-本项目版本记录。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
+All notable changes to this project are documented in this file. Versioning
+follows [SemVer](https://semver.org/).
 
-## Unreleased（0.1.0 候选）
+## Unreleased
 
-初始版本。Flutter 伴生包，单向依赖核心包 `comic_motion`（核心包保持纯
-Dart、零 Flutter 依赖）。
+- **Dependencies**: `sensors_plus` `^6.1.1` → `^7.0.0`. The 7.0.0 breaking
+  changes are Android build-side only (AGP ≥8.12.1, Gradle wrapper ≥8.13,
+  Kotlin 2.2.0); the Dart event API is unchanged. Apps building for Android
+  must meet the new toolchain requirements; iOS/desktop/Web are unaffected.
 
-- **MotionGifView**：GIF 播放视图——`firstFramePng` 占位 crossfade 无缝
-  过渡（默认 150ms，`Duration.zero` 直切）、`playing`/`loop` 外部驱动
-  （`loop: false` 播完停在末帧）、系统「减弱动态」静帧
-  （`MediaQuery.disableAnimations`，不解码动画）、V2 入场帧序列前置播放
-  （播完 holdOnLast 后无缝切入 GIF 循环）、字节变更自动重置重建。
-- **ParallaxGyroView**：V1 交互帧集跟手视差——三驱动（sensors_plus 陀螺仪
-  `tiltToPhase` 欧拉角归一化 `maxTiltDeg` 默认 15°、~60fps 节流 + 0.01
-  死区；触摸拖动回退「半视口 = 满相位」+ `returnToCenter` 回中；
-  `tiltStream` 注入流，非空时不订阅传感器——测试 mock 与自定义驱动挂点）；
-  插值 `smooth` 相邻帧 alpha 混合或最近帧直切。
-- **纯 Dart 辅助**（可脱离 Flutter 单测）：`loadInteractionSets`（磁盘目录）
-  / `loadInteractionSetsFromIndexJson`（index.json 字节 + 取帧回调，资产/
-  网络/WASM 通用）、`tiltToPhase` / `degToRad`。
-- 测试：倾斜相位、帧集加载契约（kind/axis 校验、帧数一致性）、widget 测试
-  （注入流相位→帧映射、smooth 混合、触摸回退与回中、空帧集兜底、占位
-  过渡、减弱动态、入场序列、字节变更重置）。
+## 0.1.0
 
-### 第五轮 W4：功耗感知策略
+Initial release. Flutter companion package; depends one-way on the core
+`comic_motion` engine (which stays pure Dart with zero Flutter dependencies).
 
-- **三路信号聚合 mixin `MotionPowerAware`**（新文件 `lib/src/power_aware.dart`，
-  自定义视图可复用）：生命周期（离开 `resumed` 即抑制，默认启用）、视口
-  （`pauseWhenNotVisible` opt-in——滚动通知驱动惰性自检：RenderBox 全局
-  矩形与窗口求交，滚出即静帧、滚回恢复；仅覆盖滚动可见性，静态遮挡不
-  检测）、App 策略钩子（`enableMotion: bool Function()?`——低电量等策略
-  由 App 决定，**本包不引 battery 依赖**）。聚合结果切换时回调
-  `onMotionSuppressed` / `onMotionRestored`。
-- **MotionGifView**：抑制 = 泵帧循环终止（generation 失效，与
-  `playing: false` 同路径）；bootstrap 启动泵帧前检查聚合状态。默认参数
-  （`pauseWhenNotVisible: false`、钩子 null）行为与 W4 之前等价。
-- **ParallaxGyroView**：抑制 = **完全断开**传感器/注入流订阅（零持续
-  开销），恢复自动重连；订阅状态统一由 `_syncInput` 按聚合驱动。
-- 测试：三路径（视口 / 生命周期 / 钩子）静帧-恢复切换各 3 例
-  （GIF 用多帧 GIF 泵帧推进断言，Gyro 用注入相位-帧映射断言）。
+- **MotionGifView**: GIF playback view — `firstFramePng` placeholder with
+  seamless crossfade (default 150ms, `Duration.zero` for a hard cut),
+  external `playing`/`loop` control (`loop: false` holds the last frame),
+  system reduce-motion static frame (`MediaQuery.disableAnimations`, no
+  decode), entrance frame sequence played before the GIF loop, automatic
+  rebuild on byte change.
+- **ParallaxGyroView**: touch/gyro parallax over interaction frame sets —
+  three drivers: sensors_plus gyroscope (`tiltToPhase` euler-angle
+  normalization, `maxTiltDeg` default 15°, ~60fps throttle + 0.01 dead
+  zone), touch drag fallback ("half viewport = full phase") with
+  `returnToCenter`, and a `tiltStream` injection stream (when non-null the
+  sensors are not subscribed — test mocks and custom drivers); `smooth`
+  alpha blending between adjacent frames or nearest-frame hard cut.
+- **Pure Dart helpers** (unit-testable without Flutter): `loadInteractionSets`
+  (disk directory) / `loadInteractionSetsFromIndexJson` (index.json bytes +
+  frame-fetch callback, usable from assets/network/WASM), `tiltToPhase` /
+  `degToRad`.
+- Tests: tilt-phase mapping, frame-set loading contract (kind/axis validation,
+  frame-count consistency), widget tests (injected phase→frame mapping,
+  smooth blending, touch fallback and re-centering, empty frame-set fallback,
+  placeholder transition, reduce motion, entrance sequence, rebuild on byte
+  change).
 
-### 第五轮 W1：PageCurlView 仿真卷页翻页
+### Power-aware motion strategy
 
-- **PageCurlView**：`realtime/index.html` Canvas 参考实现的 Flutter 移植，
-  对齐鸿蒙翻页手感的五种行为——卷页曲率（纵向条带 + 圆柱投影压缩近似，
-  拖拽速度决定软硬，`curlStrips` 默认 28）、拖拽跟手（进度 = 位移/视宽）、
-  松手回弹过冲（阈值/速度双判据 + 1.045 峰值 rubber-band，未过阈值原路
-  弹回）、双层光影（条带高光/纸背透色/折轴落影/页缘阴影）、idle 呼吸
-  微动（±0.4%、6s 周期，画布变换零栅格成本）。
-- **页面内容按需截屏**（第五轮方案确认）：平时显示原生 widget；拖拽/
-  点击翻页开始的瞬间经 RepaintBoundary 抓 front/back 两页 `ui.Image`
-  （pixelRatio 钳制 [1,3]、长边 2048 封顶），截屏失败退化为瞬时切页；
-  提交翻页时目标页快照直接晋升为当前页快照（零重复截屏）。
-- **性能**：手势帧 `CustomPainter` + repaint listenable 局部重绘——零
-  widget 重建、builder 子树按页码缓存不重调；页码/内容源变更自动失效
-  重抓。
-- **钩子与回退**：`onPageTurnStart`/`onPageTurnEnd` 供 App 自接音效/触觉
-  （不引 audio/vibration 依赖）；系统「减弱动态」回退平移淡入淡出
-  （不截屏、无呼吸）；`enableTapTurn` 点击半屏翻页、页边界保护、
-  `initialPage`/`turnDuration`/`commitThreshold`/`commitVelocity` 可调。
-- 测试：点击翻页回调时序（Start 起步触发、End 补间完成 committed）、
-  页边界保护、短拖回弹（committed=false）、长拖提交、进度跟手映射
-  （`progressOf` 测试探针）、减弱动态换页、拖拽帧零 builder 重调、
-  销毁冒烟。example 新增卷页翻页演示页。
+- **Three-signal aggregation mixin `MotionPowerAware`** (new file
+  `lib/src/power_aware.dart`, reusable by custom views): lifecycle
+  (suppress when leaving `resumed`, on by default), viewport
+  (`pauseWhenNotVisible` opt-in — lazy self-check driven by scroll
+  notifications: intersect the RenderBox global rect with the window, freeze
+  when scrolled out and restore when back; scroll-based visibility only,
+  static occlusion is not detected), and an app policy hook
+  (`enableMotion: bool Function()?` — low-battery and other policies are up
+  to the app; **this package adds no battery dependency**). Aggregation
+  changes fire `onMotionSuppressed` / `onMotionRestored`.
+- **MotionGifView**: suppression terminates the frame pump loop (generation
+  invalidation, same path as `playing: false`); the bootstrap pump checks
+  the aggregated state first. Default parameters
+  (`pauseWhenNotVisible: false`, null hook) behave exactly as before.
+- **ParallaxGyroView**: suppression fully disconnects sensor/injected
+  subscriptions (zero ongoing cost) and reconnects automatically on restore;
+  subscription state is driven uniformly by `_syncInput`.
+- Tests: freeze-restore transitions across all three paths (viewport /
+  lifecycle / hook), 3 cases each (GIF asserted via multi-frame pump
+  advance, Gyro via injected phase→frame mapping).
 
-> 发布时序：本包消费 engine 的 V1/V2 API（`exportInteractionFrames` /
-> `exportEntranceFrames`），engine 需先发布包含对应 API 的版本，并把本包
-> `pubspec.yaml` 依赖下限提到该版本（见核心包 `doc/release_checklist.md`
-> 第二节）。
+### PageCurlView simulated page-curl turn
+
+- **PageCurlView**: Flutter port of the Canvas reference implementation,
+  matching five behaviors of the target page-turn feel — curl curvature
+  (vertical strips + cylindrical-projection compression approximation, drag
+  speed controls stiffness, `curlStrips` default 28), drag tracking (progress
+  = displacement / viewport width), release overshoot (threshold + velocity
+  dual criteria, 1.045 peak rubber-band, plain bounce-back below threshold),
+  dual-layer lighting (strip highlight / paper back / fold shadow / page-edge
+  shadow), and idle breathing micro-motion (±0.4%, 6s period, zero raster
+  cost via canvas transform).
+- **On-demand page snapshot** (confirmed during design): normally shows the
+  native widget; the instant a drag/tap turn starts, both front/back pages
+  are captured through a RepaintBoundary as `ui.Image` (pixelRatio clamped to
+  [1,3], long edge capped at 2048); capture failure degrades to an instant
+  page switch; committing a turn promotes the target snapshot to the current
+  page snapshot (zero duplicate capture).
+- **Performance**: gesture frames use `CustomPainter` + repaint listenable
+  partial repaints — zero widget rebuilds; builder subtrees are cached per
+  page; page-index/content-source changes invalidate and re-capture
+  automatically.
+- **Hooks and fallbacks**: `onPageTurnStart`/`onPageTurnEnd` let apps attach
+  their own sound/haptics (no audio/vibration dependencies); system
+  reduce-motion falls back to a translate+fade transition (no capture, no
+  breathing); `enableTapTurn` tap-half-screen turning, page boundary
+  protection, adjustable `initialPage`/`turnDuration`/`commitThreshold`/
+  `commitVelocity`.
+- Tests: tap-turn callback ordering (Start fired at gesture start, End after
+  the commit tween), page boundary protection, short-drag bounce
+  (committed=false), long-drag commit, progress tracking (`progressOf` test
+  probe), reduce-motion page change, zero builder rebuilds during drags,
+  dispose smoke test. The example app gained a page-curl demo page.
+
+> Release ordering: this package consumes the engine's interaction/entrance
+> APIs (`exportInteractionFrames` / `exportEntranceFrames`); the engine must
+> publish a version containing them first, and this package's
+> `pubspec.yaml` lower bound must be raised accordingly (see the core
+> package's `doc/release_checklist.md`, section 2).

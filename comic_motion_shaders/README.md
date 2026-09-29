@@ -1,108 +1,119 @@
 # comic_motion_shaders
 
-GPU 实时化伴生包（W7 MVP）：用单一 uber-shader（uniform 开关切换）实时渲染
-分层纹理动效——**parallax（分层视差）/ breathing（呼吸缩放）/ lightSweep（扫光）/
-vignette（暗角）**。输入为核心包 `comic_motion` W6 `exportLayers` 导出的
-分层纹理集（RGBA PNG，远→近序）。粒子类效果的 GPU 化为后续版本（见
-核心包 `doc/roadmap.md`）。
+GPU realtime companion package (MVP): renders layered-texture motion with a
+single uber-shader (uniform switches) — **parallax / breathing / lightSweep /
+vignette**. The input is a layered texture set (RGBA PNG, far-to-near order)
+exported by the core engine's `exportLayers` API in
+[`comic_motion`](https://pub.dev/packages/comic_motion). GPU particle effects
+are planned for a later release (see the core package's `doc/roadmap.md`).
 
-本包独立于核心包与 `comic_motion_flutter`，不进核心依赖图。
+This package is independent from the core engine and from
+`comic_motion_flutter`; it is not part of their dependency graph.
 
-## 实时 shader vs 预渲染帧集：怎么选
+## Realtime shader vs pre-rendered frame sets: how to choose
 
-| 维度 | RealtimeMotionView（本包） | MotionGifView / ParallaxGyroView（flutter 包） |
+| Aspect | RealtimeMotionView (this package) | MotionGifView / ParallaxGyroView (flutter package) |
 |---|---|---|
-| 原理 | FragmentShader 每帧实时采样分层纹理 | 预渲染 GIF 帧集 / 交互帧序列 |
-| 精度 | 无限精度（uniform 连续可变，无帧率上限） | 受预渲染 fps 与帧数约束 |
-| 功耗 | GPU 持续参与（每帧计算） | 解码后播放，GPU 占用低 |
-| 适配设备 | 高配手机 / 桌面端 / 大屏 | 低端设备 / 列表流 / 批量卡片 |
-| 一致性 | 时钟驱动，每次观感略异（相位随机起点） | 逐字节复现契约（同 seed 同 config） |
-| 交互跟手 | 视差 uniform 即时响应（触摸/陀螺仪直驱） | ParallaxGyroView 帧序列插值 |
+| Mechanism | FragmentShader samples layered textures every frame | Pre-rendered GIF frame sets / interaction frame sequences |
+| Precision | Unlimited (uniforms vary continuously, no frame cap) | Bounded by pre-rendered fps and frame count |
+| Power | GPU active every frame | Decode once, play back; low GPU load |
+| Target devices | High-end phones / desktop / large screens | Low-end devices / list flows / batch cards |
+| Determinism | Clock-driven, subtle variation per run (random phase start) | Byte-reproducible contract (same seed + config) |
+| Interaction | Parallax uniform reacts instantly (touch/gyro) | Frame-sequence interpolation |
 
-**选择指引**：详情页大图、翻页、交互密集的「主视觉」用本包；列表流缩略图、
-多卡片同屏、低端机型兜底用帧集。两者消费同一份 `exportLayers` 分层产物，
-观感可对齐。
+**Guidance**: use this package for hero images, page turns and
+interaction-heavy main visuals; use frame sets for list thumbnails, many
+cards on screen, and low-end fallback. Both consume the same `exportLayers`
+output, so the look can be aligned.
 
-## 确定性说明
+## Determinism note
 
-核心包的逐字节复现契约（同 seed + 同 config → 同输出字节）**不适用于
-本包**：实时路径由 uniform（时钟/交互）驱动，无 seed 概念，输出随时间
-连续变化。分层纹理本身仍是确定性导出。
+The core engine's byte-reproducibility contract (same seed + same config →
+same output bytes) does **not** apply here: the realtime path is driven by
+uniforms (clock/interaction), has no seed, and changes continuously over
+time. The layered textures themselves are still exported deterministically.
 
-## uniform 契约
+## Uniform contract
 
-`assets/shaders/comic_motion.frag` 声明 19 个 float uniform + 4 个 sampler；
-Dart 侧 `MotionUniforms.toFloats()` 按下表索引序列化（`kIndex*` 常量即此表）。
-改动任一侧必须同步另一侧并更新本表。
+`assets/shaders/comic_motion.frag` declares 19 float uniforms + 4 samplers;
+`MotionUniforms.toFloats()` serializes them in the index order below (the
+`kIndex*` constants mirror this table). Changing either side requires
+updating the other and this table.
 
-| 索引 | uniform | 含义 | 值域（钳制后） |
+| Index | uniform | Meaning | Range (after clamping) |
 |---|---|---|---|
-| 0 | uParallaxOn | 视差开关 | 0/1 |
-| 1 | uParallaxX | 最大 uv 偏移（画布宽分数） | [-1, 1] |
-| 2 | uParallaxY | 最大 uv 偏移（画布高分数） | [-1, 1] |
-| 3–6 | uDepth0..3 | 层深度因子（0 = 基准层不位移） | [0, 1]，定长 4 |
-| 7 | uBreathingOn | 呼吸开关 | 0/1 |
-| 8 | uZoom | 呼吸幅度 | [0, 0.5] |
-| 9 | uPhase | 呼吸相位（宿主时钟） | [0, 1] |
-| 10 | uSweepOn | 扫光开关 | 0/1 |
-| 11 | uSweepPos | 扫光中心（可滑入滑出） | [-0.5, 1.5] |
-| 12 | uSweepWidth | 扫光半带宽 | [1e-4, 0.5] |
-| 13 | uSweepIntensity | 扫光强度 | [0, 1] |
-| 14 | uVignetteOn | 暗角开关 | 0/1 |
-| 15 | uVignetteStrength | 暗角强度 | [0, 1] |
-| 16 | uVignetteSoftness | 暗角柔度 | [0, 1] |
-| 17–18 | uSize | 画布像素尺寸 | > 0 |
-| sampler 0–3 | uTex0..3 | 分层纹理（远→近，即 exportLayers 层序） | — |
+| 0 | uParallaxOn | parallax switch | 0/1 |
+| 1 | uParallaxX | max uv offset (fraction of canvas width) | [-1, 1] |
+| 2 | uParallaxY | max uv offset (fraction of canvas height) | [-1, 1] |
+| 3–6 | uDepth0..3 | per-layer depth factor (0 = base layer, no shift) | [0, 1], fixed length 4 |
+| 7 | uBreathingOn | breathing switch | 0/1 |
+| 8 | uZoom | breathing amplitude | [0, 0.5] |
+| 9 | uPhase | breathing phase (host clock) | [0, 1] |
+| 10 | uSweepOn | light sweep switch | 0/1 |
+| 11 | uSweepPos | sweep center (can slide in/out) | [-0.5, 1.5] |
+| 12 | uSweepWidth | sweep half bandwidth | [1e-4, 0.5] |
+| 13 | uSweepIntensity | sweep intensity | [0, 1] |
+| 14 | uVignetteOn | vignette switch | 0/1 |
+| 15 | uVignetteStrength | vignette strength | [0, 1] |
+| 16 | uVignetteSoftness | vignette softness | [0, 1] |
+| 17–18 | uSize | canvas pixel size | > 0 |
+| sampler 0–3 | uTex0..3 | layered textures (far-to-near, exportLayers order) | — |
 
-层纹理不足 4 张时宿主侧以 1x1 透明纹理占位空槽；层数上限 4。
-panelAware（分格感知）层 PNG 为「全画布透明 + 格内内容」，alpha 混合
-天然不串色，本 shader 不消费 clip 元数据（MVP 简化）。
+When fewer than 4 layer textures are provided, empty slots are filled with
+1x1 transparent placeholder textures; the layer cap is 4. panelAware layers
+are "full-canvas transparent + in-panel content" PNGs, so alpha blending
+never bleeds across panels; this shader does not consume clip metadata
+(MVP simplification).
 
-## 用法
+## Usage
 
 ```dart
 import 'package:comic_motion_shaders/comic_motion_shaders.dart';
 
-// 1. 拿到 W6 导出的分层 PNG 字节（exportLayers 内存结果或落盘 layer_NN.png）
-final layers = await decodeLayerTextures(layerPngBytes); // 远→近序，≤4 层
+// 1. Get layered PNG bytes from exportLayers (in-memory result or layer_NN.png files)
+final layers = await decodeLayerTextures(layerPngBytes); // far-to-near, ≤4 layers
 
-// 2. 实时渲染（视差可由触摸/陀螺仪直驱；呼吸/扫光由内部 Ticker 驱动）
+// 2. Render in real time (parallax driven by touch/gyro; breathing/sweep by internal Ticker)
 RealtimeMotionView(
   layers: layers,
-  parallaxShift: Offset(dx, dy), // 手势/传感器回调里 setState 更新
+  parallaxShift: Offset(dx, dy), // update via setState in gesture/sensor callbacks
   breathing: true,
   sweep: true,
   vignette: false,
 );
 ```
 
-`layers` 所有权归调用方，不再使用时自行 `dispose()`。
-完整演示见 `example/`（程序化占位层 + slider 实时调参）：
+You own the `layers` list; dispose it when done. A full demo (procedural
+placeholder layers + live sliders) lives in `example/`:
 
 ```bash
 cd example && flutter run
 ```
 
-## 平台支持矩阵
+## Platform support matrix
 
-FragmentShader（`FragmentProgram.fromAsset`）要求 Flutter 3.7+ 与
-Impeller/Skia 的 SPIR-V 支持。以下矩阵由实测回填（当前未在真机验证，
-以 Flutter 官方支持矩阵为准）：
+`FragmentProgram.fromAsset` requires Flutter 3.7+ and SPIR-V support from
+Impeller/Skia. The matrix below reflects desktop analysis only (not yet
+verified on physical devices; defer to the official Flutter support matrix):
 
-| 平台 | 后端 | 状态 |
+| Platform | Backend | Status |
 |---|---|---|
-| Android | Impeller | 预期可用，待真机回填 |
-| Android | Skia（旧机型） | 预期可用，待真机回填 |
-| iOS | Impeller | 预期可用，待真机回填 |
-| Windows / macOS / Linux | Skia | 预期可用，待真机回填 |
-| Web | CanvasKit / SKSL | FragmentShader 路径受限，待验证 |
+| Android | Impeller | Expected to work, pending device verification |
+| Android | Skia (older devices) | Expected to work, pending device verification |
+| iOS | Impeller | Expected to work, pending device verification |
+| Windows / macOS / Linux | Skia | Expected to work, pending device verification |
+| Web | CanvasKit / SKSL | FragmentShader path limited, pending verification |
 
-若目标 Flutter 版本在特定平台禁用 fragment shader，本包视图会因
-`FragmentProgram.fromAsset` 失败而保持 `SizedBox.shrink()`（安全降级，
-不崩溃）。
+If a Flutter build disables fragment shaders on a given platform, the view
+degrades safely to `SizedBox.shrink()` when `FragmentProgram.fromAsset`
+fails — no crash.
 
-## 测试
+## Testing
 
 ```bash
-flutter test # uniform 映射逻辑单测（布局契约/钳制/时钟映射）
+flutter test # uniform mapping unit tests (layout contract / clamping / clock mapping)
 ```
+
+## Documentation
+
+Chinese documentation: [README_zh-CN.md](README_zh-CN.md).
