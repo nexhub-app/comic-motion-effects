@@ -1,8 +1,8 @@
 name: comic_motion
 description: >-
-  Pure-Dart engine: splits a static comic page into depth layers and renders
-  32 layered effects (parallax, breathing, weather, light, manga) as
-  deterministic, byte-reproducible GIF/PNG output.
+  Pure-Dart engine that splits a static comic page into depth layers and
+  renders 32 layered comic effects as deterministic, byte-reproducible
+  GIF/APNG output.
 version: 1.3.1
 repository: https://github.com/nexhub-app/comic-motion-effects
 topics:
