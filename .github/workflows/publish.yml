@@ -2,9 +2,11 @@
 # 无需任何 secrets）。三个 job 按 tag 名分发，各自跑测试 + dry-run 后发布。
 #
 # 前置（一次性，在 pub.dev 各包 Admin → Automated publishing 配置）：
-#   comic_motion          repository: nexhub-app/comic-motion-effects, tag pattern: v*
-#   comic_motion_flutter  同仓库, tag pattern: comic_motion_flutter-v*
-#   comic_motion_shaders  同仓库, tag pattern: comic_motion_shaders-v*
+#   comic_motion          repository: nexhub-app/comic-motion-effects, tag pattern: v{{version}}
+#   comic_motion_flutter  同仓库, tag pattern: comic_motion_flutter-v{{version}}
+#   comic_motion_shaders  同仓库, tag pattern: comic_motion_shaders-v{{version}}
+# 注意：pub.dev 的 tag pattern 用 {{version}} 占位符（不支持 * 通配）；
+# 首次 Actions 发布需在该页完成 admin 验证。
 #
 # 发版流程：更新版本号 + CHANGELOG → commit → 打对应 tag → push tag，其余全自动。
 
@@ -23,7 +25,7 @@ permissions:
 
 jobs:
   core:
-    name: publish comic_motion (tag v*)
+    name: publish comic_motion (tag v{{version}})
     if: startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
     defaults:
