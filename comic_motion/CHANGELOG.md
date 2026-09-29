@@ -7,6 +7,19 @@ and `dart run bin/comic_motion.dart --version` share one version constant.
 > The full changelog in Chinese — including all historical entries — lives in
 > [doc/CHANGELOG_zh-CN.md](doc/CHANGELOG_zh-CN.md).
 
+## 1.3.2 (2026-09-29)
+
+Publishing and documentation polish; no behavior changes. The
+byte-reproducibility contract is untouched (253 core + 6 server tests green).
+
+- **Runnable example** (`example/example.dart`): renders a short
+  layered-effect sequence end to end (`MotionPipeline` with `onProgress` +
+  `processFile`), so the package now ships a standard `example/` entry point.
+- **Docs**: package description shortened; CHANGELOG fully in English (the
+  historical Chinese changelog moved to `doc/CHANGELOG_zh-CN.md`).
+- **Lint**: snake_case local names in `src/render/resampler.dart` renamed to
+  lowerCamelCase; stale dartdoc references cleaned up.
+
 ## 1.3.1 (2026-09-28)
 
 Release-oriented rework + runtime lifecycle + correctness protection +

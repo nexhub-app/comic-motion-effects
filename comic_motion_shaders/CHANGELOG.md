@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 (2026-09-29)
+
+- **Docs**: added an English README (the Chinese version now lives at
+  `README_zh-CN.md`); package description shortened.
+
 ## 0.1.0
 
 Initial release.

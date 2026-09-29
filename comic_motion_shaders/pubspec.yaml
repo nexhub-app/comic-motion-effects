@@ -2,7 +2,7 @@ name: comic_motion_shaders
 description: >-
   GPU companion for comic_motion: FragmentShader real-time parallax,
   breathing, light sweep and vignette over exportLayers texture sets.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/nexhub-app/comic-motion-effects
 topics:
   - flutter

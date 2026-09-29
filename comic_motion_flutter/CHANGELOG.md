@@ -3,12 +3,13 @@
 All notable changes to this project are documented in this file. Versioning
 follows [SemVer](https://semver.org/).
 
-## Unreleased
+## 0.1.1 (2026-09-29)
 
 - **Dependencies**: `sensors_plus` `^6.1.1` → `^7.0.0`. The 7.0.0 breaking
   changes are Android build-side only (AGP ≥8.12.1, Gradle wrapper ≥8.13,
   Kotlin 2.2.0); the Dart event API is unchanged. Apps building for Android
   must meet the new toolchain requirements; iOS/desktop/Web are unaffected.
+- **Metadata**: package description shortened; changelog fully in English.
 
 ## 0.1.0
 

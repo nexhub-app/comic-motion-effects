@@ -3,7 +3,7 @@ description: >-
   Pure-Dart engine that splits a static comic page into depth layers and
   renders 32 layered comic effects as deterministic, byte-reproducible
   GIF/APNG output.
-version: 1.3.1
+version: 1.3.2
 repository: https://github.com/nexhub-app/comic-motion-effects
 topics:
   - dart

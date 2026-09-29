@@ -3,7 +3,7 @@ description: >-
   Ready-to-use Flutter widgets for comic_motion output: MotionGifView
   playback with placeholder crossfade and ParallaxGyroView gyro/touch
   parallax.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/nexhub-app/comic-motion-effects
 topics:
   - flutter
