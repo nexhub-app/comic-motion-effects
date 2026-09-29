@@ -1,0 +1,101 @@
+# 打 tag 自动发布对应包到 pub.dev（pub.dev Automated publishing / GitHub OIDC，
+# 无需任何 secrets）。三个 job 按 tag 名分发，各自跑测试 + dry-run 后发布。
+#
+# 前置（一次性，在 pub.dev 各包 Admin → Automated publishing 配置）：
+#   comic_motion          repository: nexhub-app/comic-motion-effects, tag pattern: v*
+#   comic_motion_flutter  同仓库, tag pattern: comic_motion_flutter-v*
+#   comic_motion_shaders  同仓库, tag pattern: comic_motion_shaders-v*
+#
+# 发版流程：更新版本号 + CHANGELOG → commit → 打对应 tag → push tag，其余全自动。
+
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - 'comic_motion_flutter-v*'
+      - 'comic_motion_shaders-v*'
+
+permissions:
+  id-token: write # GitHub OIDC → pub.dev automated publishing
+  contents: read
+
+jobs:
+  core:
+    name: publish comic_motion (tag v*)
+    if: startsWith(github.ref_name, 'v')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: comic_motion
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.13.0
+
+      - name: Install dependencies
+        run: dart pub get
+
+      - name: Run tests
+        run: dart test
+
+      - name: Dry-run
+        run: dart pub publish --dry-run
+
+      - name: Publish
+        run: dart pub publish --force
+
+  flutter-package:
+    name: publish comic_motion_flutter
+    if: startsWith(github.ref_name, 'comic_motion_flutter-v')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: comic_motion_flutter
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Dry-run
+        run: dart pub publish --dry-run
+
+      - name: Publish
+        run: dart pub publish --force
+
+  shader-package:
+    name: publish comic_motion_shaders
+    if: startsWith(github.ref_name, 'comic_motion_shaders-v')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: comic_motion_shaders
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Dry-run
+        run: dart pub publish --dry-run
+
+      - name: Publish
+        run: dart pub publish --force
