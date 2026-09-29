@@ -97,7 +97,7 @@ void _spanSums(Uint8List src, int base, int i0, int i1, double a, double b,
 /// 把 [srcData]（sw×sh 的 RGBA 栅格）按 [scale] 与位移 (dx,dy) 逆映射贴进 [dst]。
 ///
 /// [tier] 为 legacy 时逐字节复现 v1.2；standard+ 走 Catmull-Rom。
-/// [clip]（W5，画布坐标）：目标像素钳制矩形——只有矩形内的画布像素会被
+/// [clip]（画布坐标）：目标像素钳制矩形——只有矩形内的画布像素会被
 /// 写入（分格感知层的格边界裁剪）；null = 全画布，循环范围与旧实现相同
 /// （既有路径逐字节零变化）。
 /// 注意：scale 远小于 0.5 时 Catmull-Rom 会欠采样——本引擎的 scale 恒在
@@ -122,7 +122,7 @@ void _drawBilinear(RgbaImage dst, Uint8List srcData, int sw, int sh, double dx,
   final inv = 1.0 / scale;
   final dstData = dst.data;
   final sxStep = inv;
-  // W5 画布坐标钳制：clip 非空时只遍历矩形内的目标像素。
+  // 画布坐标钳制：clip 非空时只遍历矩形内的目标像素。
   final yStart = clip?.y ?? 0;
   final yEnd = clip == null ? h : math.min(h, clip.y + clip.height);
   final xStart = clip?.x ?? 0;
@@ -131,22 +131,22 @@ void _drawBilinear(RgbaImage dst, Uint8List srcData, int sw, int sh, double dx,
     final sy = (y + 0.5 - (h * anchorY)) * inv + cy + dy - 0.5;
     final sy0 = sy.floor();
     final ty = sy - sy0;
-    final y0_ok = sy0 >= 0 && sy0 < sh;
+    final y0Ok = sy0 >= 0 && sy0 < sh;
     final y1 = sy0 + 1;
-    final y1_ok = y1 >= 0 && y1 < sh;
-    if (!y0_ok && !y1_ok) continue;
+    final y1Ok = y1 >= 0 && y1 < sh;
+    if (!y0Ok && !y1Ok) continue;
     var sx = (xStart + 0.5 - (w * 0.5)) * inv + cx + dx - 0.5;
     for (var x = xStart; x < xEnd; x++, sx += sxStep) {
       final sx0 = sx.floor();
       final tx = sx - sx0;
       final x1 = sx0 + 1;
-      final x0_ok = sx0 >= 0 && sx0 < sw;
-      final x1_ok = x1 >= 0 && x1 < sw;
-      if (!x0_ok && !x1_ok) continue;
+      final x0Ok = sx0 >= 0 && sx0 < sw;
+      final x1Ok = x1 >= 0 && x1 < sw;
+      if (!x0Ok && !x1Ok) continue;
       final dOff = (y * w + x) * 4;
       // Gather 4 taps (out-of-range taps are skipped via weight 0).
       var r = 0.0, g = 0.0, b = 0.0, a = 0.0;
-      if (x0_ok && y0_ok) {
+      if (x0Ok && y0Ok) {
         final o = (sy0 * sw + sx0) * 4;
         final wgt = (1 - tx) * (1 - ty);
         r += srcData[o] * wgt;
@@ -154,7 +154,7 @@ void _drawBilinear(RgbaImage dst, Uint8List srcData, int sw, int sh, double dx,
         b += srcData[o + 2] * wgt;
         a += srcData[o + 3] * wgt;
       }
-      if (x1_ok && y0_ok) {
+      if (x1Ok && y0Ok) {
         final o = (sy0 * sw + x1) * 4;
         final wgt = tx * (1 - ty);
         r += srcData[o] * wgt;
@@ -162,7 +162,7 @@ void _drawBilinear(RgbaImage dst, Uint8List srcData, int sw, int sh, double dx,
         b += srcData[o + 2] * wgt;
         a += srcData[o + 3] * wgt;
       }
-      if (x0_ok && y1_ok) {
+      if (x0Ok && y1Ok) {
         final o = (y1 * sw + sx0) * 4;
         final wgt = (1 - tx) * ty;
         r += srcData[o] * wgt;
@@ -170,7 +170,7 @@ void _drawBilinear(RgbaImage dst, Uint8List srcData, int sw, int sh, double dx,
         b += srcData[o + 2] * wgt;
         a += srcData[o + 3] * wgt;
       }
-      if (x1_ok && y1_ok) {
+      if (x1Ok && y1Ok) {
         final o = (y1 * sw + x1) * 4;
         final wgt = tx * ty;
         r += srcData[o] * wgt;
@@ -196,7 +196,7 @@ void _drawCatmullRom(RgbaImage dst, Uint8List srcData, int sw, int sh,
   final inv = 1.0 / scale;
   final dstData = dst.data;
   final rowBytes = sw * 4;
-  // W5 画布坐标钳制。
+  // 画布坐标钳制。
   final yStart = clip?.y ?? 0;
   final yEnd = clip == null ? h : math.min(h, clip.y + clip.height);
   final xStart = clip?.x ?? 0;
