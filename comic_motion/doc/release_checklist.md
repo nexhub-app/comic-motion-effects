@@ -42,8 +42,7 @@
 
 ## 三、path override ↔ 版本依赖的切换时机
 
-现状：server 经 `pubspec_overrides.yaml` 以 path 引用本地 engine（monorepo
-开发模式）。切换规则：
+切换规则：
 
 | 阶段 | server 的依赖形态 |
 |---|---|
@@ -55,6 +54,11 @@
 > 关键时机原则：**override 只在「本地改动尚未发布」时存在**。engine 的
 > 每个已发布版本之后，server 都应尽快切回版本依赖，保证 CI 测的是
 > pub.dev 用户真实拿到的产物。
+
+**执行记录（2026-09-28）**：engine 1.3.1 已发布 pub.dev，server 已删除
+`pubspec_overrides.yaml` 并切至 `comic_motion: ^1.3.1`（`dart pub get` 验证
+hosted 解析、6 例契约测试全绿）；两个伴生包与两个 example 同步删除
+override，统一走版本依赖。
 
 ## 四、pub.dev score 优化清单
 

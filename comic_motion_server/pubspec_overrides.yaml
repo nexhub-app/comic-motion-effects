@@ -1,7 +1,0 @@
-# Local development only: point the hosted comic_motion dependency at the
-# sibling checkout in this repository. pubspec_overrides.yaml is only read
-# when this package is the resolution root, so consumers depending on the
-# published/git comic_motion_server are unaffected.
-dependency_overrides:
-  comic_motion:
-    path: ../comic_motion
