@@ -175,4 +175,162 @@ void main() {
       }
     });
   });
+
+  // ---- Task 2.3：分格叠加裁剪 + 逐格播种（panelAware）----
+  //
+  // 规格 §5 line 75：「所有叠加 pass ... panelAware 下：逐格播种 + 用本格 clip
+  // 裁剪 ... 非 panelAware 路径逐字节不变」。裁决 R7：clip 是**新增**的原语可选
+  // 参数（非 _layerClips 复用）；R8：门控 = panelAware（不看 contentAware）；
+  // R9：≤1 格 → 播种/绘制走**原逐字节路径**，故 panelAware on ≡ off。
+  group('分格叠加裁剪 + 逐格播种（Task 2.3）', () {
+    // 逐格可见性探针：用饱和红色雨丝，白底白带若被渗漏则 G/B 通道跌破 240。
+    Map<String, dynamic> rainCfg({bool panel = true, String? tier}) =>
+        <String, dynamic>{
+          'effects': ['parallax', 'rain'],
+          'fps': 24,
+          'durationSec': 2.0,
+          'maxDimension': 200,
+          'outputFormat': 'gif',
+          'seed': 11,
+          if (panel) 'panelAware': true,
+          if (tier != null) 'quality': {'tier': tier},
+          'rain': {'count': 400, 'opacity': 1.0, 'color': 'ff0000', 'lengthPx': 48.0},
+        };
+
+    Map<String, dynamic> snowCfg({bool panel = true}) => <String, dynamic>{
+          'effects': ['parallax', 'snow'],
+          'fps': 24,
+          'durationSec': 2.0,
+          'maxDimension': 200,
+          'outputFormat': 'gif',
+          'seed': 11,
+          if (panel) 'panelAware': true,
+          'snow': {'count': 80},
+        };
+
+    // 未被任何本格覆盖的工作行 = 白带/格间缝隙。
+    Set<int> uncoveredRows(List<PixelRect> panels, int workingH) {
+      final covered = <int>{};
+      for (final p in panels) {
+        for (var y = p.y; y < p.y + p.height; y++) {
+          covered.add(y);
+        }
+      }
+      return {for (var y = 0; y < workingH; y++) if (!covered.contains(y)) y};
+    }
+
+    // 手动搭一个「两格白底 + 红雨」场景：底与两层均纯白不透明、各自 clip 到
+    // 本格（上格 y∈[0,140)、下格 y∈[160,300)），白带 y∈[140,160) 不被任何格覆盖。
+    // 直接构造 FrameCompositor 而非过管线，以解耦「降采样算法随档位不同而检测
+    // 到的格数不同」这一无关变量，稳定地分别验证 legacy 段路径与 AA 段路径。
+    FrameCompositor rainCompositor(String? tier) {
+      final cfg = EffectConfig.fromJson(rainCfg(tier: tier));
+      final working = RgbaImage(width: 200, height: 300);
+      working.data.fillRange(0, working.data.length, 255);
+      final l0 = RgbaImage(width: 200, height: 300);
+      l0.data.fillRange(0, l0.data.length, 255);
+      final l1 = RgbaImage(width: 200, height: 300);
+      l1.data.fillRange(0, l1.data.length, 255);
+      final layers = [
+        LayerImage(l0, 0, clip: PixelRect(0, 0, 200, 140)),
+        LayerImage(l1, 1, clip: PixelRect(0, 160, 200, 140)),
+      ];
+      return FrameCompositor(layers, working, cfg);
+    }
+
+    void expectNoRainInGutter(FrameCompositor comp, String label) {
+      final panels = comp.debugPanelRects();
+      expect(panels.length, 2, reason: '$label：应派生 2 格');
+      final rows = uncoveredRows(panels, 300);
+      expect(rows, isNotEmpty, reason: '$label：格间应有未覆盖白带行');
+      final frame = comp.renderFrame(0.35);
+      var redAnywhere = 0;
+      for (var y = 0; y < 300; y++) {
+        for (var x = 0; x < 200; x++) {
+          final o = (y * 200 + x) * 4;
+          final r = frame.data[o], g = frame.data[o + 1], b = frame.data[o + 2];
+          if (r > 150 && g < 120 && b < 120) redAnywhere++;
+          if (rows.contains(y)) {
+            expect(g, greaterThanOrEqualTo(240),
+                reason: '$label：白带行 y=$y x=$x 绿通道应保持白（红雨不得跨格）');
+            expect(b, greaterThanOrEqualTo(240),
+                reason: '$label：白带行 y=$y x=$x 蓝通道应保持白');
+          }
+        }
+      }
+      expect(redAnywhere, greaterThan(50), reason: '$label：本格内应绘出红雨丝');
+    }
+
+    test('红雨 panelAware:true → 白带行零渗漏（legacy 段路径 _blendPx 加 clip）', () {
+      expectNoRainInGutter(rainCompositor(null), 'legacy');
+    });
+
+    test('红雨 standard 档 → AA 段路径同样不跨白带（R7 drawSegmentAA 加 clip）', () {
+      expectNoRainInGutter(rainCompositor('standard'), 'standard');
+    });
+
+    test('count∝area：较大格播种 ≥ 较小格，且每个粒子落在某格内', () {
+      final cfg = EffectConfig.fromJson(snowCfg());
+      final (working, layers) =
+          MotionPipeline(cfg).downscaleAndSplitForExport(twoPanelRaster());
+      final comp = FrameCompositor(layers, working, cfg);
+      final panels = comp.debugPanelRects();
+      expect(panels, hasLength(2), reason: '两格页应派生 2 个 panel 矩形');
+      final seeds = comp.debugParticleSeeds(EffectKind.snow);
+      final w = working.width, h = working.height;
+      final bucket = List<int>.filled(panels.length, 0);
+      var outside = 0;
+      for (final (x0, y0) in seeds) {
+        final cx = x0 * w, cy = y0 * h;
+        var hit = -1;
+        for (var i = 0; i < panels.length; i++) {
+          final p = panels[i];
+          if (cx >= p.x && cx < p.x + p.width && cy >= p.y && cy < p.y + p.height) {
+            hit = i;
+            break;
+          }
+        }
+        if (hit < 0) {
+          outside++;
+        } else {
+          bucket[hit]++;
+        }
+      }
+      expect(outside, 0, reason: '逐格播种后不应有粒子落在格间白带/格内空白之外');
+      expect(bucket.fold<int>(0, (a, b) => a + b), seeds.length);
+      final maxB = bucket.reduce((a, b) => a > b ? a : b);
+      final minB = bucket.reduce((a, b) => a < b ? a : b);
+      expect(maxB, greaterThanOrEqualTo(minB));
+      // 面积∝数量：较大 panel（面积大者）计数不少于较小者。
+      final areaDesc = [...panels]
+        ..sort((a, b) => (b.width * b.height).compareTo(a.width * a.height));
+      final bigIdx = panels.indexOf(areaDesc.first);
+      expect(bucket[bigIdx], greaterThanOrEqualTo(
+          bucket[panels.indexOf(areaDesc.last)]));
+    });
+
+    test('单格/无白带图 panelAware on/off 帧逐字节等价（R9 自动回退）', () {
+      final src = noGutterRaster();
+      final on = EffectConfig.fromJson(snowCfg(panel: true));
+      final off = EffectConfig.fromJson(snowCfg(panel: false));
+      final (wo, lo) = MotionPipeline(on).downscaleAndSplitForExport(src);
+      final (wf, lf) = MotionPipeline(off).downscaleAndSplitForExport(src);
+      final fo = FrameCompositor(lo, wo, on).renderFrame(0.25);
+      final ff = FrameCompositor(lf, wf, off).renderFrame(0.25);
+      expect(wo.width, wf.width);
+      expect(wo.height, wf.height);
+      expect(fo.data, ff.data, reason: '无白带图回退整页，on≡off 逐字节一致');
+      // 派生面板 ≤1 → 逐格路径未启用。
+      expect(FrameCompositor(lo, wo, on).debugPanelRects().length, lessThanOrEqualTo(1));
+    });
+
+    test('确定性：同 panelAware:true config 两跑逐字节一致', () {
+      final cfg = EffectConfig.fromJson(rainCfg());
+      final (working, layers) =
+          MotionPipeline(cfg).downscaleAndSplitForExport(twoPanelRaster());
+      final a = FrameCompositor(layers, working, cfg).renderFrame(0.5);
+      final b = FrameCompositor(layers, working, cfg).renderFrame(0.5);
+      expect(a.data, b.data);
+    });
+  });
 }

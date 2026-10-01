@@ -155,19 +155,21 @@ void _renderBubbles(FrameCompositor c, RgbaImage frame, double tSec) {
     final y = c.h * (1.05 - 1.1 * k);
     final a = (opacity * env * 255).round();
     if (a <= 0) continue;
-    drawRingAA(frame, x, y, rad, 1.6, r0, g0, b0, a, op: bright, aa: aa);
+    drawRingAA(frame, x, y, rad, 1.6, r0, g0, b0, a, op: bright, aa: aa,
+        clip: b.clip);
     if (aa) {
       drawDiscAA(frame, x, y, rad - 0.8, r0, g0, b0, (a * 0.12).round(),
-          op: bright);
+          op: bright, clip: b.clip);
     }
     // 左上高光：1/3 半径处一枚小亮盘
     final hx = x - rad * 0.34, hy = y - rad * 0.34;
     if (aa) {
       drawDiscAA(frame, hx, hy, rad * 0.26, 255, 255, 255, (a * 0.8).round(),
-          op: bright, exponent: 1.6);
+          op: bright, exponent: 1.6, clip: b.clip);
     } else {
       c._drawSoftDisc(
-          frame, hx, hy, rad * 0.26, 255, 255, 255, (a * 0.8).round());
+          frame, hx, hy, rad * 0.26, 255, 255, 255, (a * 0.8).round(),
+          clip: b.clip);
     }
   }
 }
@@ -176,6 +178,7 @@ class _Bubble {
   const _Bubble({
     required this.x0,
     required this.y0,
+    this.clip,
     required this.sizeJit,
     required this.alphaJit,
     required this.wobPhase,
@@ -183,6 +186,7 @@ class _Bubble {
   });
 
   final double x0, y0;
+  final PixelRect? clip;
   final double sizeJit, alphaJit;
   final double wobPhase;
   final int wobFreq; // 摆动频率（u 的整倍数 → 无缝）
@@ -224,7 +228,7 @@ void _renderLeaves(FrameCompositor c, RgbaImage frame, double tSec) {
     if (a <= 0) continue;
     drawSegmentAA(frame, px - ca * hl, py - sa * hl, px + ca * hl, py + sa * hl,
         r0, g0, b0, a, thick,
-        aa: aa);
+        aa: aa, clip: L.clip);
   }
 }
 
@@ -232,6 +236,7 @@ class _Leaf {
   const _Leaf({
     required this.x0,
     required this.y0,
+    this.clip,
     required this.sizeJit,
     required this.rot0,
     required this.flipPhase,
@@ -241,6 +246,7 @@ class _Leaf {
   });
 
   final double x0, y0;
+  final PixelRect? clip;
   final double sizeJit, rot0, flipPhase, swayPhase;
   final int swayFreq, toneIdx;
 }
@@ -277,12 +283,13 @@ void _renderMeteors(FrameCompositor c, RgbaImage frame, double tSec) {
     final len = len0 * m.lenJit;
     drawSegmentAA(frame, hx, hy, hx - dirX * len, hy - dirY * len, 255, 255,
         255, a, m.thick,
-        op: bright, tailFade: 1.0, tailPow: 1.0, aa: aa);
+        op: bright, tailFade: 1.0, tailPow: 1.0, aa: aa, clip: m.clip);
     if (aa) {
       drawDiscAA(frame, hx, hy, m.thick * 1.5, 255, 255, 255, a,
-          op: bright, exponent: 2.0);
+          op: bright, exponent: 2.0, clip: m.clip);
     } else {
-      c._drawSoftDisc(frame, hx, hy, m.thick * 1.5, 255, 255, 255, a);
+      c._drawSoftDisc(frame, hx, hy, m.thick * 1.5, 255, 255, 255, a,
+          clip: m.clip);
     }
   }
 }
@@ -291,12 +298,14 @@ class _Meteor {
   const _Meteor({
     required this.x0,
     required this.y0,
+    this.clip,
     required this.lenJit,
     required this.alphaJit,
     required this.thick,
   });
 
   final double x0, y0; // 窗口中点经过的位置（归一化）
+  final PixelRect? clip;
   final double lenJit, alphaJit;
   final double thick; // 尾迹粗细
 }

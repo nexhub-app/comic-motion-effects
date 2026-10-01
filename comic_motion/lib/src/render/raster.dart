@@ -8,6 +8,7 @@ library;
 
 import 'dart:math' as math;
 
+import '../apng_writer.dart' show PixelRect;
 import '../image_model.dart';
 
 /// 光照叠加方式。
@@ -26,13 +27,24 @@ int coverage(double distToEdge, {double band = 1.0}) {
   return (distToEdge * 255 / band).round().clamp(0, 255);
 }
 
+/// Task 2.3（R7）：分格裁剪矩形命中判定。null = 不裁剪（现有全画布行为逐字节不变）；
+/// 非 null 时落在 `[clip.x, clip.x+clip.width) × [clip.y, clip.y+clip.height)` 之外
+/// 的像素一律拒绝，用于把叠加粒子约束在其所属本格内、不跨白带串味。
+bool _outsideClip(PixelRect? clip, int x, int y) =>
+    clip != null &&
+    (x < clip.x ||
+        x >= clip.x + clip.width ||
+        y < clip.y ||
+        y >= clip.y + clip.height);
+
 /// 覆盖度合成。[cov] 已把「形状覆盖度 × 元不透明度」合成一维。
 ///
 /// source-over 用精确的 `~/255`（不用 `>>8`，后者有 1/256 系统偏亮）；
 /// [BlendOp.additive]/[BlendOp.screen] 走提亮，供光效类元（星光、火光、扫光）使用。
 void blendPixel(RgbaImage f, int x, int y, int r, int g, int b, int cov,
-    {BlendOp op = BlendOp.over}) {
+    {BlendOp op = BlendOp.over, PixelRect? clip}) {
   if (cov <= 0 || x < 0 || y < 0 || x >= f.width || y >= f.height) return;
+  if (_outsideClip(clip, x, y)) return;
   if (cov > 255) cov = 255;
   final o = (y * f.width + x) * 4;
   final d = f.data;
@@ -65,14 +77,15 @@ void drawSegmentAA(RgbaImage f, double x0, double y0, double x1, double y1,
     {BlendOp op = BlendOp.over,
     double tailFade = 0,
     double tailPow = 1,
-    bool aa = true}) {
+    bool aa = true,
+    PixelRect? clip}) {
   if (alpha <= 0) return;
   final half = (thickness < 1 ? 1.0 : thickness) / 2.0;
   final band = half + 0.5;
   final vx = x1 - x0, vy = y1 - y0;
   final l2 = vx * vx + vy * vy;
   if (l2 < 1e-9) {
-    drawDiscAA(f, x0, y0, half, r, g, b, alpha, op: op, exponent: 1.0);
+    drawDiscAA(f, x0, y0, half, r, g, b, alpha, op: op, exponent: 1.0, clip: clip);
     return;
   }
   // 主轴 = 跨度大的那一侧：斜率 ≤ 1，副轴只需扫过 [xc-band', xc+band']。
@@ -101,7 +114,8 @@ void drawSegmentAA(RgbaImage f, double x0, double y0, double x1, double y1,
       if (tailFade > 0) {
         a *= math.pow(1.0 - tailFade * at, tailPow);
       }
-      blendPixel(f, yMajor ? k : m, yMajor ? m : k, r, g, b, a.round(), op: op);
+      blendPixel(f, yMajor ? k : m, yMajor ? m : k, r, g, b, a.round(),
+          op: op, clip: clip);
     }
   }
 }
@@ -110,7 +124,7 @@ void drawSegmentAA(RgbaImage f, double x0, double y0, double x1, double y1,
 /// [exponent] > 1 让中心更实、外圈收得更快（火苗、光点核心）。
 void drawDiscAA(RgbaImage f, double cx, double cy, double rad, int r, int g,
     int b, int alpha,
-    {BlendOp op = BlendOp.over, double exponent = 1.0}) {
+    {BlendOp op = BlendOp.over, double exponent = 1.0, PixelRect? clip}) {
   if (alpha <= 0 || rad <= 0) return;
   final y0 = (cy - rad - 1).floor(), y1 = (cy + rad + 1).ceil();
   final x0 = (cx - rad - 1).floor(), x1 = (cx + rad + 1).ceil();
@@ -125,7 +139,7 @@ void drawDiscAA(RgbaImage f, double cx, double cy, double rad, int r, int g,
       final soft =
           0.35 + 0.65 * (exponent == 1.0 ? fall : math.pow(fall, exponent));
       blendPixel(f, x, y, r, g, b, (alpha * soft * (cov / 255.0)).round(),
-          op: op);
+          op: op, clip: clip);
     }
   }
 }
@@ -137,7 +151,7 @@ void drawDiscAA(RgbaImage f, double cx, double cy, double rad, int r, int g,
 /// [aa] 为 false 时边缘取硬阈值（legacy 档），过渡带消失、笔画收窄到 `half`。
 void drawRingAA(RgbaImage f, double cx, double cy, double rad, double thickness,
     int r, int g, int b, int alpha,
-    {BlendOp op = BlendOp.over, bool aa = true}) {
+    {BlendOp op = BlendOp.over, bool aa = true, PixelRect? clip}) {
   if (alpha <= 0 || rad <= 0) return;
   final half = (thickness < 1 ? 1.0 : thickness) / 2.0;
   final band = half + 0.5;
@@ -146,6 +160,7 @@ void drawRingAA(RgbaImage f, double cx, double cy, double rad, double thickness,
   final y0 = (cy - reach).floor(), y1 = (cy + reach).ceil();
   for (var y = y0; y <= y1; y++) {
     if (y < 0 || y >= f.height) continue;
+    if (clip != null && (y < clip.y || y >= clip.y + clip.height)) continue;
     final dy = y + 0.5 - cy;
     final ady = dy.abs();
     if (ady > reach) continue;
@@ -154,11 +169,13 @@ void drawRingAA(RgbaImage f, double cx, double cy, double rad, double thickness,
     // 左右两段带；xi=0 时左段上界取 ceil-1，保证中轴列只写一次。
     final rLo = (cx + xi).ceil(), rHi = (cx + xo).floor();
     for (var k = rLo; k <= rHi; k++) {
-      _ringPixel(f, k, y, cx, dy, rad, band, half, r, g, b, alpha, op, aa);
+      _ringPixel(f, k, y, cx, dy, rad, band, half, r, g, b, alpha, op, aa,
+          clip: clip);
     }
     final lLo = (cx - xo).floor(), lHi = (cx - xi).ceil() - 1;
     for (var k = lLo; k <= lHi; k++) {
-      _ringPixel(f, k, y, cx, dy, rad, band, half, r, g, b, alpha, op, aa);
+      _ringPixel(f, k, y, cx, dy, rad, band, half, r, g, b, alpha, op, aa,
+          clip: clip);
     }
   }
 }
@@ -177,12 +194,14 @@ void _ringPixel(
     int b,
     int alpha,
     BlendOp op,
-    bool aa) {
+    bool aa,
+    {PixelRect? clip}) {
   if (x < 0 || x >= f.width) return;
   final dx = x + 0.5 - cx;
   final dist = math.sqrt(dx * dx + dy * dy);
   final off = (dist - rad).abs();
   final cov = aa ? coverage(band - off) : (off <= half ? 255 : 0);
   if (cov == 0) return;
-  blendPixel(f, x, y, r, g, b, (alpha * (cov / 255.0)).round(), op: op);
+  blendPixel(f, x, y, r, g, b, (alpha * (cov / 255.0)).round(),
+      op: op, clip: clip);
 }

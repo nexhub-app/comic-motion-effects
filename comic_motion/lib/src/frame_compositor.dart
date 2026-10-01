@@ -53,6 +53,11 @@ class FrameCompositor {
     _basePixels = base.data;
     _layerPixels = layers.map((l) => l.image.data).toList();
     _layerClips = layers.map((l) => l.clip).toList();
+    // Task 2.3：从各层 clip 的**去重非空值**派生本格矩形集（§5 line 75 权威），
+    // ≤1 格（单格/无白带/非 panelAware）时逐格路径不启用 → 播种与绘制走原逐字
+    // 节路径（R9：panelAware on ≡ off）。构造期一次性静态空间数据，无时钟、
+    // 不参与每帧循环，无缝/确定性不受影响。
+    _computePanels();
     // Task 2.2：构造期对 activity 网格做一次 max 扫描（单个 double，无数组分配，
     // R5）。门控关时 [config.contentAware]==false → 直接返回 0，零成本、不扫描。
     _activityMax = _computeMaxActivity();
@@ -115,13 +120,17 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x51A1);
       final pos = DeterministicRandom(config.seed ^ 0x5601);
       final p = config.rain;
-      _rain = List.generate(p.count.clamp(0, 400), (_) {
+      final rn = p.count.clamp(0, 400);
+      _rain = List.generate(rn, (i) {
         // 先按旧路径消费属性流两个 draw（游标与逐字节基线一致），再在内容感知
-        // 开启时用位置专用流 [pos] 的拒绝采样覆盖坐标。
-        final (x0, y0) = _seedPosition(pos, r.nextDouble(), r.nextDouble());
+        // 开启时用位置专用流 [pos] 的拒绝采样覆盖坐标。Task 2.3：逐格路径启用时
+        // 把位置约束到本格并携带 clip。
+        final (x0, y0, clip) =
+            _seedPlacement(i, rn, pos, r.nextDouble(), r.nextDouble());
         return _Drop(
           x0: x0,
           y0: y0,
+          clip: clip,
           lenJit: 0.7 + r.nextDouble() * 0.6,
           alphaJit: 0.6 + r.nextDouble() * 0.4,
         );
@@ -133,11 +142,14 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x51A2);
       final pos = DeterministicRandom(config.seed ^ 0x5602);
       final p = config.snow;
-      _snow = List.generate(p.count.clamp(0, 400), (_) {
-        final (x0, y0) = _seedPosition(pos, r.nextDouble(), r.nextDouble());
+      final sn = p.count.clamp(0, 400);
+      _snow = List.generate(sn, (i) {
+        final (x0, y0, clip) =
+            _seedPlacement(i, sn, pos, r.nextDouble(), r.nextDouble());
         return _SnowFlake(
           x0: x0,
           y0: y0,
+          clip: clip,
           sizeJit: 0.7 + r.nextDouble() * 0.7,
           swayPhase: r.nextDouble() * 2 * math.pi,
           swayFreqMul: r.nextDouble() < 0.5 ? 1 : 2,
@@ -151,11 +163,14 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x51A3);
       final pos = DeterministicRandom(config.seed ^ 0x5603);
       final p = config.sakura;
-      _sakura = List.generate(p.count.clamp(0, 300), (_) {
-        final (x0, y0) = _seedPosition(pos, r.nextDouble(), r.nextDouble());
+      final kn = p.count.clamp(0, 300);
+      _sakura = List.generate(kn, (i) {
+        final (x0, y0, clip) =
+            _seedPlacement(i, kn, pos, r.nextDouble(), r.nextDouble());
         return _Petal(
           x0: x0,
           y0: y0,
+          clip: clip,
           sizeJit: 0.7 + r.nextDouble() * 0.6,
           rot0: r.nextDouble() * 2 * math.pi,
           spinDir: r.nextDouble() < 0.5 ? -1 : 1,
@@ -171,12 +186,14 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x51A4);
       final pos = DeterministicRandom(config.seed ^ 0x5604);
       final p = config.fireflies;
-      _fireflies = List.generate(p.count.clamp(0, 200), (_) {
-        final (x0, y0) = _seedPosition(pos, 0.08 + r.nextDouble() * 0.84,
-            0.08 + r.nextDouble() * 0.84);
+      final fn = p.count.clamp(0, 200);
+      _fireflies = List.generate(fn, (i) {
+        final (x0, y0, clip) = _seedPlacement(
+            i, fn, pos, 0.08 + r.nextDouble() * 0.84, 0.08 + r.nextDouble() * 0.84);
         return _Firefly(
           x0: x0,
           y0: y0,
+          clip: clip,
           ampX: 0.02 + r.nextDouble() * 0.04,
           ampY: 0.02 + r.nextDouble() * 0.04,
           freqX: 1 + r.nextInt(2),
@@ -226,12 +243,14 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x52B1);
       final pos = DeterministicRandom(config.seed ^ 0x5605);
       final p = config.fog;
-      _fogBlobs = List.generate(p.blobs.clamp(0, 40), (_) {
-        final (x0, y0) = _seedPosition(pos, r.nextDouble(),
-            0.15 + r.nextDouble() * 0.8);
+      final bn = p.blobs.clamp(0, 40);
+      _fogBlobs = List.generate(bn, (i) {
+        final (x0, y0, clip) =
+            _seedPlacement(i, bn, pos, r.nextDouble(), 0.15 + r.nextDouble() * 0.8);
         return _FogBlob(
           x0: x0,
           y0: y0,
+          clip: clip,
           rx: 0.18 + r.nextDouble() * 0.30,
           ry: 0.05 + r.nextDouble() * 0.09,
           driftJit: 0.7 + r.nextDouble() * 0.6,
@@ -246,11 +265,14 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x52B2);
       final pos = DeterministicRandom(config.seed ^ 0x5606);
       final p = config.embers;
-      _embers = List.generate(p.count.clamp(0, 300), (_) {
-        final (x0, y0) = _seedPosition(pos, r.nextDouble(), r.nextDouble());
+      final en = p.count.clamp(0, 300);
+      _embers = List.generate(en, (i) {
+        final (x0, y0, clip) =
+            _seedPlacement(i, en, pos, r.nextDouble(), r.nextDouble());
         return _Ember(
           x0: x0,
           y0: y0,
+          clip: clip,
           sizeJit: 0.5 + r.nextDouble() * 0.8,
           swayPhase: r.nextDouble() * 2 * math.pi,
           swayFreqMul: 1 + r.nextInt(2),
@@ -389,12 +411,14 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x54D3);
       final pos = DeterministicRandom(config.seed ^ 0x5607);
       final p = config.bubbles;
-      _bubbles = List.generate(p.count.clamp(0, 120), (_) {
-        final (x0, y0) = _seedPosition(pos, 0.04 + r.nextDouble() * 0.92,
-            r.nextDouble());
+      final un = p.count.clamp(0, 120);
+      _bubbles = List.generate(un, (i) {
+        final (x0, y0, clip) = _seedPlacement(
+            i, un, pos, 0.04 + r.nextDouble() * 0.92, r.nextDouble());
         return _Bubble(
           x0: x0,
           y0: y0,
+          clip: clip,
           sizeJit: 0.6 + r.nextDouble() * 0.9,
           alphaJit: 0.7 + r.nextDouble() * 0.4,
           wobPhase: r.nextDouble() * 2 * math.pi,
@@ -408,11 +432,14 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x54D4);
       final pos = DeterministicRandom(config.seed ^ 0x5608);
       final p = config.leaves;
-      _leaves = List.generate(p.count.clamp(0, 300), (_) {
-        final (x0, y0) = _seedPosition(pos, r.nextDouble(), r.nextDouble());
+      final ln = p.count.clamp(0, 300);
+      _leaves = List.generate(ln, (i) {
+        final (x0, y0, clip) =
+            _seedPlacement(i, ln, pos, r.nextDouble(), r.nextDouble());
         return _Leaf(
           x0: x0,
           y0: y0,
+          clip: clip,
           sizeJit: 0.7 + r.nextDouble() * 0.6,
           rot0: r.nextDouble() * 2 * math.pi,
           flipPhase: r.nextDouble() * 2 * math.pi,
@@ -428,12 +455,14 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x54D5);
       final pos = DeterministicRandom(config.seed ^ 0x5609);
       final p = config.meteors;
-      _meteors = List.generate(p.count.clamp(1, 20), (_) {
-        final (x0, y0) = _seedPosition(pos, 0.1 + r.nextDouble() * 0.8,
-            0.05 + r.nextDouble() * 0.55);
+      final mn = p.count.clamp(1, 20);
+      _meteors = List.generate(mn, (i) {
+        final (x0, y0, clip) = _seedPlacement(
+            i, mn, pos, 0.1 + r.nextDouble() * 0.8, 0.05 + r.nextDouble() * 0.55);
         return _Meteor(
           x0: x0,
           y0: y0,
+          clip: clip,
           lenJit: 0.7 + r.nextDouble() * 0.7,
           alphaJit: 0.75 + r.nextDouble() * 0.25,
           thick: 1.2 + r.nextDouble() * 1.4,
@@ -679,16 +708,132 @@ class FrameCompositor {
   late List<PixelRect?> _layerClips; // W5 分格裁剪（null = 全画布）
   late Uint8List _basePixels;
 
+  // ---- Task 2.3：分格叠加裁剪 + 逐格播种 ----
+  //
+  // 规格 §5 line 75（权威）：panelAware 下叠加 pass 逐格播种 + 用本格 clip 裁剪。
+  // 裁决 R7：clip 是**新增**的可选原语参数（`_blendPx`/`_drawSoftDisc`/AA 段路径/
+  //   blendPixel），**不是**复用 `_layerClips`（后者只作用于层重采样，从不经手粒子）。
+  // 裁决 R8：门控 = `config.panelAware`（不看 contentAware）——两轴正交。
+  // 裁决 R9：本格矩形集来自 `_layerClips` 的去重非空值；≤1 个 → 逐格路径关闭，
+  //   播种/绘制原样走全画布路径，故单格/无白带图 panelAware on ≡ off 逐字节等。
+  /// 去重后的本格画布矩形（首次出现序）；非 panelAware / 单格时可为空或单元素。
+  List<PixelRect> _panelRects = const [];
+  /// 逐格播种 + 裁剪是否启用（panelAware 且派生格数 ≥2）。
+  bool _perPanelActive = false;
+  /// 按粒子总数缓存的面积∝数量切分（纯函数：total + 本格面积 → 各格计数）。
+  final Map<int, List<int>> _splitCache = {};
+
+  void _computePanels() {
+    if (!config.panelAware) {
+      _panelRects = const [];
+      _perPanelActive = false;
+      return;
+    }
+    // 去重：同格 3 层共享同一 PixelRect；用值键去重（PixelRect 无 ==）。
+    final seen = <String>{};
+    final rects = <PixelRect>[];
+    for (final c in _layerClips) {
+      if (c == null) continue;
+      final key = '${c.x},${c.y},${c.width},${c.height}';
+      if (seen.add(key)) rects.add(c);
+    }
+    _panelRects = rects;
+    _perPanelActive = rects.length >= 2;
+  }
+
+  /// 面积∝数量把 [total] 切到各本格：per = floor(area_share·total)，
+  /// 确定性余数（total − Σ floors）全给面积最大的格（并列取首个）。纯函数。
+  List<int> _splitFor(int total) {
+    final cached = _splitCache[total];
+    if (cached != null) return cached;
+    final n = _panelRects.length;
+    final counts = List<int>.filled(n, 0);
+    if (n == 0 || total <= 0) {
+      _splitCache[total] = counts;
+      return counts;
+    }
+    final areas = [for (final p in _panelRects) p.width * p.height];
+    var totalArea = 0;
+    for (final a in areas) {
+      totalArea += a;
+    }
+    if (totalArea <= 0) {
+      // 退化（零面积格）：均匀切，余数给最后一格。
+      final base = total ~/ n;
+      for (var i = 0; i < n; i++) {
+        counts[i] = base;
+      }
+      counts[n - 1] += total - base * n;
+      _splitCache[total] = counts;
+      return counts;
+    }
+    var assigned = 0;
+    for (var i = 0; i < n; i++) {
+      final c = (total * areas[i] / totalArea).floor();
+      counts[i] = c;
+      assigned += c;
+    }
+    // 余数给面积最大的格（并列取最小下标 → 确定性）。
+    var largest = 0;
+    for (var i = 1; i < n; i++) {
+      if (areas[i] > areas[largest]) largest = i;
+    }
+    counts[largest] += total - assigned;
+    _splitCache[total] = counts;
+    return counts;
+  }
+
+  /// 粒子序号 [index]（0..total）落在哪个本格：按 [counts] 的累计区间。
+  int _panelIndexFor(int index, List<int> counts) {
+    var acc = 0;
+    for (var i = 0; i < counts.length; i++) {
+      acc += counts[i];
+      if (index < acc) return i;
+    }
+    return counts.length - 1;
+  }
+
+  /// 为一个粒子播种归一化位置并给出所属本格裁剪矩形。
+  ///
+  /// 逐格路径**未**启用时返回 `_seedPosition` 的全画布结果 + null clip（等价旧
+  /// 行为，逐字节不变）；启用时把该 [total] 序号映射到本格，并把全画布归一基准
+  /// 位置线性重映射进本格归一矩形（`x0 = panelNx + base·panelNW`）——RNG 消费
+  /// 序列与旧路径完全一致（仍调用一次 `_seedPosition`），仅位置落点约束到本格。
+  (double, double, PixelRect?) _seedPlacement(
+      int index, int total, DeterministicRandom pos, double uniformX, double uniformY) {
+    final base = _seedPosition(pos, uniformX, uniformY);
+    if (!_perPanelActive) return (base.$1, base.$2, null);
+    final counts = _splitFor(total);
+    final panel = _panelRects[_panelIndexFor(index, counts)];
+    final nx = panel.x / w, ny = panel.y / h;
+    final nw = panel.width / w, nh = panel.height / h;
+    final x0 = (nx + base.$1 * nw).clamp(0.0, 1.0);
+    final y0 = (ny + base.$2 * nh).clamp(0.0, 1.0);
+    return (x0, y0, panel);
+  }
+
+  /// 测试访问器（Task 2.3，非公共契约）：返回构造期派生的本格画布矩形集。
+  /// 未启用逐格路径（非 panelAware / 单格）时为空或单元素列表。
+  List<PixelRect> debugPanelRects() => _panelRects;
+
+  /// 测试访问器（Task 2.3，非公共契约）：按面积∝数量把 [total] 切到各本格，
+  /// 返回各格计数列表（与 `_panelRects` 同序）。逐格路径未启用时返回空表。
+  List<int> debugPerPanelCounts(int total) =>
+      _perPanelActive ? List<int>.from(_splitFor(total)) : const [];
+
   void _initParticles() {
     _particles = [];
     if (!config.effects.contains(EffectKind.ambient)) return;
     final amb = config.ambient;
     final pos = DeterministicRandom(config.seed ^ 0x5600);
-    for (var i = 0; i < amb.particleCount; i++) {
-      final (px, py) = _seedPosition(pos, _rng.nextDouble(), _rng.nextDouble());
+    final an = amb.particleCount;
+    for (var i = 0; i < an; i++) {
+      final (px, py, clip) =
+          _seedPlacement(i, an, pos, _rng.nextDouble(), _rng.nextDouble());
       _particles.add(_Particle(
         px: px,
         py: py,
+        clip: clip,
         r: 0.8 + _rng.nextDouble() * 2.2,
         alpha: (0.35 + _rng.nextDouble() * 0.65),
         drift: 0.5 + _rng.nextDouble(),
@@ -900,6 +1045,7 @@ class FrameCompositor {
       if (py < 0) py += 1.0;
       final px = (p.px + 0.01 * math.sin(tSec + p.phase)) % 1.0;
       final cx = px * w, cy = py * h;
+      final clip = p.clip;
       final alpha =
           (amb.opacity * _env.particles * p.alpha * 255).round().clamp(0, 255);
       final rad = p.r;
@@ -907,8 +1053,13 @@ class FrameCompositor {
       final y0 = (cy - rad).floor(), y1 = (cy + rad).ceil();
       for (var y = y0; y <= y1; y++) {
         if (y < 0 || y >= h) continue;
+        if (clip != null && (y < clip.y || y >= clip.y + clip.height)) continue;
         for (var x = x0; x <= x1; x++) {
           if (x < 0 || x >= w) continue;
+          // Task 2.3（R7）：ambient 直写 frame.data（不经 _blendPx），故在此手动
+          // 裁剪本格矩形；clip==null 时条件恒 false → 逐字节旧行为。
+          if (clip != null &&
+              (x < clip.x || x >= clip.x + clip.width)) continue;
           final dist = math.sqrt((x + 0.5 - cx) * (x + 0.5 - cx) +
               (y + 0.5 - cy) * (y + 0.5 - cy));
           if (dist > rad) continue;
@@ -950,8 +1101,15 @@ class FrameCompositor {
 
   static int _hexRgb(String hex) => int.parse(hex, radix: 16);
 
-  void _blendPx(RgbaImage f, int x, int y, int r, int g, int b, int a) {
+  void _blendPx(RgbaImage f, int x, int y, int r, int g, int b, int a,
+      {PixelRect? clip}) {
     if (a <= 0 || x < 0 || y < 0 || x >= w || y >= h) return;
+    // Task 2.3（R7）：分格裁剪。null clip ⇒ 逐字节旧行为（越界检查不变）。
+    if (clip != null &&
+        (x < clip.x ||
+            x >= clip.x + clip.width ||
+            y < clip.y ||
+            y >= clip.y + clip.height)) return;
     if (a > 255) a = 255;
     final o = (y * w + x) * 4;
     final inv = 255 - a;
@@ -963,9 +1121,10 @@ class FrameCompositor {
   /// 光效提亮。legacy 档逐字沿用 v1.2 的截断加法；standard+ 改走 screen，
   /// 近白高光不再一起撞死在 255（Q5）。r=g=b=255 时 additive 分支等价于
   /// v1.2 内联写的 `min(255, d + add)`，所以扫光这类纯白光可直接复用本函数。
-  void _blendAddPx(RgbaImage f, int x, int y, int r, int g, int b, int add) =>
+  void _blendAddPx(RgbaImage f, int x, int y, int r, int g, int b, int add,
+          {PixelRect? clip}) =>
       blendPixel(f, x, y, r, g, b, add,
-          op: _aa ? BlendOp.screen : BlendOp.additive);
+          op: _aa ? BlendOp.screen : BlendOp.additive, clip: clip);
 
   /// 雨丝：竖直循环下落 + 固定倾角线段。
   void _drawRain(RgbaImage frame, double tSec) {
@@ -980,19 +1139,21 @@ class FrameCompositor {
     for (final d in _rain) {
       final py = ((d.y0 + cycles * u) % 1.0) * h;
       final px = d.x0 * w;
+      final clip = d.clip;
       final a =
           (p.opacity * _env.particles * d.alphaJit * 255).round().clamp(0, 255);
       final steps = (len * d.lenJit).round().clamp(2, 220);
       if (_aa) {
         drawSegmentAA(
             frame, px, py, px + dx * steps, py + dy * steps, r0, g0, b0, a, 1.0,
-            tailFade: 0.6);
+            tailFade: 0.6, clip: clip);
         continue;
       }
       for (var s = 0; s < steps; s++) {
         final fade = 1 - 0.6 * s / steps;
         _blendPx(frame, (px + dx * s).round(), (py + dy * s).round(), r0, g0,
-            b0, (a * fade).round());
+            b0, (a * fade).round(),
+            clip: clip);
       }
     }
   }
@@ -1011,7 +1172,7 @@ class FrameCompositor {
       final rad = (p.sizePx * f.sizeJit).clamp(0.8, 12.0);
       final twk = 0.78 + 0.22 * math.sin(w2pi * u * 2 + f.twkPhase);
       final a = (p.opacity * _env.particles * twk * 255).round().clamp(0, 255);
-      _drawSoftDisc(frame, px, py, rad, 250, 252, 255, a);
+      _drawSoftDisc(frame, px, py, rad, 250, 252, 255, a, clip: f.clip);
     }
   }
 
@@ -1047,7 +1208,8 @@ class FrameCompositor {
         final width = half * 0.55 * (1 - (s.abs() / half) * 0.55);
         for (var t2 = -width; t2 <= width; t2 += 1.0) {
           _blendPx(frame, (cxp - sa * t2).round(), (cyp + ca * t2).round(), rr,
-              gg, bb, a);
+              gg, bb, a,
+              clip: t.clip);
         }
       }
     }
@@ -1090,7 +1252,7 @@ class FrameCompositor {
           // 中心亮核 + 柔和光晕
           final core = dist < rad * 0.16 ? 1.0 : 0.0;
           final add = (aBase * (fall * 0.85 + core * 0.6)).round();
-          _blendAddPx(frame, x, y, r0, g0, b0, add);
+          _blendAddPx(frame, x, y, r0, g0, b0, add, clip: f.clip);
         }
       }
     }
@@ -1239,10 +1401,10 @@ class FrameCompositor {
           fall *= fall;
           final a = (aBase * fall).round();
           if (a <= 0) continue;
-          _blendPx(frame, x, y, r0, g0, b0, a);
-          _blendPx(frame, x + 1, y, r0, g0, b0, a);
-          _blendPx(frame, x, y + 1, r0, g0, b0, a);
-          _blendPx(frame, x + 1, y + 1, r0, g0, b0, a);
+          _blendPx(frame, x, y, r0, g0, b0, a, clip: b.clip);
+          _blendPx(frame, x + 1, y, r0, g0, b0, a, clip: b.clip);
+          _blendPx(frame, x, y + 1, r0, g0, b0, a, clip: b.clip);
+          _blendPx(frame, x + 1, y + 1, r0, g0, b0, a, clip: b.clip);
         }
       }
     }
@@ -1271,10 +1433,11 @@ class FrameCompositor {
       if (_aa) {
         // 余烬是自发光：screen 让火星叠在亮部时仍提亮而不是糊成一块白斑，
         // 衰减式与 legacy 的 0.35+0.65·fall 同形，只多了边缘覆盖度。
-        drawDiscAA(frame, px, py, rad, r0, g0, b0, a, op: BlendOp.screen);
+        drawDiscAA(frame, px, py, rad, r0, g0, b0, a,
+            op: BlendOp.screen, clip: e.clip);
         continue;
       }
-      _drawSoftDisc(frame, px, py, rad, r0, g0, b0, a);
+      _drawSoftDisc(frame, px, py, rad, r0, g0, b0, a, clip: e.clip);
     }
   }
 
@@ -1460,7 +1623,8 @@ class FrameCompositor {
   }
 
   void _drawSoftDisc(RgbaImage f, double cx, double cy, double rad, int r,
-      int g, int b, int a) {
+      int g, int b, int a,
+      {PixelRect? clip}) {
     final x0 = (cx - rad).floor(), x1 = (cx + rad).ceil();
     final y0 = (cy - rad).floor(), y1 = (cy + rad).ceil();
     for (var y = y0; y <= y1; y++) {
@@ -1471,7 +1635,8 @@ class FrameCompositor {
             (x + 0.5 - cx) * (x + 0.5 - cx) + (y + 0.5 - cy) * (y + 0.5 - cy));
         if (dist > rad) continue;
         final fall = 1 - dist / rad;
-        _blendPx(f, x, y, r, g, b, (a * (0.35 + 0.65 * fall)).round());
+        _blendPx(f, x, y, r, g, b, (a * (0.35 + 0.65 * fall)).round(),
+            clip: clip);
       }
     }
   }
@@ -1481,6 +1646,7 @@ class _Particle {
   _Particle({
     required this.px,
     required this.py,
+    this.clip,
     required this.r,
     required this.alpha,
     required this.drift,
@@ -1489,6 +1655,7 @@ class _Particle {
 
   final double px;
   final double py;
+  final PixelRect? clip;
   final double r;
   final double alpha;
   final double drift;
@@ -1515,12 +1682,14 @@ class _Drop {
   _Drop({
     required this.x0,
     required this.y0,
+    this.clip,
     required this.lenJit,
     required this.alphaJit,
   });
 
   final double x0;
   final double y0;
+  final PixelRect? clip;
   final double lenJit;
   final double alphaJit;
 }
@@ -1529,6 +1698,7 @@ class _SnowFlake {
   _SnowFlake({
     required this.x0,
     required this.y0,
+    this.clip,
     required this.sizeJit,
     required this.swayPhase,
     required this.swayFreqMul,
@@ -1537,6 +1707,7 @@ class _SnowFlake {
 
   final double x0;
   final double y0;
+  final PixelRect? clip;
   final double sizeJit;
   final double swayPhase;
   final int swayFreqMul;
@@ -1547,6 +1718,7 @@ class _Petal {
   _Petal({
     required this.x0,
     required this.y0,
+    this.clip,
     required this.sizeJit,
     required this.rot0,
     required this.spinDir,
@@ -1557,6 +1729,7 @@ class _Petal {
 
   final double x0;
   final double y0;
+  final PixelRect? clip;
   final double sizeJit;
   final double rot0;
   final int spinDir;
@@ -1569,6 +1742,7 @@ class _Firefly {
   _Firefly({
     required this.x0,
     required this.y0,
+    this.clip,
     required this.ampX,
     required this.ampY,
     required this.freqX,
@@ -1581,6 +1755,7 @@ class _Firefly {
 
   final double x0;
   final double y0;
+  final PixelRect? clip;
   final double ampX;
   final double ampY;
   final int freqX;
@@ -1629,6 +1804,7 @@ class _FogBlob {
   _FogBlob({
     required this.x0,
     required this.y0,
+    this.clip,
     required this.rx,
     required this.ry,
     required this.driftJit,
@@ -1638,6 +1814,7 @@ class _FogBlob {
 
   final double x0;
   final double y0;
+  final PixelRect? clip;
   final double rx;
   final double ry;
   final double driftJit;
@@ -1649,6 +1826,7 @@ class _Ember {
   _Ember({
     required this.x0,
     required this.y0,
+    this.clip,
     required this.sizeJit,
     required this.swayPhase,
     required this.swayFreqMul,
@@ -1658,6 +1836,7 @@ class _Ember {
 
   final double x0;
   final double y0;
+  final PixelRect? clip;
   final double sizeJit;
   final double swayPhase;
   final int swayFreqMul;
