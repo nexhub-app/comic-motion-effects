@@ -31,6 +31,7 @@ export 'src/render/envelope.dart';
 export 'src/render/quality.dart';
 export 'src/render/raster.dart';
 export 'src/render/resampler.dart';
+export 'src/saliency_anchors.dart';
 export 'src/strip.dart';
 export 'src/version.dart';
 export 'src/worker_pool.dart';
