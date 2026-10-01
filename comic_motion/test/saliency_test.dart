@@ -24,13 +24,20 @@ void main() {
     expect(at(2, 2), lessThan(at(32, 32) * 0.4));
   });
 
-  test('activity stays absolute: all-white blank page max < 0.05', () {
+  test('activity stays absolute: near-white noise page max < 0.05', () {
     // Regression guard for R3: activity must be in ABSOLUTE units. A min/max
-    // normalization ramp would amplify blank-page noise to the full 0..1
-    // range (max ~1.0) and break the activity-weighted-particle fallback.
+    // normalization ramp would push this low-contrast field's max toward 1.0
+    // (its range exceeds the ramp's 1e-6 flat-field guard), breaking the
+    // activity-weighted-particle fallback; <0.05 proves activity stayed
+    // absolute. Fixture is a near-white page (base 250) with deterministic
+    // ±2 per-pixel jitter (channels stay in [245,252]) — no ink, no RNG.
     final img = RgbaImage(width: 64, height: 64);
-    for (var i = 0; i < img.pixelCount; i++) {
-      img.setPixel(i % 64, i ~/ 64, 255, 255, 255);
+    for (var y = 0; y < 64; y++) {
+      for (var x = 0; x < 64; x++) {
+        final jitter = ((x * 3 + y * 7) % 5) - 2; // deterministic, in [-2,2]
+        final v = (250 + jitter).clamp(245, 252);
+        img.setPixel(x, y, v, v, v);
+      }
     }
     final a = const SaliencyAnalyzer().activity(img, 64, 64);
     final maxV = a.reduce((x, y) => x > y ? x : y);
