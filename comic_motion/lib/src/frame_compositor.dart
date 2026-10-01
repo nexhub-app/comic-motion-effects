@@ -53,6 +53,9 @@ class FrameCompositor {
     _basePixels = base.data;
     _layerPixels = layers.map((l) => l.image.data).toList();
     _layerClips = layers.map((l) => l.clip).toList();
+    // Task 2.2：构造期对 activity 网格做一次 max 扫描（单个 double，无数组分配，
+    // R5）。门控关时 [config.contentAware]==false → 直接返回 0，零成本、不扫描。
+    _activityMax = _computeMaxActivity();
     _initParticles();
     _initNewEffects();
   }
@@ -110,11 +113,15 @@ class FrameCompositor {
     _starSamples = [];
     if (fx.contains(EffectKind.rain)) {
       final r = DeterministicRandom(config.seed ^ 0x51A1);
+      final pos = DeterministicRandom(config.seed ^ 0x5601);
       final p = config.rain;
       _rain = List.generate(p.count.clamp(0, 400), (_) {
+        // 先按旧路径消费属性流两个 draw（游标与逐字节基线一致），再在内容感知
+        // 开启时用位置专用流 [pos] 的拒绝采样覆盖坐标。
+        final (x0, y0) = _seedPosition(pos, r.nextDouble(), r.nextDouble());
         return _Drop(
-          x0: r.nextDouble(),
-          y0: r.nextDouble(),
+          x0: x0,
+          y0: y0,
           lenJit: 0.7 + r.nextDouble() * 0.6,
           alphaJit: 0.6 + r.nextDouble() * 0.4,
         );
@@ -124,11 +131,13 @@ class FrameCompositor {
     }
     if (fx.contains(EffectKind.snow)) {
       final r = DeterministicRandom(config.seed ^ 0x51A2);
+      final pos = DeterministicRandom(config.seed ^ 0x5602);
       final p = config.snow;
       _snow = List.generate(p.count.clamp(0, 400), (_) {
+        final (x0, y0) = _seedPosition(pos, r.nextDouble(), r.nextDouble());
         return _SnowFlake(
-          x0: r.nextDouble(),
-          y0: r.nextDouble(),
+          x0: x0,
+          y0: y0,
           sizeJit: 0.7 + r.nextDouble() * 0.7,
           swayPhase: r.nextDouble() * 2 * math.pi,
           swayFreqMul: r.nextDouble() < 0.5 ? 1 : 2,
@@ -140,11 +149,13 @@ class FrameCompositor {
     }
     if (fx.contains(EffectKind.sakura)) {
       final r = DeterministicRandom(config.seed ^ 0x51A3);
+      final pos = DeterministicRandom(config.seed ^ 0x5603);
       final p = config.sakura;
       _sakura = List.generate(p.count.clamp(0, 300), (_) {
+        final (x0, y0) = _seedPosition(pos, r.nextDouble(), r.nextDouble());
         return _Petal(
-          x0: r.nextDouble(),
-          y0: r.nextDouble(),
+          x0: x0,
+          y0: y0,
           sizeJit: 0.7 + r.nextDouble() * 0.6,
           rot0: r.nextDouble() * 2 * math.pi,
           spinDir: r.nextDouble() < 0.5 ? -1 : 1,
@@ -158,11 +169,14 @@ class FrameCompositor {
     }
     if (fx.contains(EffectKind.fireflies)) {
       final r = DeterministicRandom(config.seed ^ 0x51A4);
+      final pos = DeterministicRandom(config.seed ^ 0x5604);
       final p = config.fireflies;
       _fireflies = List.generate(p.count.clamp(0, 200), (_) {
+        final (x0, y0) = _seedPosition(pos, 0.08 + r.nextDouble() * 0.84,
+            0.08 + r.nextDouble() * 0.84);
         return _Firefly(
-          x0: 0.08 + r.nextDouble() * 0.84,
-          y0: 0.08 + r.nextDouble() * 0.84,
+          x0: x0,
+          y0: y0,
           ampX: 0.02 + r.nextDouble() * 0.04,
           ampY: 0.02 + r.nextDouble() * 0.04,
           freqX: 1 + r.nextInt(2),
@@ -210,11 +224,14 @@ class FrameCompositor {
     // ---- v1.2 新动效状态 ----
     if (fx.contains(EffectKind.fog)) {
       final r = DeterministicRandom(config.seed ^ 0x52B1);
+      final pos = DeterministicRandom(config.seed ^ 0x5605);
       final p = config.fog;
       _fogBlobs = List.generate(p.blobs.clamp(0, 40), (_) {
+        final (x0, y0) = _seedPosition(pos, r.nextDouble(),
+            0.15 + r.nextDouble() * 0.8);
         return _FogBlob(
-          x0: r.nextDouble(),
-          y0: 0.15 + r.nextDouble() * 0.8,
+          x0: x0,
+          y0: y0,
           rx: 0.18 + r.nextDouble() * 0.30,
           ry: 0.05 + r.nextDouble() * 0.09,
           driftJit: 0.7 + r.nextDouble() * 0.6,
@@ -227,11 +244,13 @@ class FrameCompositor {
     }
     if (fx.contains(EffectKind.embers)) {
       final r = DeterministicRandom(config.seed ^ 0x52B2);
+      final pos = DeterministicRandom(config.seed ^ 0x5606);
       final p = config.embers;
       _embers = List.generate(p.count.clamp(0, 300), (_) {
+        final (x0, y0) = _seedPosition(pos, r.nextDouble(), r.nextDouble());
         return _Ember(
-          x0: r.nextDouble(),
-          y0: r.nextDouble(),
+          x0: x0,
+          y0: y0,
           sizeJit: 0.5 + r.nextDouble() * 0.8,
           swayPhase: r.nextDouble() * 2 * math.pi,
           swayFreqMul: 1 + r.nextInt(2),
@@ -368,11 +387,14 @@ class FrameCompositor {
     }
     if (fx.contains(EffectKind.bubbles)) {
       final r = DeterministicRandom(config.seed ^ 0x54D3);
+      final pos = DeterministicRandom(config.seed ^ 0x5607);
       final p = config.bubbles;
       _bubbles = List.generate(p.count.clamp(0, 120), (_) {
+        final (x0, y0) = _seedPosition(pos, 0.04 + r.nextDouble() * 0.92,
+            r.nextDouble());
         return _Bubble(
-          x0: 0.04 + r.nextDouble() * 0.92,
-          y0: r.nextDouble(),
+          x0: x0,
+          y0: y0,
           sizeJit: 0.6 + r.nextDouble() * 0.9,
           alphaJit: 0.7 + r.nextDouble() * 0.4,
           wobPhase: r.nextDouble() * 2 * math.pi,
@@ -384,11 +406,13 @@ class FrameCompositor {
     }
     if (fx.contains(EffectKind.leaves)) {
       final r = DeterministicRandom(config.seed ^ 0x54D4);
+      final pos = DeterministicRandom(config.seed ^ 0x5608);
       final p = config.leaves;
       _leaves = List.generate(p.count.clamp(0, 300), (_) {
+        final (x0, y0) = _seedPosition(pos, r.nextDouble(), r.nextDouble());
         return _Leaf(
-          x0: r.nextDouble(),
-          y0: r.nextDouble(),
+          x0: x0,
+          y0: y0,
           sizeJit: 0.7 + r.nextDouble() * 0.6,
           rot0: r.nextDouble() * 2 * math.pi,
           flipPhase: r.nextDouble() * 2 * math.pi,
@@ -402,11 +426,14 @@ class FrameCompositor {
     }
     if (fx.contains(EffectKind.meteors)) {
       final r = DeterministicRandom(config.seed ^ 0x54D5);
+      final pos = DeterministicRandom(config.seed ^ 0x5609);
       final p = config.meteors;
       _meteors = List.generate(p.count.clamp(1, 20), (_) {
+        final (x0, y0) = _seedPosition(pos, 0.1 + r.nextDouble() * 0.8,
+            0.05 + r.nextDouble() * 0.55);
         return _Meteor(
-          x0: 0.1 + r.nextDouble() * 0.8,
-          y0: 0.05 + r.nextDouble() * 0.55,
+          x0: x0,
+          y0: y0,
           lenJit: 0.7 + r.nextDouble() * 0.7,
           alphaJit: 0.75 + r.nextDouble() * 0.25,
           thick: 1.2 + r.nextDouble() * 1.4,
@@ -499,6 +526,105 @@ class FrameCompositor {
   /// 效果放置消费。
   AnchorMap? get anchors => _anchors;
 
+  // ---- Task 2.2：内容感知粒子落位（activity 加权播种）----
+  //
+  // 规格 §A（权威）+ 控制裁决 R5/R6 覆盖 brief：
+  //  * R5：用**拒绝采样**（O(count×常数)），绝不建 CDF/前缀和数组——合成器会
+  //    在每个 worker job 经 `fromRasters` 重建，O(pixels) 数组会被逐 worker 重分配。
+  //    构造期只对 activity 网格做**一次**扫描求 `maxAct`（单个 double，无数组分配）；
+  //    逐粒子按 `q <= activity[cell]/maxAct` 接受，密度∝activity。
+  //  * R6：仅以 `config.contentAware` 单一门控（不看 tier.atLeastStandard）。
+  //  * 空白/平坦（maxAct≈0）/ map 为 null / 门控关 → 回落原均匀 draw（等价旧行为）。
+  // 位置采样来自每效果**新增的独立流**，绝不触碰该效果的属性流（sizeJit/alphaJit/…）
+  // 与既有 0x51A*/0x52B*/0x53C*/0x54D*/0x54E1 流，故 contentAware=false 逐字节不变。
+
+  /// 构造期单次扫描 activity 网格得到的最大值（无数组分配）。门控关/无 map 时为 0。
+  late final double _activityMax;
+
+  /// 落位加权是否生效：R6 单一门控 `contentAware && anchors != null` 且
+  /// 网格可用、`maxAct > 1e-6`（否则无主体 → 等价旧均匀分布）。
+  bool get _particleWeightingActive {
+    final map = _anchors;
+    return config.contentAware &&
+        map != null &&
+        map.width >= 2 &&
+        map.height >= 2 &&
+        map.activity.length >= map.width * map.height &&
+        _activityMax > 1e-6;
+  }
+
+  double _computeMaxActivity() {
+    final map = _anchors;
+    if (map == null || !config.contentAware) return 0.0;
+    final act = map.activity;
+    final aw = map.width, ah = map.height;
+    if (aw < 2 || ah < 2) return 0.0;
+    final limit = act.length < aw * ah ? act.length : aw * ah;
+    var mx = 0.0;
+    for (var i = 0; i < limit; i++) {
+      final v = act[i];
+      if (v > mx) mx = v;
+    }
+    return mx;
+  }
+
+  /// 为一个粒子播种归一化位置 `(x0,y0)`。
+  ///
+  /// [uniformX]/[uniformY] 是调用方**已按旧路径**从该效果属性流取好的均匀位置——
+  /// 无论加权与否都会被消费，以确保属性流游标与逐字节基线完全一致（Design B）。
+  /// 门控未生效时原样返回这两个均匀值（旧行为）；生效时忽略它们，改从该效果
+  /// 位置专用流 [pos] 做有界拒绝采样（密度∝activity），绝不触碰属性流。
+  (double, double) _seedPosition(
+      DeterministicRandom pos, double uniformX, double uniformY) {
+    if (!_particleWeightingActive) return (uniformX, uniformY);
+    final map = _anchors!;
+    final aw = map.width, ah = map.height;
+    final act = map.activity;
+    final inv = 1.0 / _activityMax;
+    var gx = 0, gy = 0;
+    for (var tries = 0; tries < 16; tries++) {
+      gx = (pos.nextDouble() * aw).floor();
+      if (gx >= aw) gx = aw - 1;
+      gy = (pos.nextDouble() * ah).floor();
+      if (gy >= ah) gy = ah - 1;
+      if (pos.nextDouble() <= act[gy * aw + gx] * inv) break; // 接受该 cell
+    }
+    // 命中重试上限则取最后一次候选；cell → 归一化中心 + cell 内亚像素抖动铺满 [0,1)。
+    final x0 = ((gx + pos.nextDouble()) / aw).clamp(0.0, 1.0);
+    final y0 = ((gy + pos.nextDouble()) / ah).clamp(0.0, 1.0);
+    return (x0, y0);
+  }
+
+  /// 测试访问器（Task 2.2，非公共契约）：返回某粒子效果在构造期播种的归一化
+  /// 初始位置 `(x0,y0)` 列表，用于断言落位分布与数量。仅覆盖内容感知加权涉及的
+  /// 粒子族；其余返回空表。
+  List<(double, double)> debugParticleSeeds(EffectKind kind) {
+    switch (kind) {
+      case EffectKind.rain:
+        return [for (final d in _rain) (d.x0, d.y0)];
+      case EffectKind.snow:
+        return [for (final f in _snow) (f.x0, f.y0)];
+      case EffectKind.sakura:
+        return [for (final t in _sakura) (t.x0, t.y0)];
+      case EffectKind.fireflies:
+        return [for (final f in _fireflies) (f.x0, f.y0)];
+      case EffectKind.fog:
+        return [for (final b in _fogBlobs) (b.x0, b.y0)];
+      case EffectKind.embers:
+        return [for (final e in _embers) (e.x0, e.y0)];
+      case EffectKind.bubbles:
+        return [for (final b in _bubbles) (b.x0, b.y0)];
+      case EffectKind.leaves:
+        return [for (final l in _leaves) (l.x0, l.y0)];
+      case EffectKind.meteors:
+        return [for (final m in _meteors) (m.x0, m.y0)];
+      case EffectKind.ambient:
+        return [for (final p in _particles) (p.px, p.py)];
+      default:
+        return const [];
+    }
+  }
+
   // ---- Task 2.1：内容感知焦点解析（规格 §A：焦点取 anchors.first，显式非默认 focal 覆盖）----
   ({double fx, double fy}) _contentAwareFocal({
     required double paramFx,
@@ -557,10 +683,12 @@ class FrameCompositor {
     _particles = [];
     if (!config.effects.contains(EffectKind.ambient)) return;
     final amb = config.ambient;
+    final pos = DeterministicRandom(config.seed ^ 0x5600);
     for (var i = 0; i < amb.particleCount; i++) {
+      final (px, py) = _seedPosition(pos, _rng.nextDouble(), _rng.nextDouble());
       _particles.add(_Particle(
-        px: _rng.nextDouble(),
-        py: _rng.nextDouble(),
+        px: px,
+        py: py,
         r: 0.8 + _rng.nextDouble() * 2.2,
         alpha: (0.35 + _rng.nextDouble() * 0.65),
         drift: 0.5 + _rng.nextDouble(),
