@@ -16,8 +16,11 @@ void _renderFocusLines(FrameCompositor c, RgbaImage frame, double tSec) {
   final p = c.config.focusLines;
   final u = c._loopU(tSec);
   final n = wedges.length;
-  final cx = p.focalX.clamp(0.05, 0.95) * c.w;
-  final cy = p.focalY.clamp(0.05, 0.95) * c.h;
+  // Task 2.1：焦点解析——contentAware 开且调用方未 pin 时收敛到 anchor，
+  // 否则回到 params.focalX/focalY（legacy，逐字节等价）。
+  final focal = c._focusLinesFocal();
+  final cx = focal.fx.clamp(0.05, 0.95) * c.w;
+  final cy = focal.fy.clamp(0.05, 0.95) * c.h;
   final diag2 = math.sqrt(c.w * c.w + c.h * c.h) / 2.0;
   final rInner = diag2 * p.innerFrac.clamp(0.04, 0.9);
   final baseHalf =
@@ -102,8 +105,10 @@ void _renderImpactRings(FrameCompositor c, RgbaImage frame, double tSec) {
   final rIn = diag * p.innerFrac.clamp(0.0, 0.9);
   final rOut = diag * p.outerFrac.clamp(0.05, 1.6);
   if (rOut <= rIn) return;
-  final cx = p.focalX.clamp(-0.5, 1.5) * c.w;
-  final cy = p.focalY.clamp(-0.5, 1.5) * c.h;
+  // Task 2.1：焦点解析（同 focusLines，legacy 逐字节等价）。
+  final focal = c._impactRingsFocal();
+  final cx = focal.fx.clamp(-0.5, 1.5) * c.w;
+  final cy = focal.fy.clamp(-0.5, 1.5) * c.h;
   final baseTh = p.thicknessPx.clamp(0.6, 40.0);
   final aa = c._aa;
   final bright = aa ? BlendOp.screen : BlendOp.additive;

@@ -3880,6 +3880,243 @@ void main() {
           reason: 'burst 峰值段应明显放大位移');
     });
   });
+
+  // ---- Task 2.1：focusLines / impactRings 自动锚定到内容焦点 ----
+  group('Task 2.1: content-aware focal for focusLines/impactRings', () {
+    const size = 96;
+
+    // 高对比横向渐变渲染面（70..220），让黑/白落墨处处可测。
+    RgbaImage surface() {
+      final img = RgbaImage(width: size, height: size);
+      for (var y = 0; y < size; y++) {
+        for (var x = 0; x < size; x++) {
+          final lum = (70 + x * 150 ~/ 95).clamp(0, 255);
+          img.setPixel(x, y, lum, lum, lum);
+        }
+      }
+      return img;
+    }
+
+    // 白纸 + 左上角墨团：analyze 应给出靠近 (0.25,0.25) 的最高权重 anchor。
+    RgbaImage blobPage() {
+      final img = RgbaImage(width: size, height: size);
+      for (var i = 0; i < img.pixelCount; i++) {
+        img.setPixel(i % size, i ~/ size, 240, 240, 240);
+      }
+      for (var y = 0; y < size; y++) {
+        for (var x = 0; x < size; x++) {
+          final dx = x - 24, dy = y - 24;
+          if (dx * dx + dy * dy <= 10 * 10) img.setPixel(x, y, 20, 20, 20);
+        }
+      }
+      return img;
+    }
+
+    final surfaceImg = surface();
+    final surfaceLayers = LayerSplitter(layerCount: 3)
+        .split(surfaceImg, HeuristicDepthEstimator().estimate(surfaceImg));
+
+    final map = const SaliencyAnalyzer(workScale: 1.0).analyze(blobPage());
+
+    // 归一化点 → 像素计数半径内相对 base 的“变暗/变亮”像素数。
+    int darkerNear(RgbaImage f, RgbaImage base, double nx, double ny, int r) {
+      final cx = nx * size, cy = ny * size;
+      var n = 0;
+      for (var y = 0; y < size; y++) {
+        for (var x = 0; x < size; x++) {
+          final dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+          if (dx * dx + dy * dy > r * r) continue;
+          final i = y * size + x;
+          if (f.luminance(i) < base.luminance(i)) n++;
+        }
+      }
+      return n;
+    }
+
+    int brighterNear(RgbaImage f, RgbaImage base, double nx, double ny, int r) {
+      final cx = nx * size, cy = ny * size;
+      var n = 0;
+      for (var y = 0; y < size; y++) {
+        for (var x = 0; x < size; x++) {
+          final dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+          if (dx * dx + dy * dy > r * r) continue;
+          final i = y * size + x;
+          if (f.luminance(i) > base.luminance(i)) n++;
+        }
+      }
+      return n;
+    }
+
+    // anchor 靠近左上角，明确偏离画幅中心。
+    test('fixture: blob page yields a top-left highest-weight anchor', () {
+      expect(map.anchors, isNotEmpty);
+      expect(map.anchors.first.nx, lessThan(0.4));
+      expect(map.anchors.first.ny, lessThan(0.4));
+    });
+
+    RgbaImage baseAt(EffectConfig plain, double t) =>
+        FrameCompositor(surfaceLayers, surfaceImg, plain).renderFrame(t);
+
+    EffectConfig plainFl() => EffectConfig(
+        effects: const [], fps: 8, durationSec: 2, seed: 41);
+    EffectConfig flCfg({FocusLinesParams focus = const FocusLinesParams(),
+      bool contentAware = false}) =>
+        EffectConfig(
+            effects: const [EffectKind.focusLines],
+            fps: 8,
+            durationSec: 2,
+            seed: 41,
+            contentAware: contentAware,
+            focusLines: focus);
+
+    const flProbe = FocusLinesParams(innerFrac: 0.22, lines: 60);
+
+    RgbaImage drawFl(EffectConfig cfg, double t, {AnchorMap? anchors}) =>
+        FrameCompositor(surfaceLayers, surfaceImg, cfg, anchors: anchors)
+            .renderFrame(t);
+
+    test('focusLines 追踪主体而非画幅中心', () {
+      const t = 0.5;
+      final base = baseAt(plainFl(), t);
+      final ax = map.anchors.first.nx, ay = map.anchors.first.ny;
+      final on = drawFl(flCfg(focus: flProbe, contentAware: true), t,
+          anchors: map); // 焦点 → anchor，anchor 处留空圈（不落墨）
+      final off =
+          drawFl(flCfg(focus: flProbe), t, anchors: map); // 焦点 → 中心（默认）
+
+      // anchor 处：ON 是留空圈（几乎不变暗），OFF 落墨（明显变暗）。
+      expect(darkerNear(off, base, ax, ay, 8), greaterThan(20),
+          reason: '焦点在中心时 anchor 邻域应被集中线覆盖');
+      expect(darkerNear(on, base, ax, ay, 8), lessThan(4),
+          reason: '焦点移到 anchor 后其邻域应成为留空圈');
+      // 中心处：ON 落墨，OFF 是留空圈。
+      expect(darkerNear(on, base, 0.5, 0.45, 8), greaterThan(20),
+          reason: '焦点离开后中心应被集中线覆盖');
+      expect(darkerNear(off, base, 0.5, 0.45, 8), lessThan(4),
+          reason: '焦点在中心时其邻域应是留空圈');
+    });
+
+    RgbaImage drawRc(EffectConfig cfg, double t, {AnchorMap? anchors}) =>
+        FrameCompositor(surfaceLayers, surfaceImg, cfg, anchors: anchors)
+            .renderFrame(t);
+
+    EffectConfig plainRc() => EffectConfig(
+        effects: const [], fps: 8, durationSec: 2, seed: 41);
+    EffectConfig rcCfg({ImpactRingsParams rings = const ImpactRingsParams(),
+      bool contentAware = false}) =>
+        EffectConfig(
+            effects: const [EffectKind.impactRings],
+            fps: 8,
+            durationSec: 2,
+            seed: 41,
+            contentAware: contentAware,
+            impactRings: rings);
+
+    const rcProbe =
+        ImpactRingsParams(innerFrac: 0.2, outerFrac: 0.95, rings: 4);
+
+    test('impactRings 追踪主体而非画幅中心', () {
+      final ax = map.anchors.first.nx, ay = map.anchors.first.ny;
+      // 环随时间外扩，跨多帧累计落墨来定位焦点留空圈。
+      var offAtAnchor = 0, onAtAnchor = 0, offAtCenter = 0, onAtCenter = 0;
+      for (final t in [0.1, 0.3, 0.5, 0.7, 0.9]) {
+        final base = baseAt(plainRc(), t);
+        final on = drawRc(rcCfg(rings: rcProbe, contentAware: true), t,
+            anchors: map);
+        final off = drawRc(rcCfg(rings: rcProbe), t, anchors: map);
+        onAtAnchor += brighterNear(on, base, ax, ay, 6);
+        offAtAnchor += brighterNear(off, base, ax, ay, 6);
+        onAtCenter += brighterNear(on, base, 0.5, 0.5, 6);
+        offAtCenter += brighterNear(off, base, 0.5, 0.5, 6);
+      }
+      expect(offAtAnchor, greaterThan(20),
+          reason: '焦点在中心时 anchor 邻域应有环经过');
+      expect(onAtAnchor, lessThan(offAtAnchor ~/ 4),
+          reason: '焦点移到 anchor 后其邻域应留空');
+      expect(onAtCenter, greaterThan(20),
+          reason: '焦点离开后中心邻域应有环经过');
+      expect(offAtCenter, lessThan(onAtCenter ~/ 4),
+          reason: '焦点在中心时其邻域应留空');
+    });
+
+    test('contentAware off 与无 anchor 逐字节一致（回归基线）', () {
+      const t = 0.5;
+      final withMap =
+          drawFl(flCfg(focus: flProbe), t, anchors: map); // off（默认 contentAware=false）
+      final classic = drawFl(flCfg(focus: flProbe), t); // 完全不传 anchors
+      expect(withMap.data, equals(classic.data),
+          reason: '焦点未消费时 map 传入与否必须逐字节相同');
+      final ringWith = drawRc(rcCfg(rings: rcProbe), t, anchors: map);
+      final ringClassic = drawRc(rcCfg(rings: rcProbe), t);
+      expect(ringWith.data, equals(ringClassic.data));
+    });
+
+    test('显式非默认 focal 覆盖 anchor', () {
+      const t = 0.5;
+      final base = baseAt(plainFl(), t);
+      const pinned = FocusLinesParams(focalX: 0.8, innerFrac: 0.22, lines: 60);
+      final pinnedOnCa =
+          drawFl(flCfg(focus: pinned, contentAware: true), t, anchors: map);
+      final pinnedNoCa = drawFl(flCfg(focus: pinned), t, anchors: map);
+      // caller pinned → 走 params 路径，与 contentAware 无关，逐字节一致。
+      expect(pinnedOnCa.data, equals(pinnedNoCa.data));
+      // 焦点落在 (0.8,0.45)：该处应是留空圈；anchor 处应落墨（焦点未取 anchor）。
+      expect(darkerNear(pinnedOnCa, base, 0.8, 0.45, 8), lessThan(4),
+          reason: 'pin 焦点处应留空');
+      expect(
+          darkerNear(pinnedOnCa, base, map.anchors.first.nx, map.anchors.first.ny, 8),
+          greaterThan(20),
+          reason: 'anchor 不该成为焦点');
+    });
+
+    test('空 anchor 回落到默认中心且不抛异常', () {
+      const t = 0.5;
+      final empty = AnchorMap(size, size, Float64List(size * size),
+          const PixelRect(0, 0, size, size), const [], const []);
+      final onEmpty =
+          drawFl(flCfg(focus: flProbe, contentAware: true), t, anchors: empty);
+      final classic = drawFl(flCfg(focus: flProbe), t);
+      expect(onEmpty.data, equals(classic.data),
+          reason: '空 anchors 必须回落到 params 默认焦点');
+      final ringEmpty =
+          drawRc(rcCfg(rings: rcProbe, contentAware: true), t, anchors: empty);
+      expect(ringEmpty.data, equals(drawRc(rcCfg(rings: rcProbe), t).data));
+    });
+
+    test('未新增 focalAuto 字段：默认 configHash 锁定、序列化无该键', () {
+      expect(EffectConfig().configHash, '-477687d5e8bded5f',
+          reason: '默认指纹不得移动（Task 3.7 门禁）');
+      final jsonFl = convert.jsonEncode(flCfg(focus: const FocusLinesParams(),
+          contentAware: true).toJson());
+      final jsonRc = convert.jsonEncode(rcCfg(rings: const ImpactRingsParams(),
+          contentAware: true).toJson());
+      expect(jsonFl.contains('focalAuto'), isFalse);
+      expect(jsonRc.contains('focalAuto'), isFalse);
+    });
+
+    test('worker/pipeline 路径：contentAware on 确定且 on!=off（消费 anchor）',
+        () async {
+      final bytes = Uint8List.fromList(ImageIO.encodePngFrame(blobPage()));
+      Map<String, dynamic> cfgJson(bool ca) => <String, dynamic>{
+            'effects': ['focusLines'],
+            'fps': 8,
+            'durationSec': 1.0,
+            'maxDimension': 96,
+            'outputFormat': 'gif',
+            'seed': 7,
+            'focusLines': {'innerFrac': 0.22, 'lines': 60},
+            if (ca) 'contentAware': true,
+          };
+      final on = EffectConfig.fromJson(cfgJson(true));
+      final off = EffectConfig.fromJson(cfgJson(false));
+      final a = (await MotionPipeline(on).processBytes(input: bytes)).gifBytes!;
+      final b = (await MotionPipeline(on).processBytes(input: bytes)).gifBytes!;
+      final o = (await MotionPipeline(off).processBytes(input: bytes)).gifBytes!;
+      expect(a, equals(b), reason: 'contentAware on 双跑逐字节确定（真实 worker 路径）');
+      expect(a, isNot(equals(o)),
+          reason: 'focusLines 现消费 anchor，on 应区别于 off');
+    });
+  });
 }
 
 // ---------- helpers ----------
