@@ -172,7 +172,8 @@ class SaliencyAnalyzer {
   /// NMS by descending activity with a minimum separation of
   /// `0.12 * min(subjectBox.width, subjectBox.height)` grid pixels, up to
   /// [maxN] anchors. `weight` is activity normalized over the candidate set
-  /// to [0, 1]. Returned anchors are sorted by weight desc; an empty
+  /// to [0, 1]. Returned anchors are sorted by weight desc, exact ties broken
+  /// in row-major scan order of the analysis grid; an empty
   /// candidate set yields `[]`.
   ///
   /// [Anchor.nx]/[ny] are CANVAS-NORMALIZED [0,1]: analysis-grid coords
@@ -242,9 +243,13 @@ class SaliencyAnalyzer {
     }
     // Greedy pass already visits by descending activity, so [out] is
     // weight-desc; re-sort defensively (weight desc, then scan order).
+    // Scan order is ROW-MAJOR on the analysis grid, so the pixel index is
+    // proportional to `ny * h + nx` (the grid HEIGHT, not its width) — using
+    // the width only coincides on square grids and mis-orders ties on
+    // portrait ones.
     out.sort((a, b) {
       final c = b.weight.compareTo(a.weight);
-      return c != 0 ? c : (a.ny * w + a.nx).compareTo(b.ny * w + b.nx);
+      return c != 0 ? c : (a.ny * h + a.nx).compareTo(b.ny * h + b.nx);
     });
     return out;
   }
@@ -261,6 +266,10 @@ class SaliencyAnalyzer {
   /// remapped to canvas-normalized coords and [AnchorMap.subjectBox] set to
   /// the union of the per-panel boxes (grid coords). [AnchorMap.panels]
   /// stores the input [panels] as given.
+  ///
+  /// Note: weights are normalized per panel, so a low-contrast panel's anchors
+  /// can outrank a high-contrast panel's; a global cross-panel rescale is
+  /// deferred to the consumer placement task.
   AnchorMap analyze(RgbaImage img, {List<PixelRect>? panels}) {
     final aw = math.max(8, (img.width * workScale).round());
     final ah = math.max(8, (img.height * workScale).round());
@@ -268,7 +277,8 @@ class SaliencyAnalyzer {
       final act = activity(img, aw, ah);
       final box = subjectBox(act, aw, ah);
       return AnchorMap(aw, ah, act, box, anchors(act, aw, ah, box),
-          [PixelRect(0, 0, img.width, img.height)]);
+          List<PixelRect>.unmodifiable(
+              [PixelRect(0, 0, img.width, img.height)]));
     }
 
     final merged = Float64List(aw * ah);
@@ -305,7 +315,12 @@ class SaliencyAnalyzer {
             Anchor((gx0 + a.nx * pw) / aw, (gy0 + a.ny * ph) / ah, a.weight));
       }
     }
-    allAnchors.sort((a, b) => b.weight.compareTo(a.weight));
+    // Same ordering contract as [anchors]: weight desc, exact ties resolved
+    // row-major on the analysis grid, so keyed by its height `ah`.
+    allAnchors.sort((a, b) {
+      final c = b.weight.compareTo(a.weight);
+      return c != 0 ? c : (a.ny * ah + a.nx).compareTo(b.ny * ah + b.nx);
+    });
     final box = ux1 < 0
         ? PixelRect(0, 0, aw, ah)
         : PixelRect(ux0, uy0, ux1 - ux0 + 1, uy1 - uy0 + 1);
