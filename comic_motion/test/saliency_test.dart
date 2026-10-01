@@ -14,6 +14,15 @@ void inkBlob(RgbaImage img, int cx, int cy, int r) {
         img.setPixel(x, y, 20, 20, 20);
 }
 
+/// Gray circular blob of luminance [v] — a weaker sibling of [inkBlob].
+void _blob(RgbaImage img, int cx, int cy, int r, int v) {
+  for (var y = cy - r; y <= cy + r; y++)
+    for (var x = cx - r; x <= cx + r; x++)
+      if (x >= 0 && y >= 0 && x < img.width && y < img.height &&
+          (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r)
+        img.setPixel(x, y, v, v, v);
+}
+
 void main() {
   test('activity peaks on dark ink blob, low on blank margin', () {
     final img = whitePage(64, 64);
@@ -54,5 +63,17 @@ void main() {
     expect(box.x + box.width, greaterThanOrEqualTo(40));
     expect(box.y + box.height, greaterThanOrEqualTo(40));
     expect(box.width, lessThan(50));
+  });
+
+  test('anchors: two blobs → weight-ordered, darker ranks first', () {
+    final img = whitePage(64, 64);
+    inkBlob(img, 16, 32, 6); // darker+higher-contrast → higher activity
+    _blob(img, 48, 32, 6, 90); // mid gray
+    final s = const SaliencyAnalyzer();
+    final act = s.activity(img, 64, 64);
+    final an = s.anchors(act, 64, 64, s.subjectBox(act, 64, 64));
+    expect(an.length, greaterThanOrEqualTo(2));
+    expect(an.first.nx, lessThan(0.5));
+    expect(an.first.weight, greaterThanOrEqualTo(an[1].weight));
   });
 }

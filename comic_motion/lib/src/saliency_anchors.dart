@@ -145,6 +145,91 @@ class SaliencyAnalyzer {
     return PixelRect(bestX, bestY, bestX1 - bestX + 1, bestY1 - bestY + 1);
   }
 
+  /// Non-maximum-suppressed focal anchors inside [subjectBox].
+  ///
+  /// Candidates are grid pixels inside [subjectBox] (given in the same
+  /// analysis-grid pixel coords as [activity]) whose value clears
+  /// `mean + stddev` of the whole grid. Selection is greedy farthest-point
+  /// NMS by descending activity with a minimum separation of
+  /// `0.12 * min(subjectBox.width, subjectBox.height)` grid pixels, up to
+  /// [maxN] anchors. `weight` is activity normalized over the candidate set
+  /// to [0, 1]. Returned anchors are sorted by weight desc; an empty
+  /// candidate set yields `[]`.
+  ///
+  /// [Anchor.nx]/[ny] are CANVAS-NORMALIZED [0,1]: analysis-grid coords
+  /// divided by the grid size [w]/[h].
+  List<Anchor> anchors(Float64List activity, int w, int h, PixelRect subjectBox,
+      {int maxN = 4}) {
+    if (w <= 0 || h <= 0 || maxN <= 0 || activity.length < w * h) return [];
+    final n = w * h;
+    var sum = 0.0, sumSq = 0.0;
+    for (var i = 0; i < n; i++) {
+      final v = activity[i];
+      sum += v;
+      sumSq += v * v;
+    }
+    final mean = sum / n;
+    final std = math.sqrt(math.max(0.0, sumSq / n - mean * mean));
+    final thr = mean + std;
+
+    final bx0 = subjectBox.x.clamp(0, w);
+    final by0 = subjectBox.y.clamp(0, h);
+    final bx1 = (subjectBox.x + subjectBox.width).clamp(0, w);
+    final by1 = (subjectBox.y + subjectBox.height).clamp(0, h);
+
+    final candidates = <int>[];
+    for (var y = by0; y < by1; y++) {
+      for (var x = bx0; x < bx1; x++) {
+        final i = y * w + x;
+        if (activity[i] >= thr) candidates.add(i);
+      }
+    }
+    if (candidates.isEmpty) return [];
+
+    var minC = double.infinity, maxC = -double.infinity;
+    for (final i in candidates) {
+      final v = activity[i];
+      if (v < minC) minC = v;
+      if (v > maxC) maxC = v;
+    }
+    final range = maxC - minC;
+
+    // Deterministic order: activity desc, scan order (index asc) on ties.
+    candidates.sort((a, b) {
+      final c = activity[b].compareTo(activity[a]);
+      return c != 0 ? c : a.compareTo(b);
+    });
+
+    final sep = 0.12 * math.min(subjectBox.width, subjectBox.height);
+    final pickedX = <int>[], pickedY = <int>[];
+    final out = <Anchor>[];
+    for (final i in candidates) {
+      if (out.length >= maxN) break;
+      final x = i % w, y = i ~/ w;
+      var tooClose = false;
+      for (var k = 0; k < pickedX.length; k++) {
+        final dx = (x - pickedX[k]).toDouble();
+        final dy = (y - pickedY[k]).toDouble();
+        if (dx * dx + dy * dy < sep * sep) {
+          tooClose = true;
+          break;
+        }
+      }
+      if (tooClose) continue;
+      pickedX.add(x);
+      pickedY.add(y);
+      final weight = range == 0 ? 1.0 : (activity[i] - minC) / range;
+      out.add(Anchor(x / w, y / h, weight));
+    }
+    // Greedy pass already visits by descending activity, so [out] is
+    // weight-desc; re-sort defensively (weight desc, then scan order).
+    out.sort((a, b) {
+      final c = b.weight.compareTo(a.weight);
+      return c != 0 ? c : (a.ny * w + a.nx).compareTo(b.ny * w + b.nx);
+    });
+    return out;
+  }
+
   // Same math as HeuristicDepthEstimator._localContrast
   // (depth_splitter.dart:128-140), adapted to sample via [lumAt].
   double _localContrast(int Function(int, int) lumAt, int x, int y, int w,
