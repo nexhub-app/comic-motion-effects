@@ -76,4 +76,16 @@ void main() {
     expect(an.first.nx, lessThan(0.5));
     expect(an.first.weight, greaterThanOrEqualTo(an[1].weight));
   });
+
+  test('analyze single-panel returns full-canvas map', () {
+    final img = whitePage(40, 40);
+    inkBlob(img, 20, 20, 5);
+    // workScale: 1.0 pins the analysis grid to the canvas size so
+    // activity.length == 40*40 exactly; with the default 0.5 the grid is
+    // downscaled per M4 (workScale bound on O(pixels) cost).
+    final m = const SaliencyAnalyzer(workScale: 1.0).analyze(img);
+    expect(m.panels.length, 1);
+    expect(m.activity.length, 40 * 40);
+    expect(m.anchors, isNotEmpty);
+  });
 }

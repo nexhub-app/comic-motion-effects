@@ -42,18 +42,37 @@ class AnchorMap {
 /// a low-absolute-value / blank page naturally falling back to a uniform
 /// particle distribution, which a global rescale would destroy (it would
 /// amplify blank-page noise to the full 0..1 range).
+///
+/// COORDINATE CONVENTION (M4). [analyze] bounds its O(pixels) cost by
+/// running on a downscaled ANALYSIS GRID: `width = max(8,
+/// (img.width * workScale).round())`, `height` likewise. In that grid's
+/// pixel coords live [AnchorMap.width]/[height], the raw `activity()`
+/// fields passed to [subjectBox]/[anchors], and [AnchorMap.subjectBox].
+/// [Anchor.nx]/[ny] and [AnchorMap.activityAt] stay CANVAS-NORMALIZED
+/// ([0,1]), so downstream consumers are resolution-independent. [panels]
+/// are full-canvas PIXEL rects, exactly as produced by `PanelSplitter.split`
+/// (same space as the input [RgbaImage]).
 class SaliencyAnalyzer {
   const SaliencyAnalyzer({this.workScale = 0.5});
   final double workScale;
 
   /// Returns a row-major `outW x outH` activity field with values in [0,1].
-  Float64List activity(RgbaImage img, int outW, int outH) {
-    final w = img.width, h = img.height;
-    final sx = w / outW, sy = h / outH;
+  Float64List activity(RgbaImage img, int outW, int outH) =>
+      _activityRegion(img, 0, 0, img.width, img.height, outW, outH);
+
+  /// [activity] restricted to the canvas-pixel region
+  /// `[x0, x1) x [y0, y1)`, sampled into its own row-major `outW x outH`
+  /// field. Smoothing stays inside the region, so panels do not bleed into
+  /// each other.
+  Float64List _activityRegion(RgbaImage img, int x0, int y0, int x1, int y1,
+      int outW, int outH) {
+    final rw = math.max(1, x1 - x0).toDouble();
+    final rh = math.max(1, y1 - y0).toDouble();
+    final sx = rw / outW, sy = rh / outH;
     final raw = Float64List(outW * outH);
     int lumAt(int x, int y) {
       final tmp = List<int>.filled(4, 0);
-      img.sampleBilinear(x * sx, y * sy, tmp);
+      img.sampleBilinear(x0 + x * sx, y0 + y * sy, tmp);
       return (0.299 * tmp[0] + 0.587 * tmp[1] + 0.114 * tmp[2]).round();
     }
     for (var y = 0; y < outH; y++) {
@@ -62,7 +81,7 @@ class SaliencyAnalyzer {
         final ink = 1.0 - lum / 255.0;
         final contrast = _localContrast(lumAt, x, y, outW, outH);
         final tmp = List<int>.filled(4, 0);
-        img.sampleBilinear(x * sx, y * sy, tmp);
+        img.sampleBilinear(x0 + x * sx, y0 + y * sy, tmp);
         final sat = _saturation(tmp[0], tmp[1], tmp[2]);
         final skin = _skinness(tmp[0], tmp[1], tmp[2]);
         raw[y * outW + x] =
@@ -228,6 +247,70 @@ class SaliencyAnalyzer {
       return c != 0 ? c : (a.ny * w + a.nx).compareTo(b.ny * w + b.nx);
     });
     return out;
+  }
+
+  /// Full-page entry point composing [activity], [subjectBox] and [anchors]
+  /// (tasks 1.1-1.3) into one [AnchorMap].
+  ///
+  /// The analysis runs on the downscaled grid described in the class doc
+  /// (M4): `max(8, (img.width * workScale).round())` across. When [panels]
+  /// is null or a single panel the whole canvas is analyzed at once; with
+  /// several canvas-pixel panel rects each panel's activity/subjectBox/
+  /// anchors are computed on its own sub-grid (no blur bleeding across gutters)
+  /// and merged into one canvas-wide normalized activity field, with anchors
+  /// remapped to canvas-normalized coords and [AnchorMap.subjectBox] set to
+  /// the union of the per-panel boxes (grid coords). [AnchorMap.panels]
+  /// stores the input [panels] as given.
+  AnchorMap analyze(RgbaImage img, {List<PixelRect>? panels}) {
+    final aw = math.max(8, (img.width * workScale).round());
+    final ah = math.max(8, (img.height * workScale).round());
+    if (panels == null || panels.length <= 1) {
+      final act = activity(img, aw, ah);
+      final box = subjectBox(act, aw, ah);
+      return AnchorMap(aw, ah, act, box, anchors(act, aw, ah, box),
+          [PixelRect(0, 0, img.width, img.height)]);
+    }
+
+    final merged = Float64List(aw * ah);
+    final allAnchors = <Anchor>[];
+    var ux0 = aw, uy0 = ah, ux1 = -1, uy1 = -1;
+    for (final p in panels) {
+      final px0 = p.x.clamp(0, img.width);
+      final px1 = (p.x + p.width).clamp(0, img.width);
+      final py0 = p.y.clamp(0, img.height);
+      final py1 = (p.y + p.height).clamp(0, img.height);
+      if (px1 <= px0 || py1 <= py0) continue;
+      final gx0 = (px0 * aw / img.width).round().clamp(0, aw);
+      final gx1 = (px1 * aw / img.width).round().clamp(0, aw);
+      final gy0 = (py0 * ah / img.height).round().clamp(0, ah);
+      final gy1 = (py1 * ah / img.height).round().clamp(0, ah);
+      if (gx1 <= gx0 || gy1 <= gy0) continue;
+      final pw = gx1 - gx0, ph = gy1 - gy0;
+      final sub = _activityRegion(img, px0, py0, px1, py1, pw, ph);
+      for (var y = 0; y < ph; y++) {
+        merged.setRange(
+            (gy0 + y) * aw + gx0, (gy0 + y) * aw + gx0 + pw, sub, y * pw);
+      }
+      final localBox = subjectBox(sub, pw, ph);
+      final bx0 = (gx0 + localBox.x).clamp(0, aw);
+      final by0 = (gy0 + localBox.y).clamp(0, ah);
+      final bx1 = (gx0 + localBox.x + localBox.width - 1).clamp(0, aw - 1);
+      final by1 = (gy0 + localBox.y + localBox.height - 1).clamp(0, ah - 1);
+      if (bx0 < ux0) ux0 = bx0;
+      if (by0 < uy0) uy0 = by0;
+      if (bx1 > ux1) ux1 = bx1;
+      if (by1 > uy1) uy1 = by1;
+      for (final a in anchors(sub, pw, ph, localBox)) {
+        allAnchors.add(
+            Anchor((gx0 + a.nx * pw) / aw, (gy0 + a.ny * ph) / ah, a.weight));
+      }
+    }
+    allAnchors.sort((a, b) => b.weight.compareTo(a.weight));
+    final box = ux1 < 0
+        ? PixelRect(0, 0, aw, ah)
+        : PixelRect(ux0, uy0, ux1 - ux0 + 1, uy1 - uy0 + 1);
+    return AnchorMap(aw, ah, merged, box, allAnchors,
+        List<PixelRect>.unmodifiable(panels));
   }
 
   // Same math as HeuristicDepthEstimator._localContrast
