@@ -27,6 +27,40 @@ void main() {
       expect(a.configHash, isNot(c.configHash));
     });
 
+    test('new louder defaults', () {
+      // §6.1 新默认：ctor 与 fromJson ?? fallback 必须成对一致（R14）。
+      expect(ParallaxParams().amplitude, 0.030);
+      expect(BreathingParams().amplitude, 0.012);
+      expect(MangaShakeParams().amplitude, 0.018);
+      expect(HeartbeatParams().intensity, 0.020);
+      expect(SlowPushParams().pushFrac, 0.060);
+      expect(AmbientParams().opacity, 0.22);
+
+      // fallback-vs-ctor 守卫：只改 ctor 不改 fromJson fallback 时这里会红。
+      expect(ParallaxParams.fromJson(const {}).amplitude,
+          ParallaxParams().amplitude);
+      expect(BreathingParams.fromJson(const {}).amplitude,
+          BreathingParams().amplitude);
+      expect(MangaShakeParams.fromJson(const {}).amplitude,
+          MangaShakeParams().amplitude);
+      expect(
+          HeartbeatParams.fromJson(const {}).intensity,
+          HeartbeatParams().intensity);
+      expect(SlowPushParams.fromJson(const {}).pushFrac,
+          SlowPushParams().pushFrac);
+      expect(
+          AmbientParams.fromJson(const {}).opacity, AmbientParams().opacity);
+
+      // 顶层默认 config 透传新默认。
+      final cfg = EffectConfig();
+      expect(cfg.parallax.amplitude, ParallaxParams().amplitude);
+      expect(cfg.breathing.amplitude, BreathingParams().amplitude);
+      expect(cfg.mangaShake.amplitude, MangaShakeParams().amplitude);
+      expect(cfg.heartbeat.intensity, HeartbeatParams().intensity);
+      expect(cfg.slowPush.pushFrac, SlowPushParams().pushFrac);
+      expect(cfg.ambient.opacity, AmbientParams().opacity);
+    });
+
     test('坏 JSON 文件抛 ConfigException', () {
       final f = File('.openclaw/tmp/bad_config.json')
         ..createSync(recursive: true)

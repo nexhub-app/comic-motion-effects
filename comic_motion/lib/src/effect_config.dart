@@ -67,7 +67,7 @@ enum OutputFormat { gif, frames, both, apng }
 
 class ParallaxParams {
   const ParallaxParams({
-    this.amplitude = 0.012,
+    this.amplitude = 0.030,
     this.periodSec = 6.0,
     this.directionDeg = 0.0,
     this.verticalRatio = 0.35,
@@ -86,7 +86,7 @@ class ParallaxParams {
       };
 
   static ParallaxParams fromJson(Map<String, dynamic> j) => ParallaxParams(
-        amplitude: (j['amplitude'] as num?)?.toDouble() ?? 0.012,
+        amplitude: (j['amplitude'] as num?)?.toDouble() ?? 0.030,
         periodSec: (j['periodSec'] as num?)?.toDouble() ?? 6.0,
         directionDeg: (j['directionDeg'] as num?)?.toDouble() ?? 0.0,
         verticalRatio: (j['verticalRatio'] as num?)?.toDouble() ?? 0.35,
@@ -105,7 +105,7 @@ class ParallaxParams {
 class BreathingParams {
   const BreathingParams({
     this.enabled = true,
-    this.amplitude = 0.006,
+    this.amplitude = 0.012,
     this.periodSec = 4.0,
     this.anchor = 'center',
   });
@@ -124,7 +124,7 @@ class BreathingParams {
 
   static BreathingParams fromJson(Map<String, dynamic> j) => BreathingParams(
         enabled: j['enabled'] as bool? ?? true,
-        amplitude: (j['amplitude'] as num?)?.toDouble() ?? 0.006,
+        amplitude: (j['amplitude'] as num?)?.toDouble() ?? 0.012,
         periodSec: (j['periodSec'] as num?)?.toDouble() ?? 4.0,
         anchor: (j['anchor'] as String?) ?? 'center',
       );
@@ -135,7 +135,7 @@ class AmbientParams {
     this.enabled = true,
     this.particleCount = 40,
     this.speed = 12.0,
-    this.opacity = 0.16,
+    this.opacity = 0.22,
     this.mode = 'dust',
   });
 
@@ -157,7 +157,7 @@ class AmbientParams {
         enabled: j['enabled'] as bool? ?? true,
         particleCount: (j['particleCount'] as num?)?.toInt() ?? 40,
         speed: (j['speed'] as num?)?.toDouble() ?? 12.0,
-        opacity: (j['opacity'] as num?)?.toDouble() ?? 0.16,
+        opacity: (j['opacity'] as num?)?.toDouble() ?? 0.22,
         mode: (j['mode'] as String?) ?? 'dust',
       );
 }
@@ -412,7 +412,7 @@ class ImpactFlashParams {
 class HeartbeatParams {
   const HeartbeatParams({
     this.beats = 3,
-    this.intensity = 0.01,
+    this.intensity = 0.02,
     this.doubleBeat = true,
   });
 
@@ -428,7 +428,7 @@ class HeartbeatParams {
 
   static HeartbeatParams fromJson(Map<String, dynamic> j) => HeartbeatParams(
         beats: (j['beats'] as num?)?.toInt() ?? 3,
-        intensity: (j['intensity'] as num?)?.toDouble() ?? 0.01,
+        intensity: (j['intensity'] as num?)?.toDouble() ?? 0.02,
         doubleBeat: j['doubleBeat'] as bool? ?? true,
       );
 }
@@ -589,11 +589,11 @@ class StarlightParams {
 
 class SlowPushParams {
   const SlowPushParams({
-    this.pushFrac = 0.035,
+    this.pushFrac = 0.060,
     this.cycles = 1,
   });
 
-  final double pushFrac; // 每循环推近比例（0.005-0.08）
+  final double pushFrac; // 每循环推近比例（0.002-0.15）
   final int cycles; // ≥1（整数次往返保证无缝；1=单向推近需配往返）
 
   Map<String, dynamic> toJson() => {
@@ -602,7 +602,7 @@ class SlowPushParams {
       };
 
   static SlowPushParams fromJson(Map<String, dynamic> j) => SlowPushParams(
-        pushFrac: (j['pushFrac'] as num?)?.toDouble() ?? 0.035,
+        pushFrac: (j['pushFrac'] as num?)?.toDouble() ?? 0.060,
         cycles: (j['cycles'] as num?)?.toInt() ?? 1,
       );
 }
@@ -736,7 +736,7 @@ class ScreenToneParams {
 class MangaShakeParams {
   const MangaShakeParams({
     this.shakes = 6,
-    this.amplitude = 0.006,
+    this.amplitude = 0.018,
     this.decay = 0.72,
     this.rotJitDeg = 0.12,
   });
@@ -755,7 +755,7 @@ class MangaShakeParams {
 
   static MangaShakeParams fromJson(Map<String, dynamic> j) => MangaShakeParams(
         shakes: (j['shakes'] as num?)?.toInt() ?? 6,
-        amplitude: (j['amplitude'] as num?)?.toDouble() ?? 0.006,
+        amplitude: (j['amplitude'] as num?)?.toDouble() ?? 0.018,
         decay: (j['decay'] as num?)?.toDouble() ?? 0.72,
         rotJitDeg: (j['rotJitDeg'] as num?)?.toDouble() ?? 0.12,
       );

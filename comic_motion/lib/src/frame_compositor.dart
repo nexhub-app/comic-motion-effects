@@ -484,7 +484,7 @@ class FrameCompositor {
     final k = pos.floor().clamp(0, bursts.length - 1);
     final ph = pos - k;
     final env = math.pow(1.0 - ph, p.decay.clamp(0.05, 3.0) * 2).toDouble();
-    final amp = p.amplitude.clamp(0.0, 0.05) *
+    final amp = p.amplitude.clamp(0.0, 0.12) *
         w *
         env *
         math.sin(2 * math.pi * _shakeRattle * pos);
@@ -1420,7 +1420,7 @@ class FrameCompositor {
     if (p.doubleBeat) {
       beat += 0.55 * math.exp(-math.pow((ph - 0.32) / 0.075, 2) * 1.0);
     }
-    return 1.0 + p.intensity.clamp(0.0, 0.05) * beat;
+    return 1.0 + p.intensity.clamp(0.0, 0.10) * beat;
   }
 
   /// 缓慢推镜：每循环 pushFrac 的推近-拉回（往返整数周期保证无缝）。
@@ -1429,7 +1429,7 @@ class FrameCompositor {
     final u = _loopU(tSec);
     final cyc = p.cycles.clamp(1, 4);
     final wv = math.sin(2 * math.pi * cyc * u - math.pi / 2); // -1→1→-1
-    return 1.0 + p.pushFrac.clamp(0.002, 0.08) * (wv * 0.5 + 0.5); // 0→1→0
+    return 1.0 + p.pushFrac.clamp(0.002, 0.15) * (wv * 0.5 + 0.5); // 0→1→0
   }
 
   /// 流雾：大半透明雾团横向缓移 + 浓淡起伏。
