@@ -152,7 +152,7 @@ const List<ParamSpec> kRenderParamSpecs = [
     min: 0,
     max: 0.1,
     strictRange: false,
-    defaultValue: 0.012,
+    defaultValue: 0.030,
     mapsTo: 'parallax.amplitude',
     description: '视差最大位移幅度（占图宽比例）；越界由渲染 clamp',
   ),
