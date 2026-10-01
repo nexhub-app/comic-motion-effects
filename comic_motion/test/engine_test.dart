@@ -2104,6 +2104,155 @@ void main() {
     });
   });
 
+  group('v1.4 Task 3.2：相邻深度层反相视差（层间相对位移可见）', () {
+    // 合成场景走真实包管线：DepthMap → LayerSplitter(layerCount:3) →
+    // FrameCompositor.renderFrame。三个深度带（远/中/近）各有一根同列同宽、
+    // 异色的竖条，条中心恰在缩放枢轴（w/2）上——cover 放大只作用在枢轴两侧
+    // 对称位置，质心位移即该层的水平视差位移本身。
+    // 判别逻辑：峰值帧 t=period/4（sin(π/2+li·π) = +1/−1/+1）下相邻层必须
+    // 反向摆动；旧相位 li*0.35（sin(π/2+{0,0.35,0.7}) = 1/0.939/0.765 同号）
+    // 三层同向，本组的反号断言在旧代码下必红，这正是判别式。
+    const w = 300, h = 300;
+    const amp = 0.1; // 峰值位移满幅 = amp*w = 30px（far 7.5 / mid 15 / near 22.5）
+    const period = 3.0;
+
+    RgbaImage bandBarScene() {
+      final img = RgbaImage(width: w, height: h);
+      for (var y = 0; y < h; y++) {
+        final g = y < 126 ? 210 : (y < 210 ? 200 : 190);
+        for (var x = 0; x < w; x++) {
+          img.setPixel(x, y, g, g, g);
+        }
+      }
+      for (var y = 84; y < 116; y++) {
+        for (var x = 134; x < 166; x++) {
+          img.setPixel(x, y, 235, 25, 35); // far 层红条
+        }
+      }
+      for (var y = 180; y < 210; y++) {
+        for (var x = 134; x < 166; x++) {
+          img.setPixel(x, y, 30, 200, 60); // mid 层绿条
+        }
+      }
+      for (var y = 240; y < 290; y++) {
+        for (var x = 134; x < 166; x++) {
+          img.setPixel(x, y, 40, 70, 235); // near 层蓝条
+        }
+      }
+      return img;
+    }
+
+    // 深度场按行分带：far(0..125)=0.05、mid(126..209)=0.45、
+    // near(210..299) 梯度 0.85..1.0。带占比 42%/28%/30% 使
+    // t1=max(q(0.35),0.30)=0.30、t2=q(0.72)≈0.86 都落在带间空隙，
+    // 三层在各自扫描行上全不透明（legacy 档掩码）。
+    DepthMap bandDepth() {
+      final dm = DepthMap(w, h);
+      for (var y = 0; y < h; y++) {
+        final d = y < 126
+            ? 0.05
+            : (y < 210 ? 0.45 : 0.85 + 0.15 * (y - 210) / 89);
+        for (var x = 0; x < w; x++) {
+          dm.set(x, y, d);
+        }
+      }
+      return dm;
+    }
+
+    // 扫描行上命中色条谓词的质心列（灰底 r==g==b，任何主色谓词恒不命中）。
+    double barCentroid(
+        RgbaImage f, int row, bool Function(int r, int g, int b) hit) {
+      var sum = 0, n = 0;
+      for (var x = 0; x < w; x++) {
+        final o = (row * w + x) * 4;
+        if (hit(f.data[o], f.data[o + 1], f.data[o + 2])) {
+          sum += x;
+          n++;
+        }
+      }
+      expect(n, greaterThan(0), reason: 'row=$row 应能定位色条');
+      return sum / n;
+    }
+
+    bool isRed(int r, int g, int b) => r > 150 && g < 90 && b < 90;
+    bool isGreen(int r, int g, int b) => g > 150 && r < 90 && b < 90;
+    bool isBlue(int r, int g, int b) => b > 150 && r < 90 && g < 120;
+
+    final cfg = EffectConfig(
+      effects: [EffectKind.parallax],
+      fps: 8,
+      durationSec: period,
+      parallax: ParallaxParams(amplitude: amp, periodSec: period),
+    );
+    final img = bandBarScene();
+    final layers = LayerSplitter(layerCount: 3).split(img, bandDepth());
+
+    test('峰值帧相邻层反向摆动：far/mid/near 质心位移反号且相对位移翻倍', () {
+      final comp = FrameCompositor(layers, img, cfg);
+      final base = comp.renderFrame(0.0); // phase=0：位移为 0 的基线
+      final peak = comp.renderFrame(period / 4); // phase=π/2：正弦峰值
+
+      final dFar = barCentroid(peak, 100, isRed) - barCentroid(base, 100, isRed);
+      final dMid =
+          barCentroid(peak, 195, isGreen) - barCentroid(base, 195, isGreen);
+      final dNear =
+          barCentroid(peak, 270, isBlue) - barCentroid(base, 270, isBlue);
+
+      // 每层都真实移动（远超质心量化噪声）。
+      expect(dFar.abs(), greaterThan(4.0), reason: 'far 层应有 ~7.5px 位移');
+      expect(dMid.abs(), greaterThan(8.0), reason: 'mid 层应有 ~15px 位移');
+      expect(dNear.abs(), greaterThan(14.0), reason: 'near 层应有 ~22.5px 位移');
+
+      // 判别式：相邻层反相 → 位移反号。旧 li*0.35 相位下峰值帧三层同向
+      //（sin(π/2+0.35)=0.939、sin(π/2+0.7)=0.765，与 sin(π/2)=1 同号），
+      // 本断言在旧代码下必红——这正是相对判别式。
+      expect(dFar.sign, -dMid.sign, reason: 'far 与 mid 应反向摆动');
+      expect(dMid.sign, -dNear.sign, reason: 'mid 与 near 应反向摆动');
+
+      // 相邻层相对位移：反相 = (m0+m1)·ampW（理论 0.75·ampW / 1.25·ampW），
+      // 同相（旧）上限 ≈ |m0−m1·cos(0.35)|·ampW = 0.22·ampW、
+      // |m1·cos(0.35)−m2·cos(0.7)|·ampW ≈ 0.10·ampW → 断言 ≥2× 旧值，
+      // 即规格 §6.1「相邻层 phase+π，相对位移翻倍可见」。
+      final ampW = amp * w;
+      expect((dFar - dMid).abs(), greaterThanOrEqualTo(0.44 * ampW));
+      expect((dMid - dNear).abs(), greaterThanOrEqualTo(0.22 * ampW));
+      // 反相近似完美：相对位移 ≈ 两位移绝对值之和（同相时 ≈ 之差）。
+      expect((dFar - dMid).abs(),
+          greaterThan(0.85 * (dFar.abs() + dMid.abs())));
+      expect((dMid - dNear).abs(),
+          greaterThan(0.85 * (dMid.abs() + dNear.abs())));
+    });
+
+    test('反相仍确定性：同配置两次渲染同帧逐字节一致', () {
+      final c1 = FrameCompositor(layers, img, cfg);
+      final c2 = FrameCompositor(layers, img, cfg);
+      expect(c1.renderFrame(period / 4).data, c2.renderFrame(period / 4).data);
+    });
+
+    test('反相不破坏无缝循环：t=0 与 t=periodSec 首尾帧逐字节一致', () {
+      final comp = FrameCompositor(layers, img, cfg);
+      expect(
+        comp.renderFrame(0.0).data,
+        comp.renderFrame(period).data,
+        reason: 'li·π 是常数相位偏置，整周期后 sin 相位回到起点',
+      );
+    });
+
+    test('交互式视差覆盖契约不变：phase=0 与无 parallax 逐字节一致', () {
+      // 本任务只改时间驱动 else 分支；parallaxOverride 分支的 phase=0
+      // 零位移字节锁定必须保持绿色。
+      final noP = FrameCompositor(layers, img, EffectConfig(
+        effects: const [],
+        fps: 8,
+        durationSec: period,
+      ));
+      final ref = noP.renderFrame(0.0);
+      final comp = FrameCompositor(layers, img, cfg);
+      comp.parallaxOverride = const ParallaxOverride(phaseX: 0.0, phaseY: 0.0);
+      expect(comp.renderFrame(0.0).data, ref.data);
+    });
+  });
+
   group('v1.2 新增动效', () {
     const v12Kinds = [
       EffectKind.fog,

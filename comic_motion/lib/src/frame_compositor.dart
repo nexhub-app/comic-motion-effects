@@ -926,8 +926,11 @@ class FrameCompositor {
         } else {
           final ampPx = config.parallax.amplitude * _env.motion * w * _mult[li];
           final phase = 2 * math.pi * tSec / config.parallax.periodSec;
-          dx += math.sin(phase + li * 0.35) * ampPx * dxDir;
-          dy += math.sin(phase * 0.8 + li * 0.5 + 0.9) *
+          // v1.4 硬张力（规格 §6.1）：相邻深度层反相（相位步进 li·π），
+          // 奇数层与偶数层反向摆动，相邻层相对位移翻倍且肉眼可见；
+          // 旧 li*0.35 同向微差在摆幅内互相对销，看不出纵深。
+          dx += math.sin(phase + li * math.pi) * ampPx * dxDir;
+          dy += math.sin(phase * 0.8 + li * math.pi + 0.9) *
               ampPx *
               config.parallax.verticalRatio *
               dyDir;
