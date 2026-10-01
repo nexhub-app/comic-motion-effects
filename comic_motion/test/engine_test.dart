@@ -2251,6 +2251,108 @@ void main() {
       comp.parallaxOverride = const ParallaxOverride(phaseX: 0.0, phaseY: 0.0);
       expect(comp.renderFrame(0.0).data, ref.data);
     });
+
+    // 列质心：在固定列上向下扫描、命中色条谓词的 y 均值（barCentroid 的
+    // 纵向对偶，用于测竖向位移）。灰底 r==g==b 恒不命中任何主色谓词。
+    double barCentroidCol(
+        RgbaImage f, int col, bool Function(int r, int g, int b) hit) {
+      var sum = 0, n = 0;
+      for (var y = 0; y < h; y++) {
+        final o = (y * w + col) * 4;
+        if (hit(f.data[o], f.data[o + 1], f.data[o + 2])) {
+          sum += y;
+          n++;
+        }
+      }
+      expect(n, greaterThan(0), reason: 'col=$col 应能定位色条');
+      return sum / n;
+    }
+
+    test('竖向判别式：directionDeg=90 下相邻层竖向反向摆动（dy 项被激活）', () {
+      // directionDeg=90 → dyDir=sin(π/2)=1、dxDir=cos(π/2)≈0：层位移纯竖向，
+      // 这才真正触达 frame_compositor.dart:933 的 dy 反相项（默认 0 时 dyDir=0，
+      // dy 项恒 0、从不被本组水平用例覆盖）。
+      final cfgV = EffectConfig(
+        effects: [EffectKind.parallax],
+        fps: 8,
+        durationSec: period,
+        parallax:
+            ParallaxParams(amplitude: amp, periodSec: period, directionDeg: 90),
+      );
+      const col = 150; // 三根色条同列，均在缩放枢轴所在列上
+      final compV = FrameCompositor(layers, img, cfgV);
+      // dy 项带 +0.9 常数相位偏置，renderFrame(0) 的竖向位移并非 0
+      // （sin(li·π+0.9)≠0），故不能拿 t=0 帧当「无位移」基线。取一对竖向反相
+      // 极值帧之差来隔离每层的竖向摆动：峰值帧 period/4 与其竖向反相点
+      // （竖向基底 0.8·2π/loop，半竖周期 = period/1.6，两处 sin 因子恰好反号）。
+      final tLo = period / 4;
+      final tHi = period / 4 + period / 1.6;
+      final a = compV.renderFrame(tLo);
+      final b = compV.renderFrame(tHi);
+      final dFar =
+          barCentroidCol(b, col, isRed) - barCentroidCol(a, col, isRed);
+      final dMid =
+          barCentroidCol(b, col, isGreen) - barCentroidCol(a, col, isGreen);
+      final dNear =
+          barCentroidCol(b, col, isBlue) - barCentroidCol(a, col, isBlue);
+
+      // 每层都发生可见竖向摆动（远超质心量化噪声）。
+      expect(dFar.abs(), greaterThan(3.0), reason: 'far 层应有竖向位移');
+      expect(dMid.abs(), greaterThan(3.0), reason: 'mid 层应有竖向位移');
+      expect(dNear.abs(), greaterThan(3.0), reason: 'near 层应有竖向位移');
+
+      // 判别式：新 li·π 反相在两个反相极值帧下 dy 因子恒满足
+      // sin(u+li·π+0.9) 与 sin(u+π+li·π+0.9)=−sin(u+li·π+0.9)，且奇偶层反号
+      // → 相邻层竖向摆动方向相反（far/mid 反、mid/near 反）。旧 li·0.5 在
+      // tLo 因子 sin(0.4π+li·0.5+0.9)≈{+0.835,+0.467,−0.015}：far 与 mid 同号，
+      // 反相极值相减后 far、mid 位移差仍同号 → 本反号断言在旧代码下必红（真判别式）。
+      expect(dFar.sign, -dMid.sign, reason: 'far 与 mid 应竖向反向摆动');
+      expect(dMid.sign, -dNear.sign, reason: 'mid 与 near 应竖向反向摆动');
+
+      // 相邻层竖向相对分离 ≈ 两位移绝对值之和（反相特征，同相仅为之差），
+      // 与水平判别式同一「超出同相基线」的表达。
+      expect((dFar - dMid).abs(), greaterThan(0.85 * (dFar.abs() + dMid.abs())));
+      expect((dMid - dNear).abs(),
+          greaterThan(0.85 * (dMid.abs() + dNear.abs())));
+      // 注：不在此断言竖向无缝 f(0)==f(period)——phase*0.8 基底每循环推进
+      // 1.6π，dyDir≠0 时竖向本就不整周期闭合（既有性质，超出本任务范围）。
+    });
+
+    test('标准档同款判别式：standard 层相邻层水平反向摆动（Task 3.6 默认档）', () {
+      // 与首个水平判别式同场景、同断言，仅把渲染档切到 standard，
+      // 使反相性质在 Task 3.6 将要设为默认的档位上也被锁住。
+      final cfgStd = EffectConfig(
+        effects: [EffectKind.parallax],
+        fps: 8,
+        durationSec: period,
+        parallax: ParallaxParams(amplitude: amp, periodSec: period),
+        quality: QualityParams(tier: RenderTier.standard),
+      );
+      final comp = FrameCompositor(layers, img, cfgStd);
+      final base = comp.renderFrame(0.0);
+      final peak = comp.renderFrame(period / 4);
+
+      final dFar = barCentroid(peak, 100, isRed) - barCentroid(base, 100, isRed);
+      final dMid =
+          barCentroid(peak, 195, isGreen) - barCentroid(base, 195, isGreen);
+      final dNear =
+          barCentroid(peak, 270, isBlue) - barCentroid(base, 270, isBlue);
+
+      expect(dFar.abs(), greaterThan(4.0));
+      expect(dMid.abs(), greaterThan(8.0));
+      expect(dNear.abs(), greaterThan(14.0));
+
+      expect(dFar.sign, -dMid.sign, reason: 'far 与 mid 应反向摆动');
+      expect(dMid.sign, -dNear.sign, reason: 'mid 与 near 应反向摆动');
+
+      final ampW = amp * w;
+      expect((dFar - dMid).abs(), greaterThanOrEqualTo(0.44 * ampW));
+      expect((dMid - dNear).abs(), greaterThanOrEqualTo(0.22 * ampW));
+      expect((dFar - dMid).abs(),
+          greaterThan(0.85 * (dFar.abs() + dMid.abs())));
+      expect((dMid - dNear).abs(),
+          greaterThan(0.85 * (dMid.abs() + dNear.abs())));
+    });
   });
 
   group('v1.2 新增动效', () {
