@@ -111,7 +111,7 @@ class BreathingParams {
   });
 
   final bool enabled;
-  final double amplitude; // max scale deviation (e.g. 0.006 => 1.006 zoom)
+  final double amplitude; // max scale deviation (e.g. 0.012 => 1.012 zoom)
   final double periodSec;
   final String anchor; // center | top | bottom
 
