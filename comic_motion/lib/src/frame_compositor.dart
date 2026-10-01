@@ -499,23 +499,7 @@ class FrameCompositor {
   /// 效果放置消费。
   AnchorMap? get anchors => _anchors;
 
-  // ---- Task 2.1：内容感知焦点解析（规格 §A，R4 权威）----
-  //
-  // 触发规则（不做任何 serialize、不新增字段）：仅当
-  //   contentAware 开 && 携带非空 anchor map && 调用方未把 focal 显式挪离
-  //   默认值 && map.anchors 非空
-  // 时，汇聚点取权重最高的 anchor（canvas 归一 [0,1]）；否则**完全等价旧
-  // 行为**：返回 params.focalX/focalY。默认关闭、callerPinned、空 anchor
-  // 三种情况都逐字节回到旧路径（contentAware off 的既有 focusLines/impactRings
-  // 测试即回归网）。整幅单一焦点；分格内焦点留给 Task 2.3。
-  //
-  // 默认字面量与 `effect_config.dart`（focusLines:644-645 / impactRings:768-769）
-  // 精确同步，比较用 == 同值。逐帧纯函数，不含 RNG，确定性天然保持。
-  static const double _focusLinesDefaultFx = 0.5;
-  static const double _focusLinesDefaultFy = 0.45;
-  static const double _impactRingsDefaultFx = 0.5;
-  static const double _impactRingsDefaultFy = 0.5;
-
+  // ---- Task 2.1：内容感知焦点解析（规格 §A：焦点取 anchors.first，显式非默认 focal 覆盖）----
   ({double fx, double fy}) _contentAwareFocal({
     required double paramFx,
     required double paramFy,
@@ -525,7 +509,7 @@ class FrameCompositor {
     final map = _anchors;
     final a = map?.anchors;
     final callerPinned =
-        (paramFx != defaultFx) || (paramFy != defaultFy); // 同字面量精确比较
+        (paramFx != defaultFx) || (paramFy != defaultFy); // 与规范默认值精确比较
     if (config.contentAware &&
         map != null &&
         !callerPinned &&
@@ -542,8 +526,8 @@ class FrameCompositor {
     return _contentAwareFocal(
       paramFx: p.focalX,
       paramFy: p.focalY,
-      defaultFx: _focusLinesDefaultFx,
-      defaultFy: _focusLinesDefaultFy,
+      defaultFx: const FocusLinesParams().focalX,
+      defaultFy: const FocusLinesParams().focalY,
     );
   }
 
@@ -553,8 +537,8 @@ class FrameCompositor {
     return _contentAwareFocal(
       paramFx: p.focalX,
       paramFy: p.focalY,
-      defaultFx: _impactRingsDefaultFx,
-      defaultFy: _impactRingsDefaultFy,
+      defaultFx: const ImpactRingsParams().focalX,
+      defaultFy: const ImpactRingsParams().focalY,
     );
   }
 
