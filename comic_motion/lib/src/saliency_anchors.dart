@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'apng_writer.dart' show PixelRect;
@@ -21,7 +22,11 @@ class AnchorMap {
   final List<PixelRect> panels;
 
   /// Bilinear-free lookup of the activity field at normalized coords.
+  ///
+  /// Defensive: an empty grid (width or height 0) returns 0.0 rather than
+  /// throwing on the clamp bounds.
   double activityAt(double nx, double ny) {
+    if (width == 0 || height == 0) return 0.0;
     final x = (nx * (width - 1)).round().clamp(0, width - 1);
     final y = (ny * (height - 1)).round().clamp(0, height - 1);
     return activity[y * width + x];
@@ -76,6 +81,68 @@ class SaliencyAnalyzer {
       out[i] = smoothed[i].clamp(0.0, 1.0);
     }
     return out;
+  }
+
+  /// Bounding rect of the largest 4-connected component of pixels whose
+  /// activity clears `mean + 0.5 * stddev` of the whole [activity] grid.
+  ///
+  /// Coordinates are ANALYSIS-GRID pixels (not normalized): [w]/[h] are the
+  /// grid dimensions the [activity] field was produced at. Scan order is
+  /// deterministic (top-left to bottom-right, row-major); the largest
+  /// component wins, first found wins on size ties. If no pixel clears the
+  /// threshold the full-canvas rect `PixelRect(0, 0, w, h)` is returned.
+  PixelRect subjectBox(Float64List activity, int w, int h) {
+    if (w <= 0 || h <= 0 || activity.length < w * h) {
+      return PixelRect(0, 0, math.max(0, w), math.max(0, h));
+    }
+    final n = w * h;
+    var sum = 0.0, sumSq = 0.0;
+    for (var i = 0; i < n; i++) {
+      final v = activity[i];
+      sum += v;
+      sumSq += v * v;
+    }
+    final mean = sum / n;
+    final std = math.sqrt(math.max(0.0, sumSq / n - mean * mean));
+    final thr = mean + 0.5 * std;
+
+    final visited = Uint8List(n);
+    final stack = Int32List(n); // iterative flood fill, no recursion
+    var bestX = 0, bestY = 0, bestX1 = -1, bestY1 = -1, bestSize = 0;
+    for (var seed = 0; seed < n; seed++) {
+      if (visited[seed] != 0 || activity[seed] < thr) continue;
+      var top = 0;
+      stack[top++] = seed;
+      visited[seed] = 1;
+      var minX = w, minY = h, maxX = -1, maxY = -1, size = 0;
+      while (top > 0) {
+        final p = stack[--top];
+        final px = p % w, py = p ~/ w;
+        if (px < minX) minX = px;
+        if (px > maxX) maxX = px;
+        if (py < minY) minY = py;
+        if (py > maxY) maxY = py;
+        size++;
+        for (var d = 0; d < 4; d++) {
+          final qx = px + (d == 0 ? -1 : d == 1 ? 1 : 0);
+          final qy = py + (d == 2 ? -1 : d == 3 ? 1 : 0);
+          if (qx < 0 || qy < 0 || qx >= w || qy >= h) continue;
+          final q = qy * w + qx;
+          if (visited[q] != 0 || activity[q] < thr) continue;
+          visited[q] = 1;
+          stack[top++] = q;
+        }
+      }
+      if (size > bestSize) {
+        bestSize = size;
+        bestX = minX;
+        bestY = minY;
+        bestX1 = maxX;
+        bestY1 = maxY;
+      }
+    }
+    if (bestSize == 0) return PixelRect(0, 0, w, h);
+    return PixelRect(bestX, bestY, bestX1 - bestX + 1, bestY1 - bestY + 1);
   }
 
   // Same math as HeuristicDepthEstimator._localContrast

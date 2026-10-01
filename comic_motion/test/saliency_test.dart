@@ -43,4 +43,16 @@ void main() {
     final maxV = a.reduce((x, y) => x > y ? x : y);
     expect(maxV, lessThan(0.05));
   });
+
+  test('subjectBox encloses the dark blob only', () {
+    final img = whitePage(64, 64);
+    inkBlob(img, 32, 32, 8);
+    final s = const SaliencyAnalyzer();
+    final box = s.subjectBox(s.activity(img, 64, 64), 64, 64);
+    expect(box.x, lessThanOrEqualTo(25));
+    expect(box.y, lessThanOrEqualTo(25));
+    expect(box.x + box.width, greaterThanOrEqualTo(40));
+    expect(box.y + box.height, greaterThanOrEqualTo(40));
+    expect(box.width, lessThan(50));
+  });
 }
