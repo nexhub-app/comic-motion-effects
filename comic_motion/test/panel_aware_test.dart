@@ -309,6 +309,67 @@ void main() {
           bucket[panels.indexOf(areaDesc.last)]));
     });
 
+    // 面积悬殊（约 3.67:1）的两格：验证播种严格按面积比而非均分。
+    // 手搭不等格（splitter 对 twoPanelRaster 只会给出近等大格），
+    // 直接用两个不等面积的 clip 派生 panel；total=10。
+    test('count∝area 判別：面积悬殊时较大格严格过半（非均分，且余数归最大格）', () {
+      final cfg = EffectConfig.fromJson(<String, dynamic>{
+        'effects': ['parallax', 'snow'],
+        'fps': 24,
+        'durationSec': 2.0,
+        'maxDimension': 200,
+        'outputFormat': 'gif',
+        'seed': 11,
+        'panelAware': true,
+        'snow': {'count': 10},
+      });
+      final working = RgbaImage(width: 200, height: 300)
+        ..data.fillRange(0, 200 * 300 * 4, 255);
+      final la = RgbaImage(width: 200, height: 300)
+        ..data.fillRange(0, 200 * 300 * 4, 255);
+      final lb = RgbaImage(width: 200, height: 300)
+        ..data.fillRange(0, 200 * 300 * 4, 255);
+      // 上大格 y∈[0,220)（面积 44000）、下小格 y∈[240,300)（面积 12000）、
+      // 白带缝隙 y∈[220,240)。面积比 ≈3.67:1。
+      final layers = [
+        LayerImage(la, 0, clip: PixelRect(0, 0, 200, 220)),
+        LayerImage(lb, 1, clip: PixelRect(0, 240, 200, 60)),
+      ];
+      final comp = FrameCompositor(layers, working, cfg);
+      final panels = comp.debugPanelRects();
+      expect(panels, hasLength(2), reason: '两个不等 clip → 派生 2 格');
+      final seeds = comp.debugParticleSeeds(EffectKind.snow);
+      expect(seeds.length, 10, reason: 'total 严格等于 count，逐格不增不减');
+      final w = working.width, h = working.height;
+      final bucket = List<int>.filled(panels.length, 0);
+      var outside = 0;
+      for (final (x0, y0) in seeds) {
+        final cx = x0 * w, cy = y0 * h;
+        var hit = -1;
+        for (var i = 0; i < panels.length; i++) {
+          final p = panels[i];
+          if (cx >= p.x && cx < p.x + p.width &&
+              cy >= p.y && cy < p.y + p.height) {
+            hit = i;
+            break;
+          }
+        }
+        if (hit < 0) outside++; else bucket[hit]++;
+      }
+      expect(outside, 0, reason: '所有粒子落在某格内（不渗白带）');
+      final area = [for (final p in panels) p.width * p.height];
+      final bigIdx = area.indexOf(area.reduce((a, b) => a > b ? a : b));
+      final smallIdx = 1 - bigIdx;
+      // 面积悬殊 → 均分（5/5）会让较大格恰好等于半数；面积∝数量必须严格过半。
+      expect(bucket[bigIdx], greaterThan(seeds.length ~/ 2),
+          reason: '较大格应严格多于半数（排除均分实现）：$bucket');
+      expect(bucket[bigIdx], greaterThan(bucket[smallIdx]),
+          reason: '较大格计数严格大于较小格：$bucket');
+      // 面积比 ≈3.67 → 大格 floor(10×0.786)=7，余数 1 归最大 → 8；小格 2。
+      expect(bucket[bigIdx], greaterThanOrEqualTo(7),
+          reason: '按面积比 + 余数归最大，较大格应约 8：$bucket');
+    });
+
     test('单格/无白带图 panelAware on/off 帧逐字节等价（R9 自动回退）', () {
       final src = noGutterRaster();
       final on = EffectConfig.fromJson(snowCfg(panel: true));
