@@ -10,6 +10,7 @@ import 'render/envelope.dart';
 import 'render/quality.dart';
 import 'render/raster.dart';
 import 'render/resampler.dart';
+import 'saliency_anchors.dart';
 
 part 'effects/comic_pass.dart';
 part 'effects/particle_raster_pass.dart';
@@ -20,9 +21,10 @@ part 'effects/particle_raster_pass.dart';
 /// Determinism: all randomness flows from [EffectConfig.seed] through
 /// [DeterministicRandom], so identical input + config => identical frames.
 class FrameCompositor {
-  FrameCompositor(this.layers, this.base, this.config)
+  FrameCompositor(this.layers, this.base, this.config, {AnchorMap? anchors})
       : w = base.width,
         h = base.height,
+        _anchors = anchors,
         _envelope = config.effects.contains(EffectKind.moodScript)
             ? MotionEnvelope.of(config.moodScript.mood,
                 strength: config.moodScript.strength,
@@ -66,6 +68,7 @@ class FrameCompositor {
     required EffectConfig config,
     List<int>? ranks,
     List<PixelRect?>? clips,
+    AnchorMap? anchors,
   }) {
     final ls = [
       for (var i = 0; i < layers.length; i++)
@@ -74,7 +77,8 @@ class FrameCompositor {
             clip: clips == null ? null : clips[i])
     ];
     return FrameCompositor(
-        ls, RgbaImage.fromBytes(width: w, height: h, data: base), config);
+        ls, RgbaImage.fromBytes(width: w, height: h, data: base), config,
+        anchors: anchors);
   }
 
   // ---- v1.1 新动效状态（各自独立随机流，不扰动经典路径的 _rng 序列）----
@@ -484,6 +488,16 @@ class FrameCompositor {
   /// v1.3 情绪包络：未启用 moodScript 时为 null，[_env] 恒为 identity
   /// （乘 1.0 / 加 0.0 都不改变任何一位浮点结果，legacy 路径逐字节不变）。
   final MotionEnvelope? _envelope;
+
+  /// Task 1.5（plumb-only）：内容感知分析结果，null = 未启用/未提供。
+  /// 本任务只把它随合成器（含 worker 重建的合成器）携带到位；渲染路径在
+  /// Task 2.1+ 之前**绝不读取**它，因此 on/off 产物逐字节相同。下游放置
+  /// 任务经 [anchors] 只读访问。坐标口径见 `AnchorMap`（grid/canvas）。
+  final AnchorMap? _anchors;
+
+  /// 只读暴露本合成器携带的 AnchorMap（无则为 null）。供 Task 2.1+ 的
+  /// 效果放置消费；本任务不改变任何绘制行为。
+  AnchorMap? get anchors => _anchors;
 
   /// 本帧生效的包络因子，由 [renderFrame] 在入口处刷新一次。
   EnvelopeFactors _env = EnvelopeFactors.identity;

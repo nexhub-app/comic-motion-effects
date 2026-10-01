@@ -252,4 +252,92 @@ void main() {
     expect(m.activity.length, 40 * 40);
     expect(m.anchors, isNotEmpty);
   });
+
+  // ---- Task 1.5: AnchorMap threaded through the render pipeline ----
+  //
+  // Plumb-only contract: NOTHING in the draw path consumes the map yet (that
+  // is Task 2.1). So contentAware must be a pure add-on: default false keeps
+  // serialization + configHash byte-for-byte unchanged, and rendered output is
+  // on == off == baseline. The compositor just accepts + stores the map.
+  group('Task 1.5: AnchorMap plumbing', () {
+    test('fromRasters stores the passed AnchorMap (field-equal)', () {
+      final img = whitePage(64, 64);
+      inkBlob(img, 32, 32, 8);
+      final map = const SaliencyAnalyzer().analyze(img);
+      final c = FrameCompositor.fromRasters(
+        base: Uint8List(64 * 64 * 4),
+        layers: const [],
+        w: 64,
+        h: 64,
+        config: EffectConfig(),
+        anchors: map,
+      );
+      expect(c.anchors, isNotNull);
+      expect(identical(c.anchors, map), isTrue,
+          reason: 'compositor carries the exact map handed in');
+      expect(c.anchors!.activity.length, map.activity.length);
+      expect(c.anchors!.anchors.length, map.anchors.length);
+      expect(c.anchors!.subjectBox, map.subjectBox);
+      expect(c.anchors!.panels.length, map.panels.length);
+    });
+
+    test('compositor built WITHOUT anchors has null anchors (legacy path)',
+        () {
+      final c = FrameCompositor.fromRasters(
+        base: Uint8List(64 * 64 * 4),
+        layers: const [],
+        w: 64,
+        h: 64,
+        config: EffectConfig(),
+      );
+      expect(c.anchors, isNull);
+    });
+
+    test('contentAware default false is not serialized; configHash unchanged',
+        () {
+      expect(EffectConfig().toJson().containsKey('contentAware'), isFalse,
+          reason: '默认 false 不写入 → configHash 与旧版一致');
+      expect(EffectConfig().configHash, '-477687d5e8bded5f',
+          reason: 'classic default hash must NOT move (Task 3.7 gates it)');
+      expect(
+          EffectConfig.fromJson({'effects': ['rain']})
+              .toJson()
+              .containsKey('contentAware'),
+          isFalse);
+      final on = EffectConfig(contentAware: true);
+      expect(on.toJson()['contentAware'], true);
+      expect(EffectConfig.fromJson(on.toJson()).configHash, on.configHash,
+          reason: 'on-config round-trips through the conditional key');
+    });
+
+    test('plumb-only: contentAware on==off==baseline, on is deterministic',
+        () async {
+      final page = whitePage(64, 80);
+      inkBlob(page, 32, 40, 10);
+      final bytes = Uint8List.fromList(ImageIO.encodePngFrame(page));
+      Map<String, dynamic> cfgJson([bool ca = false]) => <String, dynamic>{
+            'effects': ['parallax'],
+            'fps': 8,
+            'durationSec': 1.0,
+            'maxDimension': 64,
+            'outputFormat': 'gif',
+            'seed': 7,
+            if (ca) 'contentAware': true,
+          };
+      final off = EffectConfig.fromJson(cfgJson());
+      final on = EffectConfig.fromJson(cfgJson(true));
+      final baseline =
+          (await MotionPipeline(off).processBytes(input: bytes)).gifBytes!;
+      final a = (await MotionPipeline(on).processBytes(input: bytes)).gifBytes!;
+      final b = (await MotionPipeline(on).processBytes(input: bytes)).gifBytes!;
+      final off2 =
+          (await MotionPipeline(off).processBytes(input: bytes)).gifBytes!;
+      expect(a, equals(b),
+          reason: 'contentAware on 双跑（真实 isolate/worker 路径）逐字节确定');
+      expect(off2, equals(baseline),
+          reason: 'contentAware off == 未改动基线');
+      expect(a, equals(baseline),
+          reason: 'plumb-only: on==off==baseline until Task 2.1');
+    });
+  });
 }

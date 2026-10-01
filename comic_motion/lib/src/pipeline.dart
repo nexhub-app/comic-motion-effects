@@ -13,6 +13,7 @@ import 'depth_splitter.dart';
 import 'image_io.dart';
 import 'image_model.dart';
 import 'render/resampler.dart';
+import 'saliency_anchors.dart';
 import 'worker_pool.dart';
 
 /// 执行期默认并行度：worker 各持一份层栅格副本，收益在 6-8 后转平而内存线性涨，
@@ -459,9 +460,10 @@ class MotionPipeline {
   Future<Uint8List> _renderStill(RgbaImage src, double t) async {
     final deadline = timeout == null ? null : (Stopwatch()..start());
     _checkStillCancel(deadline, 'entry');
-    final (working, layers) = _downscaleAndSplit(src, config.maxDimension);
+    final (working, layers, anchors) =
+        _downscaleAndSplit(src, config.maxDimension);
     _checkStillCancel(deadline, 'before render');
-    final frame = FrameCompositor(layers, working, config)
+    final frame = FrameCompositor(layers, working, config, anchors: anchors)
         .renderFrame(math.max(0.0, t));
     return Uint8List.fromList(ImageIO.encodePngFrame(frame));
   }
@@ -580,10 +582,10 @@ class MotionPipeline {
     }
 
     // Working resolution guard: downscale very large inputs for speed.
-    final (working, layers) = _downscaleAndSplit(src, effectiveMaxDim);
+    final (working, layers, anchors) = _downscaleAndSplit(src, effectiveMaxDim);
 
     // Frames: stream-render -> quantize -> LZW -> discard (O(one frame) RAM).
-    final compositor = FrameCompositor(layers, working, config);
+    final compositor = FrameCompositor(layers, working, config, anchors: anchors);
 
     var gifPath = '';
     var frameDir = '';
@@ -684,6 +686,7 @@ class MotionPipeline {
       wantPngBytes: onFrame != null || (wantApng && !apngRect),
       rectMode: rectMode,
       wantRgba: apngRect,
+      anchors: anchors,
     );
     final allIndices = [for (var i = 0; i < n; i++) i];
     final pendingCount = n - presolved.length;
@@ -884,7 +887,12 @@ class MotionPipeline {
   /// panelAware（W5，仅 autoLayers 路径）：先横向白带分格检测；多格图逐格
   /// 独立估算深度与分层（层写回全图坐标并携带格边界裁剪，合成时跨格串色
   /// 根除）；单格/无白带图自动回退整页分层（与 panelAware 关闭逐字节等价）。
-  (RgbaImage, List<LayerImage>) _downscaleAndSplit(
+  ///
+  /// Task 1.5（plumb-only）：contentAware 为 true 时对底图跑一次
+  /// [SaliencyAnalyzer]（panelAware 检出多格时按格分析），第三个返回值携带
+  /// [AnchorMap]；否则返回 null。分层主干逻辑与返回值不变，仅在 contentAware
+  /// 时**额外**产出一个当前无人消费的 map，故产物逐字节不变。
+  (RgbaImage, List<LayerImage>, AnchorMap?) _downscaleAndSplit(
       RgbaImage src, int effectiveMaxDim) {
     final working = config.quality.tier.atLeastStandard
         ? boxDownscale(src, effectiveMaxDim)
@@ -892,7 +900,11 @@ class MotionPipeline {
     if (config.panelAware && config.depthMode == DepthMode.autoLayers) {
       final panels = const PanelSplitter().split(working);
       if (panels.length >= 2) {
-        return (working, _splitPerPanel(working, panels));
+        return (
+          working,
+          _splitPerPanel(working, panels),
+          _analyzeAnchors(working, panels)
+        );
       }
     }
     final depth = effectiveDepthEstimator.estimate(working);
@@ -901,7 +913,14 @@ class MotionPipeline {
       tier: config.quality.tier,
       edgeStretchPx: config.quality.edgeStretchPx,
     );
-    return (working, splitter.split(working, depth));
+    return (working, splitter.split(working, depth), _analyzeAnchors(working, null));
+  }
+
+  /// contentAware 关闭（默认）→ null，零成本、零行为变化；开启时按 [panels]
+  /// （工作分辨率画布像素格，null = 整页）分析底图。
+  AnchorMap? _analyzeAnchors(RgbaImage working, List<PixelRect>? panels) {
+    if (!config.contentAware) return null;
+    return const SaliencyAnalyzer().analyze(working, panels: panels);
   }
 
   /// W5 分格感知：逐格裁剪子图 → 独立 DepthEstimator + LayerSplitter →
@@ -941,9 +960,13 @@ class MotionPipeline {
 
   /// 导出类入口（交互帧集 / 入场帧序列，见 `interaction.dart`）与渲染管线
   /// 共享的前置段：同一条降采样 + 深度 + 分层主干，保证导出帧与既有产物
-  /// 同源（工作分辨率、分层口径完全一致）。
-  (RgbaImage, List<LayerImage>) downscaleAndSplitForExport(RgbaImage src) =>
-      _downscaleAndSplit(src, config.maxDimension);
+  /// 同源（工作分辨率、分层口径完全一致）。导出路径暂不消费 AnchorMap（放置
+  /// 属 Task 2.1+），此处丢弃第三个返回值。
+  (RgbaImage, List<LayerImage>) downscaleAndSplitForExport(RgbaImage src) {
+    final (working, layers, _) =
+        _downscaleAndSplit(src, config.maxDimension);
+    return (working, layers);
+  }
 
   /// 导出类入口专用的降采样段（入场帧序列用：入场是整页效果，不做分层，
   /// 跳过深度估算与切层的开销）。降采样算法口径与 [_downscaleAndSplit]

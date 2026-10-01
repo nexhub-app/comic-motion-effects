@@ -1241,6 +1241,7 @@ class EffectConfig {
     this.maxFrames = 96,
     this.reducedMotion = false,
     this.panelAware = false,
+    this.contentAware = false,
 
     /// ---- R5 顶层便捷参数（null = 不触碰对应嵌套字段）----
     /// 嵌入方在一处设齐全部渲染参数；非 null 时映射到既有字段，与显式
@@ -1369,6 +1370,14 @@ class EffectConfig {
   /// 条件序列化：默认 false 不写入 → configHash 与旧版完全一致。
   final bool panelAware;
 
+  /// 内容感知布局（v1.4 placement，opt-in）：true 时管线对底图跑一次
+  /// `SaliencyAnalyzer`，把得到的 AnchorMap 贯通进合成器与 worker 作业
+  /// （`FrameCompositor.anchors` / `FrameJobSpec.anchors`），供后续放置任务
+  /// （Task 2.1+）读取。**本任务仅做管道贯通**：没有任何渲染路径消费该
+  /// map，故 contentAware 的产物与关闭时逐字节相同（on==off==基线）。
+  /// 条件序列化：默认 false 不写入 → configHash 与旧版完全一致。
+  final bool contentAware;
+
   int get frameCount =>
       reducedMotion ? 1 : (fps * durationSec).round().clamp(2, maxFrames);
 
@@ -1447,6 +1456,7 @@ class EffectConfig {
         'maxFrames': maxFrames,
         if (reducedMotion) 'reducedMotion': true,
         if (panelAware) 'panelAware': true,
+        if (contentAware) 'contentAware': true,
       };
 
   String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
@@ -1520,6 +1530,7 @@ class EffectConfig {
         maxFrames: maxFrames,
         reducedMotion: reducedMotion,
         panelAware: panelAware,
+        contentAware: contentAware,
       );
 
   /// 启用一个效果（已启用则为无变化的等价新实例）。
@@ -1709,6 +1720,7 @@ class EffectConfig {
       maxFrames: (j['maxFrames'] as num?)?.toInt() ?? 96,
       reducedMotion: j['reducedMotion'] == true,
       panelAware: j['panelAware'] == true,
+      contentAware: j['contentAware'] == true,
     );
   }
 }

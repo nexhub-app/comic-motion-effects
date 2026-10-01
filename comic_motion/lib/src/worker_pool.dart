@@ -12,6 +12,7 @@ import 'frame_compositor.dart';
 import 'gif_writer.dart';
 import 'image_io.dart';
 import 'image_model.dart';
+import 'saliency_anchors.dart';
 
 /// 单帧 GIF 编码器的可发送描述（= [GifFrameEncoder] 的构造参数）。
 /// 调色板必须由主 isolate 定板后下发：worker 共享同一份板，量化才是纯函数。
@@ -71,6 +72,7 @@ class FrameJobSpec {
     this.wantRgba = false,
     this.layerRanks,
     this.layerClips,
+    this.anchors,
   });
 
   factory FrameJobSpec.fromLayers({
@@ -82,6 +84,7 @@ class FrameJobSpec {
     bool wantPngBytes = false,
     bool rectMode = false,
     bool wantRgba = false,
+    AnchorMap? anchors,
   }) =>
       FrameJobSpec(
         width: base.width,
@@ -98,6 +101,10 @@ class FrameJobSpec {
         // worker 重建合成器）。null 元素/列表 = 全画布（既有路径零变化）。
         layerRanks: layers.map((l) => l.depthRank).toList(),
         layerClips: layers.map((l) => l.clip).toList(),
+        // Task 1.5（plumb-only）：内容感知 AnchorMap 随作业跨 isolate 下发，
+        // 与 ranks/clips 同机制（普通字段，worker 侧重建合成器）。null =
+        // 未启用（既有路径零变化，产物逐字节不变）。
+        anchors: anchors,
       );
 
   final int width;
@@ -127,6 +134,12 @@ class FrameJobSpec {
 
   /// W5 分格感知：每层画布坐标裁剪矩形（null 元素 = 全画布）。
   final List<PixelRect?>? layerClips;
+
+  /// Task 1.5（plumb-only）：内容感知 AnchorMap（null = 未启用）。作为普通
+  /// 字段随 spec 跨 isolate 下发（与 layerClips 同机制），worker 侧经
+  /// [FrameCompositor.fromRasters] 重建的合成器携带它；渲染路径在 Task 2.1+
+  /// 之前不消费，产物逐字节不变。
+  final AnchorMap? anchors;
 
   /// 每个 worker 常驻的栅格字节数（底图 + 各层 + 在途帧 + 索引帧）。
   int get rasterBytesPerWorker => width * height * 4 * (layerPixels.length + 3);
@@ -186,6 +199,7 @@ class FrameJob {
           config: s.config,
           ranks: s.layerRanks,
           clips: s.layerClips,
+          anchors: s.anchors,
         ),
         pngDir: s.pngDir,
         encoder: s.gif?.build(),
