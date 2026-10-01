@@ -541,6 +541,19 @@ class FrameCompositor {
   /// standard+ 档才走 AA 光栅原语；legacy 分支逐字保留 v1.2 的取整画点。
   bool get _aa => config.quality.tier.atLeastStandard;
 
+  /// Task 2.4（spec §5 治白叠白）：极性自适应画笔。
+  ///
+  /// 只在 standard+ 档惰性构造一次（legacy 恒 null ⇒ 所有旧路径逐字节不变），
+  /// 采样对象是**静态底图** `base`，无数组分配（R5 同口径：合成器会被每个
+  /// worker job 重建）。因为输入只有像素坐标，输出就是纯函数：不消耗 RNG、
+  /// 没有跨帧状态，确定性与无缝循环不受影响（R12）。
+  PolarityBrush? get _polarity {
+    if (!_aa) return null;
+    return _polarityBrush ??= PolarityBrush(base);
+  }
+
+  PolarityBrush? _polarityBrush;
+
   /// v1.3 情绪包络：未启用 moodScript 时为 null，[_env] 恒为 identity
   /// （乘 1.0 / 加 0.0 都不改变任何一位浮点结果，legacy 路径逐字节不变）。
   final MotionEnvelope? _envelope;
@@ -1077,17 +1090,34 @@ class FrameCompositor {
     }
   }
 
+  /// 扫光：斜向掠过的柔光带。
+  ///
+  /// legacy 档保持 v1.2 的截断加法白光；standard+ 档（Task 2.4）按带内每点
+  /// 底图亮度选极性——白纸用 [BlendOp.multiply] 压出灰调光带（白叠白等于没画），
+  /// 暗区沿用 `_blendAddPx` 的 screen 爆白。
   void _applyLightSweep(RgbaImage frame, double tSec) {
     final prog = (tSec / config.durationSec) % 1.0;
     final bandCenter = (prog * (w + h * 0.7)) - h * 0.35;
+    final brush = _polarity; // legacy 档为 null ⇒ 逐字节走 v1.2 的加法白光
     for (var y = 0; y < h; y++) {
       for (var x = 0; x < w; x++) {
         final d = (x + y * 0.35 - bandCenter).abs();
         if (d > 80) continue;
-        final add =
+        var add =
             (60 * _env.exposure * math.exp(-d * d / (2 * 30 * 30))).round();
         if (add == 0) continue;
-        _blendAddPx(frame, x, y, 255, 255, 255, add);
+        if (brush == null) {
+          _blendAddPx(frame, x, y, 255, 255, 255, add);
+          continue;
+        }
+        final lum = brush.lumaAt(x, y);
+        if (PolarityBrush.midLuma(lum)) add = PolarityBrush.bump(add);
+        if (samplePolarity(lum) == Polarity.toInk) {
+          blendPixel(frame, x, y, brush.inkR, brush.inkG, brush.inkB, add,
+              op: BlendOp.multiply);
+        } else {
+          _blendAddPx(frame, x, y, 255, 255, 255, add);
+        }
       }
     }
   }
@@ -1319,8 +1349,11 @@ class FrameCompositor {
       final sy = cy + uy * diag * l.r0;
       final steps = (len * l.lenJit).round().clamp(2, 400);
       if (_aa) {
+        // Task 2.4：几何与 alpha 链路一字未改，只把「白色 source-over」换成
+        // 逐像素极性（白纸压墨 #1a1a1a/darken、暗区爆白 white/screen）。
         drawSegmentAA(frame, sx, sy, sx - ux * steps, sy - uy * steps, 255, 255,
-            255, a, p.thickness < 1 ? 1.0 : p.thickness.toDouble());
+            255, a, p.thickness < 1 ? 1.0 : p.thickness.toDouble(),
+            polarity: _polarity);
         continue;
       }
       for (var s = 0; s < steps; s++) {
@@ -1335,6 +1368,10 @@ class FrameCompositor {
   }
 
   /// 冲击闪光：每循环 N 次的柔白短闪，快速起衰。
+  ///
+  /// legacy 档保留 v1.2 的「整体推向白」；standard+ 档改判为**双向对比冲击**
+  /// （Task 2.4 / spec §5）：同一包络 `k` 下，白纸压向黑、暗区爆向白，白纸上
+  /// 不再出现 no-op。极性只读静态底图，与帧序、RNG 无关。
   void _applyImpactFlash(RgbaImage frame, double tSec) {
     final p = config.impactFlash;
     final u = _loopU(tSec);
@@ -1346,10 +1383,29 @@ class FrameCompositor {
     final k = (env * p.intensity * _env.exposure * 256).round().clamp(0, 256);
     if (k <= 0) return;
     final data = frame.data;
-    for (var i = 0; i < data.length; i += 4) {
-      data[i] = data[i] + ((255 - data[i]) * k >> 8);
-      data[i + 1] = data[i + 1] + ((255 - data[i + 1]) * k >> 8);
-      data[i + 2] = data[i + 2] + ((255 - data[i + 2]) * k >> 8);
+    if (!_aa) {
+      for (var i = 0; i < data.length; i += 4) {
+        data[i] = data[i] + ((255 - data[i]) * k >> 8);
+        data[i + 1] = data[i + 1] + ((255 - data[i + 1]) * k >> 8);
+        data[i + 2] = data[i + 2] + ((255 - data[i + 2]) * k >> 8);
+      }
+      return;
+    }
+    // 底图与 frame 同尺寸（合成器按 base 宽高建帧），像素索引 1:1 对应。
+    for (var i = 0, pi = 0; i < data.length; i += 4, pi++) {
+      final lum = base.luminance(pi);
+      // 中段亮度两档极性都不痛，按 spec §5 放大幅度（离散 bump，非连续 lerp；
+      // bump 自带 256 上限，否则 `d + (255-d)·k/256` 会溢出成回绕的负值）。
+      final kk = PolarityBrush.midLuma(lum) ? PolarityBrush.bump(k) : k;
+      if (samplePolarity(lum) == Polarity.toInk) {
+        data[i] = data[i] - ((data[i] * kk) >> 8);
+        data[i + 1] = data[i + 1] - ((data[i + 1] * kk) >> 8);
+        data[i + 2] = data[i + 2] - ((data[i + 2] * kk) >> 8);
+      } else {
+        data[i] = data[i] + ((255 - data[i]) * kk >> 8);
+        data[i + 1] = data[i + 1] + ((255 - data[i + 1]) * kk >> 8);
+        data[i + 2] = data[i + 2] + ((255 - data[i + 2]) * kk >> 8);
+      }
     }
   }
 

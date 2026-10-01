@@ -60,7 +60,14 @@ void _renderFocusLines(FrameCompositor c, RgbaImage frame, double tSec) {
         if (x < 0 || y < 0 || x >= c.w || y >= c.h) continue;
         if (black) {
           // 黑线即 0 色的 source-over，代数上等于 multiply：d·(255-a)/255
-          blendPixel(frame, x, y, 0, 0, 0, a);
+          var ai = a;
+          // Task 2.4（standard+）：黑楔形落在纸白上已经看得见，这里只按 spec
+          // §5 的「随亮度加粗/提 alpha」给白纸一极补 1/4 墨量，让墨线压过纸纹。
+          // mode 语义（black/white/both 的归属）与 legacy 路径都不受影响。
+          if (aa && c.base.luminance(y * c.w + x) > 200) {
+            ai = PolarityBrush.bump(a);
+          }
+          blendPixel(frame, x, y, 0, 0, 0, ai);
         } else {
           c._blendAddPx(frame, x, y, 255, 255, 255, a);
         }

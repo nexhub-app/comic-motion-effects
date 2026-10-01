@@ -17,7 +17,76 @@ import '../image_model.dart';
 /// 到 255 而失去层次（光晕把高光糊成一片死白）。[BlendOp.screen] 用
 /// `255 - (255-d)(255-s·a/255)/255` 渐近到白，任何亮度下都严格单调，高光内部
 /// 的落差得以保留。legacy 档必须留在 [BlendOp.additive]（逐字节回滚承诺）。
-enum BlendOp { over, additive, screen }
+///
+/// Task 2.4（spec §5「极性自适应」）补两个**压暗**算子，用来治「白线叠白纸」：
+/// [BlendOp.darken] 取逐通道最小值（白纸压墨，绝不提亮），[BlendOp.multiply]
+/// 按 `d·(s·a + 255·(1-a))/255` 等比压暗（保住底图自身的明暗落差）。
+enum BlendOp { over, additive, screen, darken, multiply }
+
+/// 一笔该压墨还是爆白（spec §5：白纸（lum>200）→ 深墨，暗区（lum<80）→ 白线）。
+enum Polarity { toInk, toLight }
+
+/// 墨色 `#1a1a1a`：白纸上的深墨线，比纯黑更像印刷油墨、也不会把网点压死。
+const int inkRgb = 0x1a1a1a;
+
+/// 亮度 → 极性。
+///
+/// `lum > 200` 判白纸走 [Polarity.toInk]，`lum < 80` 判暗区走
+/// [Polarity.toLight]，中段按到中点 `(200+80)/2 = 140` 的距离取最近一档
+/// （[PolarityBrush] 再对中段补一次幅度放大，见 [PolarityBrush.bump]）。
+Polarity samplePolarity(int lum) => lum > 200
+    ? Polarity.toInk
+    : (lum < 80
+        ? Polarity.toLight
+        : (lum >= 140 ? Polarity.toInk : Polarity.toLight));
+
+/// 极性自适应画笔：将「该点底图亮度」折成「颜色 + 算子」的查表器。
+///
+/// 只读**静态底图**（[base]），输入是像素坐标、输出是纯函数结果：无时钟、
+/// 无随机、无跨帧可变量，所以确定性与「t=0 ≡ t=durationSec」的无缝承诺天然
+/// 保持（R12）。落在合成器的 `_aa` 门控之后，legacy 档根本不构造它。
+class PolarityBrush {
+  const PolarityBrush(this.base, {this.ink = inkRgb});
+
+  /// 被采样底图。绘制目标 frame 与它同尺寸（合成器以 `base.width/height`
+  /// 建帧），因此像素索引可直接复用。
+  final RgbaImage base;
+
+  /// 压墨一极的墨色（爆白一极沿用调用方传入的亮色）。
+  final int ink;
+
+  int get inkR => (ink >> 16) & 0xff;
+  int get inkG => (ink >> 8) & 0xff;
+  int get inkB => ink & 0xff;
+
+  /// 该点底图亮度。越界坐标钳回边缘取样：这类点随后会被 [blendPixel] 的边界
+  /// 检查拒掉，取到什么亮度都不影响像素，只是防止索引抛 RangeError。
+  int lumaAt(int x, int y) {
+    final b = base;
+    final cx = x < 0 ? 0 : (x >= b.width ? b.width - 1 : x);
+    final cy = y < 0 ? 0 : (y >= b.height ? b.height - 1 : y);
+    return b.luminance(cy * b.width + cx);
+  }
+
+  Polarity at(int x, int y) => samplePolarity(lumaAt(x, y));
+
+  /// 白纸压墨走 [BlendOp.darken]（恒不提亮、墨色实打实盖住纸白）。
+  static const BlendOp inkOp = BlendOp.darken;
+
+  /// 暗区爆白走 [BlendOp.screen]（渐近到白，保住暗部层次）。
+  static const BlendOp lightOp = BlendOp.screen;
+
+  /// 中段亮度（80 < lum < 200）：两档极性都不算「白纸」也不算「暗区」，对比
+  /// 最弱，spec §5 要求此处放大幅度。连续 lerp 会让同一笔内相邻像素的 op 混序
+  /// 变得难以复现，这里用「离散最近档 + 固定 1/4 增幅」近似那一格 lerp。
+  static bool midLuma(int lum) => lum > 80 && lum < 200;
+
+  /// 中段幅度放大后的 alpha（`>>2` 保持本文件的整型风格，上限 256）。
+  static int bump(int a) {
+    final b = a + (a >> 2);
+    return b > 256 ? 256 : b;
+  }
+}
 
 /// 1px 过渡带的解析覆盖度。[distToEdge] > 0 表示像素中心在形状内部，
 /// 值在 [band] 内线性衰减到 0。
@@ -40,7 +109,9 @@ bool _outsideClip(PixelRect? clip, int x, int y) =>
 /// 覆盖度合成。[cov] 已把「形状覆盖度 × 元不透明度」合成一维。
 ///
 /// source-over 用精确的 `~/255`（不用 `>>8`，后者有 1/256 系统偏亮）；
-/// [BlendOp.additive]/[BlendOp.screen] 走提亮，供光效类元（星光、火光、扫光）使用。
+/// [BlendOp.additive]/[BlendOp.screen] 走提亮，供光效类元（星光、火光、扫光）使用；
+/// [BlendOp.darken]/[BlendOp.multiply] 走压暗，供 Task 2.4 的极性自适应「白纸压墨」
+/// 一极使用。四个非常用分支都不碰 alpha，也不改动 over 的整数表达式。
 void blendPixel(RgbaImage f, int x, int y, int r, int g, int b, int cov,
     {BlendOp op = BlendOp.over, PixelRect? clip}) {
   if (cov <= 0 || x < 0 || y < 0 || x >= f.width || y >= f.height) return;
@@ -48,6 +119,29 @@ void blendPixel(RgbaImage f, int x, int y, int r, int g, int b, int cov,
   if (cov > 255) cov = 255;
   final o = (y * f.width + x) * 4;
   final d = f.data;
+  if (op == BlendOp.darken || op == BlendOp.multiply) {
+    // Task 2.4 的两个压暗算子：先按 cov 预混出「该落的颜色」，再与底图取
+    // min / 相乘。两者都只会让像素变暗或不变，且都不碰 alpha。
+    if (op == BlendOp.darken) {
+      final inv = 255 - cov;
+      final sr = (r * cov + d[o] * inv) ~/ 255;
+      final sg = (g * cov + d[o + 1] * inv) ~/ 255;
+      final sb = (b * cov + d[o + 2] * inv) ~/ 255;
+      d[o] = math.min(d[o], sr);
+      d[o + 1] = math.min(d[o + 1], sg);
+      d[o + 2] = math.min(d[o + 2], sb);
+    } else {
+      //  cov=255 时退化成 `d·src/255`；src=0 时与黑色 source-over（以及
+      //  focusLines 的 `d·(255-a)/255`）逐字节同式。
+      final fr = (r * cov + 255 * (255 - cov)) ~/ 255;
+      final fg = (g * cov + 255 * (255 - cov)) ~/ 255;
+      final fb = (b * cov + 255 * (255 - cov)) ~/ 255;
+      d[o] = (d[o] * fr) ~/ 255;
+      d[o + 1] = (d[o + 1] * fg) ~/ 255;
+      d[o + 2] = (d[o + 2] * fb) ~/ 255;
+    }
+    return;
+  }
   if (op != BlendOp.over) {
     final lr = (r * cov) ~/ 255, lg = (g * cov) ~/ 255, lb = (b * cov) ~/ 255;
     if (op == BlendOp.screen) {
@@ -72,13 +166,18 @@ void blendPixel(RgbaImage f, int x, int y, int r, int g, int b, int cov,
 ///
 /// [tailFade] 沿参数 t 把 alpha 从 1 线性拉到 `1-tailFade`（雨丝的尾端渐隐），
 /// [tailPow] 再对这条包络取幂（星芒的 `fade²`）。
+///
+/// [polarity] 非 null 时启用 Task 2.4 的极性自适应：**像素行走与 alpha 完全
+/// 不变**，只把「颜色 + 算子」换成该点底图亮度的函数（白纸压墨、暗区爆白），
+/// 传入的 `r/g/b/op` 只在暗区一极沿用。null = 逐字节旧行为。
 void drawSegmentAA(RgbaImage f, double x0, double y0, double x1, double y1,
     int r, int g, int b, int alpha, double thickness,
     {BlendOp op = BlendOp.over,
     double tailFade = 0,
     double tailPow = 1,
     bool aa = true,
-    PixelRect? clip}) {
+    PixelRect? clip,
+    PolarityBrush? polarity}) {
   if (alpha <= 0) return;
   final half = (thickness < 1 ? 1.0 : thickness) / 2.0;
   final band = half + 0.5;
@@ -114,8 +213,23 @@ void drawSegmentAA(RgbaImage f, double x0, double y0, double x1, double y1,
       if (tailFade > 0) {
         a *= math.pow(1.0 - tailFade * at, tailPow);
       }
-      blendPixel(f, yMajor ? k : m, yMajor ? m : k, r, g, b, a.round(),
-          op: op, clip: clip);
+      final cx = yMajor ? k : m, cy = yMajor ? m : k;
+      if (polarity == null) {
+        blendPixel(f, cx, cy, r, g, b, a.round(), op: op, clip: clip);
+        continue;
+      }
+      // 极性只改「落什么颜色、用什么算子」，几何与 cov 链路一字未动。
+      final lum = polarity.lumaAt(cx, cy);
+      var alpha8 = a.round();
+      if (PolarityBrush.midLuma(lum)) alpha8 = PolarityBrush.bump(alpha8);
+      if (samplePolarity(lum) == Polarity.toInk) {
+        blendPixel(f, cx, cy, polarity.inkR, polarity.inkG, polarity.inkB,
+            alpha8,
+            op: PolarityBrush.inkOp, clip: clip);
+      } else {
+        blendPixel(f, cx, cy, r, g, b, alpha8,
+            op: PolarityBrush.lightOp, clip: clip);
+      }
     }
   }
 }
