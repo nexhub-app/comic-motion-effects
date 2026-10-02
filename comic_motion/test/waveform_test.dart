@@ -13,6 +13,13 @@ void main() {
     expect(sum / n, closeTo(0.0, 1e-3));
   });
 
+  test('snapWave C1 at seam: left/right slopes agree (整数谐波 ⇒ 导数连续)', () {
+    const h = 1e-6;
+    final right = (snapWave(h) - snapWave(0.0)) / h;
+    final left = (snapWave(1.0) - snapWave(1.0 - h)) / h;
+    expect(left, closeTo(right, 1e-3));
+  });
+
   test('snapWave asymmetric (rise≠fall around peak)', () {
     final pk = [for (var i = 0; i < 1000; i++) i / 1000]
         .reduce((a, b) => snapWave(a) > snapWave(b) ? a : b);
