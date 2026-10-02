@@ -2319,8 +2319,14 @@ void main() {
     });
 
     test('标准档同款判别式：standard 层相邻层水平反向摆动（Task 3.6 默认档）', () {
-      // 与首个水平判别式同场景、同断言，仅把渲染档切到 standard，
-      // 使反相性质在 Task 3.6 将要设为默认的档位上也被锁住。
+      // 与首个水平判别式同场景，渲染档切到 standard，使反相性质在 Task 3.6
+      // 将要设为默认的档位上也被锁住。
+      // Task 3.4（R17）改判：standard 载体已是 snapWave 且 snapWave(0)=0.3387
+      // ≠0，t=0 帧不再「位移为 0」，旧的「t=0 基线 vs t=period/4」差分对偶层
+      // 只剩 −0.016·amp 的亚像素差（far 质心位移实测 0.0）。改取相差半周期
+      // （u 恰 +0.5）的一对时刻 t=period/4 与 3period/4：snapWave(v+0.5) 与
+      // snapWave(v) 的层间差分对偶数/奇数 li 恒反号（实测 ±1.3226·amp·mult），
+      // 反相判别性质保持，反号/分离断言逐字保留。
       final cfgStd = EffectConfig(
         effects: [EffectKind.parallax],
         fps: 8,
@@ -2329,14 +2335,14 @@ void main() {
         quality: QualityParams(tier: RenderTier.standard),
       );
       final comp = FrameCompositor(layers, img, cfgStd);
-      final base = comp.renderFrame(0.0);
-      final peak = comp.renderFrame(period / 4);
+      final lo = comp.renderFrame(period / 4); // u = 0.25 + li/2
+      final hi = comp.renderFrame(3 * period / 4); // u = 0.75 + li/2（反相半周期）
 
-      final dFar = barCentroid(peak, 100, isRed) - barCentroid(base, 100, isRed);
+      final dFar = barCentroid(hi, 100, isRed) - barCentroid(lo, 100, isRed);
       final dMid =
-          barCentroid(peak, 195, isGreen) - barCentroid(base, 195, isGreen);
+          barCentroid(hi, 195, isGreen) - barCentroid(lo, 195, isGreen);
       final dNear =
-          barCentroid(peak, 270, isBlue) - barCentroid(base, 270, isBlue);
+          barCentroid(hi, 270, isBlue) - barCentroid(lo, 270, isBlue);
 
       expect(dFar.abs(), greaterThan(4.0));
       expect(dMid.abs(), greaterThan(8.0));
@@ -3345,7 +3351,13 @@ void main() {
       final s = dirs(draw(rcfg(tier: tierS), 0.25), draw(plain(tierS), 0.25));
       expect(l.$3, 0, reason: 'legacy 不该有部分覆盖像素');
       expect(s.$3, greaterThan(50), reason: 'standard 缺 AA 过渡带');
-      expect(s.$2, greaterThan(l.$2), reason: 'standard 边缘应扩出更多弱像素');
+      // Task 3.4（R17）改判：旧断言 s.$2 > l.$2 依赖「standard 与 legacy 包络
+      // 相同，只是边缘多过渡带」。standard 包络现为整流 snapWave × sin(π·ph)
+      // 窗——负瓣（ph≈0.55~1）env=0，环整体落墨更少，这是规格要的快起慢落，
+      // 不是 AA 缺失。过渡带判据改钉「弱像素只在 standard 存在」：l.$3 恒 0，
+      // s.$3 显著大于 l.$3，且 standard 仍有实际落墨（s.$2 > 0）。
+      expect(s.$2, greaterThan(0), reason: 'standard 不该整帧空墨');
+      expect(s.$3, greaterThan(l.$3), reason: 'standard 边缘应扩出过渡带弱像素');
     });
 
     test('opacity=0 与 outerFrac<=innerFrac 都是空操作', () {

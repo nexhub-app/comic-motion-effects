@@ -101,6 +101,16 @@ class _ShakeBurst {
 ///
 /// 环带本身是解析距离场，legacy/standard 的差别只在边缘是否走过渡带
 /// （`aa: c._aa`）与提亮用截断加法还是 screen——几何时不会退化成阶梯圆。
+
+/// Task 3.4（R17）：standard 档环闪包络用 snapWave 整流后乘 `sin(π·ph)`
+/// 窗——窗不可省：snapWave(u) 恒 ≥0.3387 于 u=0（非零起点），裸替换会让环
+/// 永不淡出（端点弹出/环间叠死）；乘窗保证 ph→0 与 ph→1 两端仍精确归零，
+/// 同时正瓣偏前（峰 ph≈0.416）给出 §6.2 快起慢落的打击感。
+/// C = 该乘积的实测峰值（1e8 密扫 + 黄金分割精化，ph≈0.4157084284868357 处
+/// max = 0.6933307478007389），除归一后 standard 峰值 env≈1.0。const，
+/// 与 `_peak` 同法：不逐调用寻峰。
+const double _ringSnapWindowPeak = 0.6933307478007389;
+
 void _renderImpactRings(FrameCompositor c, RgbaImage frame, double tSec) {
   final rings = c._shockRings;
   if (rings.isEmpty) return;
@@ -124,7 +134,11 @@ void _renderImpactRings(FrameCompositor c, RgbaImage frame, double tSec) {
     final ph = (u * pulses + k / n) % 1.0;
     final e = 1.0 - math.pow(1.0 - ph, 3); // easeOutCubic：出手快、收尾缓
     final rad = rIn + (rOut - rIn) * e * rg.radJit;
-    final env = math.sin(math.pi * ph);
+    // Task 3.4（§6.2/R17）：一次性淡入淡出不是周期载体——standard 用
+    // 「整流 snapWave × sin(π·ph) 窗 ÷ 实测峰」做快起慢落闪光；legacy 冻结。
+    final env = aa
+        ? math.max(0.0, snapWave(ph)) * math.sin(math.pi * ph) / _ringSnapWindowPeak
+        : math.sin(math.pi * ph);
     final a = (p.opacity.clamp(0.0, 1.0) * env * rg.alphaJit * 255).round();
     if (a <= 0 || rad <= 0) continue;
     final th = baseTh * rg.widthJit * (1.0 - 0.4 * e); // 越远越细

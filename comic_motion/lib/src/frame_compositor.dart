@@ -10,6 +10,7 @@ import 'render/envelope.dart';
 import 'render/quality.dart';
 import 'render/raster.dart';
 import 'render/resampler.dart';
+import 'render/waveform.dart';
 import 'saliency_anchors.dart';
 
 part 'effects/comic_pass.dart';
@@ -484,10 +485,12 @@ class FrameCompositor {
     final k = pos.floor().clamp(0, bursts.length - 1);
     final ph = pos - k;
     final env = math.pow(1.0 - ph, p.decay.clamp(0.05, 3.0) * 2).toDouble();
-    final amp = p.amplitude.clamp(0.0, 0.12) *
-        w *
-        env *
-        math.sin(2 * math.pi * _shakeRattle * pos);
+    // Task 3.4（§6.2/R17）：standard+ 用 snapWave 张力波替换正弦载体。θ =
+    // 2π·_shakeRattle·pos，折成 u = θ/2π = _shakeRattle·pos（频率与相位逐字
+    // 保持，3·shakes 整数周期 ⇒ 循环仍闭合）。legacy 分支冻结为原 sin 表达式。
+    final osc =
+        _aa ? snapWave(_shakeRattle * pos) : math.sin(2 * math.pi * _shakeRattle * pos);
+    final amp = p.amplitude.clamp(0.0, 0.12) * w * env * osc;
     final b = bursts[k];
     return (b.dirX * amp, b.dirY * amp);
   }
@@ -929,8 +932,14 @@ class FrameCompositor {
           // v1.4 硬张力（规格 §6.1）：相邻深度层反相（相位步进 li·π），
           // 奇数层与偶数层反向摆动，相邻层相对位移翻倍且肉眼可见；
           // 旧 li*0.35 同向微差在摆幅内互相对销，看不出纵深。
-          dx += math.sin(phase + li * math.pi) * ampPx * dxDir;
-          dy += math.sin(phase * 0.8 + li * math.pi + 0.9) *
+          // Task 3.4（§6.2/R17）：standard+ 载体换成 snapWave，θ/(2π) 折算
+          // 保持 3.2 的 li·π 反相步进（奇数层 u+0.5 → 反瓣）；legacy 分支
+          // 冻结为原 sin 表达式。多幅度项（ampPx/dxDir/verticalRatio/dyDir）不动。
+          final snapDx = snapWave((phase + li * math.pi) / (2 * math.pi));
+          final snapDy =
+              snapWave((phase * 0.8 + li * math.pi + 0.9) / (2 * math.pi));
+          dx += (_aa ? snapDx : math.sin(phase + li * math.pi)) * ampPx * dxDir;
+          dy += (_aa ? snapDy : math.sin(phase * 0.8 + li * math.pi + 0.9)) *
               ampPx *
               config.parallax.verticalRatio *
               dyDir;
@@ -1342,9 +1351,17 @@ class FrameCompositor {
     final len = p.lengthFrac * math.min(w, h);
     final w2pi = 2 * math.pi;
     for (final l in _speedLines) {
-      final pulse = math
-          .pow(math.max(0.0, math.sin(w2pi * (pulses * u + l.phase))), 3.0)
-          .toDouble();
+      // Task 3.4（§6.2/R17）：脉冲载体 standard+ 走 snapWave。θ =
+      // w2pi·(pulses·u + l.phase) 折成 u' = pulses·u + l.phase（l.phase 是
+      // RNG 出的 [0,2π) 弧度，留在括号内原样使用）；max(0,·) 半波整流与
+      // pow(·,3) 成形保持不动，legacy 分支的 sin 逐字节冻结。
+      final pulse = math.pow(
+          math.max(
+              0.0,
+              _aa
+                  ? snapWave(pulses * u + l.phase)
+                  : math.sin(w2pi * (pulses * u + l.phase))),
+          3.0).toDouble();
       if (pulse <= 0.02) continue;
       final a = (p.intensity * pulse * l.alphaJit * 255).round().clamp(0, 255);
       final ux = math.cos(l.theta), uy = math.sin(l.theta);
