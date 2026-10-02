@@ -917,6 +917,13 @@ class FrameCompositor {
     // Layers far-to-near with parallax offsets.
     final p = config.effects.contains(EffectKind.parallax);
     final pOverride = parallaxOverride;
+    // R18/R19 的单一真值：整周期数与对齐周期只在层循环外算一次（两值都只依赖
+    // config，与 li 无关）。竖向基底在下面复用同一个 `cycles`，避免同一量出现
+    // 两个来源（3.6/3.7 不能再各自算一遍）。`alignedPeriod` 仍是一次
+    // `durationSec / cycleCount(...)`，与 alignedPeriodSec 的浮点运算逐位相同。
+    final cycles = MotionMath.cycleCount(
+        config.durationSec, config.parallax.periodSec);
+    final alignedPeriod = config.durationSec / cycles;
     for (var li = 0; li < layers.length; li++) {
       var dx = shakeX, dy = shakeY;
       if (p) {
@@ -930,8 +937,6 @@ class FrameCompositor {
           dy += ampPx * config.parallax.verticalRatio * pOverride.phaseY;
         } else {
           final ampPx = config.parallax.amplitude * _env.motion * w * _mult[li];
-          final alignedPeriod = MotionMath.alignedPeriodSec(
-              config.durationSec, config.parallax.periodSec);
           final phase = 2 * math.pi * tSec / alignedPeriod;
           // v1.4 硬张力（规格 §6.1）：相邻深度层反相（相位步进 li·π），
           // 奇数层与偶数层反向摆动，相邻层相对位移翻倍且肉眼可见；
@@ -944,8 +949,7 @@ class FrameCompositor {
               : math.sin(phase + li * math.pi);
           // R19：竖向基底频率用整数 cycleCount 替代非整 0.8 倍率，
           // 保证 dyCycles 整周期闭合（directionDeg≠0/180 时竖向不再跳缝）。
-          final cycles = MotionMath.cycleCount(
-              config.durationSec, config.parallax.periodSec);
+          // cycles 取自循环外的单一真值（见上），此处只做 0.8 倍率取整。
           final dyCycles = math.max(1, (cycles * 0.8).round());
           final dyPhase =
               2 * math.pi * tSec * dyCycles / config.durationSec;

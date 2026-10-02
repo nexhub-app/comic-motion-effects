@@ -5,7 +5,9 @@ import 'package:comic_motion/comic_motion.dart';
 
 /// v1.1~v1.3 动效演示集生成器：单效 + 组合，一图一目录。
 /// 输出：DELIVERY/effect_showcase/<key>/{anim.gif, frame_0000.png}
-/// 同时写出 presets/*.json（经典/单效/组合预设，供 --config 使用与回滚）。
+/// 同时写出 presets/*.json（经典/单效/组合预设，供 --config 使用）。
+/// 注意：classic.json 是**引擎默认值的快照**（跟随 Dart 默认漂移），
+/// 不是历史版本回滚件——见 _writePresets 的说明。
 ///
 /// 第五轮 W2 追加预览产物：每个 demo 一张首帧 PNG + 一个低配短循环 GIF
 /// （360p / 8fps / 1.5s，体积目标 <300KB/个）进 `doc/previews/<key>/`，
@@ -18,17 +20,25 @@ import 'package:comic_motion/comic_motion.dart';
 Future<void> main(List<String> args) async {
   final previewsOnly = args.contains('--previews-only');
   final presetsOnly = args.contains('--presets-only');
+  // 两个 mode 各表示「只跑这一段」，互斥。同时给出时不再让某一个静默胜出
+  // （旧的位置参数写法就是 --previews-only 先判先赢、presets 被无声忽略），
+  // 而是报错退出：调用方需要的是「我的参数写错了」这条信息。
+  if (previewsOnly && presetsOnly) {
+    stderr.writeln('error: --previews-only 与 --presets-only 互斥，只能给一个');
+    exitCode = 64; // EX_USAGE
+    return;
+  }
   final positional = args.where((a) => !a.startsWith('--')).toList();
   final outRoot =
       positional.isNotEmpty ? positional[0] : 'DELIVERY/effect_showcase';
   final presetDir = positional.length > 1 ? positional[1] : 'presets';
 
-  await _runShowcase(outRoot, presetDir, previewsOnly, presetsOnly);
+  await _runShowcase(outRoot, presetDir,
+      previewsOnly: previewsOnly, presetsOnly: presetsOnly);
 }
 
-Future<void> _runShowcase(
-    String outRoot, String presetDir, bool previewsOnly,
-    [bool presetsOnly = false]) async {
+Future<void> _runShowcase(String outRoot, String presetDir,
+    {bool previewsOnly = false, bool presetsOnly = false}) async {
   if (!presetsOnly) {
     final root = Directory(outRoot)..createSync(recursive: true);
     // 只清「带 anim.gif 的演示目录」：图鉴 HTML 与启动脚本是手工资产，
@@ -691,19 +701,14 @@ Future<void> _runShowcase(
   // --presets-only：只写 classic.json + 每个 demo 的配置 JSON，不渲染
   // 演示 GIF/PNG、不清理 DELIVERY 目录、不跑 _generatePreviews。
   if (presetsOnly) {
-    final classic = EffectConfig(fps: 12, durationSec: 3, maxDimension: 640);
-    File('$presetDir/classic.json').writeAsStringSync(classic.toJsonString());
-    for (final entry in demos.entries) {
-      final cfg = entry.value();
-      File('$presetDir/${entry.key}.json').writeAsStringSync(cfg.toJsonString());
-    }
+    _writePresets(demos, presetDir);
     stdout.writeln('PRESETS-ONLY: wrote classic + ${demos.length} demo configs');
     return;
   }
 
-  // 经典预设（v1.0.0 行为，回滚用）
-  final classic = EffectConfig(fps: 12, durationSec: 3, maxDimension: 640);
-  File('$presetDir/classic.json').writeAsStringSync(classic.toJsonString());
+  // classic.json + 每个 demo 的 preset（与渲染循环里写的是同一份内容，
+  // 由 _writePresets 单点 emit；见其文档关于 classic 语义的更正）。
+  _writePresets(demos, presetDir);
 
   final tmpRoot = 'build/showcase_tmp';
   if (Directory(tmpRoot).existsSync()) {
@@ -733,14 +738,40 @@ Future<void> _runShowcase(
       paramsFile.copySync('${target.path}/params.json');
     }
     Directory(stemDir).deleteSync(recursive: true);
-    // 预设文件（完整配置，供 --config 直接使用）
-    File('$presetDir/$key.json').writeAsStringSync(cfg.toJsonString());
+    // 预设文件已由循环前的 _writePresets 统一写出（内容与此处 cfg.toJsonString()
+    // 同源同字节），不再重复写一遍。
     n++;
     stdout.writeln(
         '$key: ${r.frameCount} frames, ${(File('${target.path}/anim.gif').lengthSync() / 1024).toStringAsFixed(0)} KB, ${sw.elapsedMilliseconds} ms');
   }
   stdout.writeln('DONE: $n demos -> $outRoot');
   _generatePreviews(demos, inputs);
+}
+
+/// 写出 presets/*.json：classic.json + 每个 demo 的完整配置。
+///
+/// 两条路径共用这一处 emit（review M8）：`--presets-only` 只跑它，全量路径在
+/// 渲染循环之前跑一次——同一个 `cfg.toJsonString()` 写出器、同一份
+/// `EffectConfig`，与旧的全量路径逐条写盘字节一致（emit 内容只依赖 config，
+/// 与渲染产物无关，重复运行幂等）。
+/// 顺序差异：全量路径由「边渲染边逐个写」改成「循环前一次写完」，内容不变，
+/// 只是渲染中途抛错时预设已经落盘——这正是 `--presets-only` 的语义。
+///
+/// classic 的语义更正（review I3）：它由 `EffectConfig(fps: 12, durationSec: 3,
+/// maxDimension: 640)` 生成，其余字段**全部继承引擎默认值**。Task 3.1 就地抬高
+/// 默认值后，它就跟着一起变成 v1.4 张力档，因此它不是「v1.0.0 行为、回滚用」
+/// 的预设（旧注释与文件头文档说的都不再成立）；`classic_base.json` 只是预览
+/// 底图，同样不是回滚件 ⇒ 仓库内目前**没有** v1.0.0 回滚预设。是否要补一个、
+/// 还是以 CHANGELOG 说明，属 Task 3.7 checklist #6 的用户裁定，这里只如实描述
+/// 现状，不改任何 emit 值。
+void _writePresets(
+    Map<String, EffectConfig Function()> demos, String presetDir) {
+  final classic = EffectConfig(fps: 12, durationSec: 3, maxDimension: 640);
+  File('$presetDir/classic.json').writeAsStringSync(classic.toJsonString());
+  for (final entry in demos.entries) {
+    File('$presetDir/${entry.key}.json')
+        .writeAsStringSync(entry.value().toJsonString());
+  }
 }
 
 /// 预览产物分类（index.json 的 `category` 字段，App 面板分组用）。

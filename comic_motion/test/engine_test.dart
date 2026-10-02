@@ -2270,8 +2270,8 @@ void main() {
 
     test('竖向判别式：directionDeg=90 下相邻层竖向反向摆动（dy 项被激活）', () {
       // directionDeg=90 → dyDir=sin(π/2)=1、dxDir=cos(π/2)≈0：层位移纯竖向，
-      // 这才真正触达 frame_compositor.dart:933 的 dy 反相项（默认 0 时 dyDir=0，
-      // dy 项恒 0、从不被本组水平用例覆盖）。
+      // 这才真正触达 frame_compositor.dart 视差 else 分支的竖向 snapDy 项
+      // （默认 0 时 dyDir=0，dy 项恒 0、从不被本组水平用例覆盖）。
       final cfgV = EffectConfig(
         effects: [EffectKind.parallax],
         fps: 8,
@@ -2301,11 +2301,19 @@ void main() {
       expect(dMid.abs(), greaterThan(3.0), reason: 'mid 层应有竖向位移');
       expect(dNear.abs(), greaterThan(3.0), reason: 'near 层应有竖向位移');
 
-      // 判别式：新 li·π 反相在 t=0 与 t=duration/2 的 dy 因子恒满足
-      // sin(0+li·π+0.9) 与 sin(π+li·π+0.9)=−sin(li·π+0.9)，且奇偶层反号
-      // → 相邻层竖向摆动方向相反（far/mid 反、mid/near 反）。旧 li·0.5 在
-      // t=0 因子 sin(li·0.5+0.9)≈{+0.783,+0.467,−0.015}：far 与 mid 同号，
-      // 反相极值相减后 far、mid 位移差仍同号 → 本反号断言在旧代码下必红（真判别式）。
+      // 判别式（算术可核验，sin 以弧度计）：R19 后竖向基底
+      // dyPhase(t) = 2π·t·dyCycles/duration，本配置 cycles=1 → dyCycles=1、
+      // duration=period=3，故 dyPhase(0)=0、dyPhase(period/2)=π。
+      //   t=0:        sin(li·π+0.9) ≈ {+0.783, −0.783, +0.783}
+      //   t=period/2: sin(π+li·π+0.9) = −sin(li·π+0.9) ≈ {−0.783, +0.783, −0.783}
+      // → 三层差分 ≈ {−1.567, +1.567, −1.567}：相邻层竖向摆动方向相反
+      //（far/mid 反、mid/near 反）。
+      // 对照旧竖向项 sin(phase·0.8 + li·0.5 + 0.9)（3.2 前的反相步进 + 非整
+      // 0.8 倍率；phase=2π·t/periodSec）：
+      //   t=0:        sin(li·0.5+0.9) ≈ {+0.783, +0.985, +0.946}（三者同号）
+      //   t=period/2: sin(0.8π+li·0.5+0.9) ≈ {−0.268, −0.697, −0.956}
+      // → 差分 ≈ {−1.052, −1.683, −1.902} 全同号，far/mid、mid/near 都同向
+      // → 本反号断言在旧代码下必红（真判别式）。
       expect(dFar.sign, -dMid.sign, reason: 'far 与 mid 应竖向反向摆动');
       expect(dMid.sign, -dNear.sign, reason: 'mid 与 near 应竖向反向摆动');
 
@@ -2314,8 +2322,9 @@ void main() {
       expect((dFar - dMid).abs(), greaterThan(0.85 * (dFar.abs() + dMid.abs())));
       expect((dMid - dNear).abs(),
           greaterThan(0.85 * (dMid.abs() + dNear.abs())));
-      // 注：R19 竖向基底已改为 dyCycles 整周期，dyDir≠0 时竖向也整周期闭合；
-      // 本 test 用 period/4 与 period/4+period/2 一对反相帧做差分判别。
+      // 注：R19 竖向基底已改为 dyCycles 整周期，dyDir≠0 时竖向也整周期闭合
+      //（见 3.5 组的竖向无缝 test）；本 test 取 t=0 与 t=period/2 这一对
+      // 相差半周期（π 相位推进）的帧做差分判别。
     });
 
     test('标准档同款判别式：standard 层相邻层水平反向摆动（Task 3.6 默认档）', () {
@@ -2417,7 +2426,10 @@ void main() {
           n++;
         }
       }
-      return n > 0 ? sum / n : 150.0;
+      // 与 3.2 的 barCentroid/barCentroidCol 同一写法：命中数为 0 必须直接红，
+      // 否则「色条被裁掉」会被 150.0 这类哨兵值伪装成一次有效测量。
+      expect(n, greaterThan(0), reason: 'row=$row 应能定位色条');
+      return sum / n;
     }
 
     bool isRed35(int r, int g, int b) => r > 150 && g < 90 && b < 90;
@@ -2456,9 +2468,19 @@ void main() {
       expect(MotionMath.cycleCount(3.0, double.nan), 1);
       expect(MotionMath.cycleCount(double.infinity, 3.0), 1);
       expect(MotionMath.cycleCount(3.0, double.infinity), 1);
-      // alignedPeriodSec with degenerate always positive
+      // alignedPeriodSec 的「never-0」对偶契约（review M10）：消费点是
+      // 2π·t/alignedPeriod，返回 0 会变成 Infinity→NaN，因此 duration 非正/
+      // 非有限时落到 1.0 秒兜底（每秒一个整周期）。durationSec 在 EffectConfig
+      // 构造时已校验为正，这条分支只防御外部 JSON 或直接调用。
       expect(MotionMath.alignedPeriodSec(3.0, 0.0), 3.0);
-      expect(MotionMath.alignedPeriodSec(0.0, 6.0), 0.0);
+      expect(MotionMath.alignedPeriodSec(0.0, 6.0), 1.0);
+      expect(MotionMath.alignedPeriodSec(double.nan, 6.0), 1.0);
+      expect(MotionMath.alignedPeriodSec(double.infinity, 6.0), 1.0);
+      for (final d in [0.0, -1.0, double.nan, double.infinity]) {
+        final p = MotionMath.alignedPeriodSec(d, 6.0);
+        expect(p, greaterThan(0.0), reason: 'duration=$d 不应产出 0 周期');
+        expect(p.isFinite, isTrue, reason: 'duration=$d 不应产出非有限周期');
+      }
     });
 
     test('全遍历判别式：mis-aligned(3/6)配置每层水平位移到达正负两极', () {
@@ -2472,14 +2494,22 @@ void main() {
       );
       final comp = FrameCompositor(layers35, img35, cfg);
       final baseline = centroid35(comp.renderFrame(0.0), 195, isGreen35);
+      final baselineFar = centroid35(comp.renderFrame(0.0), 100, isRed35);
 
       // 采样整条 duration，追踪 mid 层位移（相对 t=0）
       double minShift = 0, maxShift = 0;
+      double minFar = 0, maxFar = 0;
       for (var t = 0.0; t <= dur35; t += dur35 / 24) {
         final c = centroid35(comp.renderFrame(t), 195, isGreen35);
         final shift = c - baseline;
         if (shift < minShift) minShift = shift;
         if (shift > maxShift) maxShift = shift;
+        // far 层（row 100 红条，mult 最小 → 满幅 ≈ 30×0.25=7.5px）：同一
+        // 判别式的第二层证据，同时让 isRed35 谓词真正被使用（analyze 干净）。
+        final cf = centroid35(comp.renderFrame(t), 100, isRed35);
+        final sf = cf - baselineFar;
+        if (sf < minFar) minFar = sf;
+        if (sf > maxFar) maxFar = sf;
       }
 
       // 对齐后到达正负两极：|mid 位移峰值| ≈ amp·w·mult_mid = 0.1*300*0.625 = 18.75
@@ -2488,6 +2518,10 @@ void main() {
           reason: '对齐后正向极值应明显（期望 ~18px）');
       expect(minShift, lessThan(-5.0),
           reason: '对齐后负向极值应明显（期望 ~-18px）');
+      // far 层满幅 7.5px：两极各 >2.5px 就意味着「不是单符号扫掠」——
+      // BASE 的 ½ 周期扫掠只能给出单符号，这两条同样把它钉红。
+      expect(maxFar, greaterThan(2.5), reason: 'far 层应到达正向极值');
+      expect(minFar, lessThan(-2.5), reason: 'far 层应到达负向极值');
     });
 
     test('视差水平无缝：mis-aligned(3/4) renderFrame(0)==renderFrame(duration)',
@@ -2525,6 +2559,44 @@ void main() {
       );
     });
 
+    // review M11：上面两条 seam test 没设 quality，只跑 legacy 档，R19 的
+    // snapWave 竖向分支（frame_compositor 的 `_aa ? snapWave(...)` 操作数选择）
+    // 只是被传递性地覆盖到。Task 3.6 要把 standard 设为默认档，这里两档各留
+    // 一条同场景 seam test（先显式 pin，默认翻转后断言本身不变）。
+    test('视差水平无缝（standard 档）：mis-aligned(3/4) 首尾帧一致', () {
+      final cfg = EffectConfig(
+        effects: [EffectKind.parallax],
+        fps: 24,
+        durationSec: dur35,
+        parallax: ParallaxParams(amplitude: amp35, periodSec: 4.0),
+        quality: QualityParams(tier: RenderTier.standard),
+      );
+      final comp = FrameCompositor(layers35, img35, cfg);
+      expect(
+        comp.renderFrame(0.0).data,
+        comp.renderFrame(dur35).data,
+        reason: 'R18 对齐 + standard 档 snapWave ⇒ 首尾帧逐字节一致',
+      );
+    });
+
+    test('视差竖向无缝（R19, standard 档）：directionDeg=90, mis-aligned(3/6)',
+        () {
+      final cfg = EffectConfig(
+        effects: [EffectKind.parallax],
+        fps: 24,
+        durationSec: dur35,
+        parallax:
+            ParallaxParams(amplitude: amp35, periodSec: badPeriod, directionDeg: 90),
+        quality: QualityParams(tier: RenderTier.standard),
+      );
+      final comp = FrameCompositor(layers35, img35, cfg);
+      expect(
+        comp.renderFrame(0.0).data,
+        comp.renderFrame(dur35).data,
+        reason: 'R19 竖向整周期 + standard 档 snapWave ⇒ 首尾帧逐字节一致',
+      );
+    });
+
     test('呼吸无缝：duration=3/periodSec=4, renderFrame(0)==renderFrame(3)', () {
       final cfg = EffectConfig(
         effects: [EffectKind.breathing],
@@ -2549,15 +2621,35 @@ void main() {
       );
     });
 
-    test('预设数据同步守卫：无 pinned 值等于 v1.4 前的冻结默认值', () {
-      // 规格 §6.1 抬高的旧默认值（v1.4 前的 Dart 默认），presets/*.json 不得
-      // 再 pin 这些值——否则 Task 3.1 的 louder defaults 被旧值覆盖。
-      const badParallax = 0.012;
-      const badBreathing = 0.006;
-      const badAmbientOpacity = 0.16;
-      const badShake = 0.006;
-      const badHeartbeat = 0.010;
-      const badSlowPush = 0.035;
+    test('预设数据同步守卫：pinned 值不低于 §6.1 新默认值的 80% 下限', () {
+      // 规格 §6.1 抬高了六个默认值；presets/*.json 由 tool/generate_showcase.dart
+      // 生成，一旦生成器仍 pin 旧值就会覆盖 Task 3.1 的 louder defaults。
+      //
+      // review I2：断言**不变量**（>= 下限），而不是逐个比对旧的精确值。
+      // 旧表里 mangaShake 0.006 / slowPush 0.035 是 Dart 默认值，而 presets 实际
+      // pin 过 0.007/0.008/0.009 与 0.030，parallax/breathing 也漏掉
+      // 0.010/0.014/0.016 与 0.005/0.007/0.008 这些 ±20% 变体 ⇒ exact-match 只拦
+      // 得住一部分 stale 重发。下限取「新默认值 × 0.8」：0.8 是生成器为每个 demo
+      // 保留的 ±20% 变化带（addendum R21），而六个 v1.4 前的旧默认值全部落在
+      // 该下限之下（parallax 0.012<0.024、breathing 0.006<0.0096、ambient
+      // 0.16<0.176、mangaShake 0.009<0.0144、heartbeat 0.012<0.016、slowPush
+      // 0.035<0.048），因此任何一次 stale 重发（含其变体）都会红。
+      const floors = <String, double>{
+        'parallax.amplitude': 0.024, // 0.030 × 0.8
+        'breathing.amplitude': 0.0096, // 0.012 × 0.8
+        'ambient.opacity': 0.176, // 0.22 × 0.8
+        'mangaShake.amplitude': 0.0144, // 0.018 × 0.8
+        'heartbeat.intensity': 0.016, // 0.020 × 0.8
+        'slowPush.pushFrac': 0.048, // 0.060 × 0.8
+      };
+
+      double? pinned(Map<String, dynamic> j, String dottedKey) {
+        final dot = dottedKey.indexOf('.');
+        final seg = j[dottedKey.substring(0, dot)];
+        if (seg is! Map) return null; // 未 pin：继承默认值，交给引擎
+        final v = seg[dottedKey.substring(dot + 1)];
+        return v is num ? v.toDouble() : null;
+      }
 
       final dir = Directory('presets');
       expect(dir.existsSync(), isTrue, reason: 'presets/ 目录必须存在');
@@ -2568,35 +2660,12 @@ void main() {
       for (final f in files) {
         final j = convert.jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
         final name = f.uri.pathSegments.last;
-        final px = j['parallax'];
-        if (px is Map) {
-          expect(px['amplitude'], isNot(equals(badParallax)),
-              reason: '$name: parallax.amplitude pinned to old default');
-        }
-        final br = j['breathing'];
-        if (br is Map) {
-          expect(br['amplitude'], isNot(equals(badBreathing)),
-              reason: '$name: breathing.amplitude pinned to old default');
-        }
-        final amb = j['ambient'];
-        if (amb is Map) {
-          expect(amb['opacity'], isNot(equals(badAmbientOpacity)),
-              reason: '$name: ambient.opacity pinned to old default');
-        }
-        final shake = j['mangaShake'];
-        if (shake is Map) {
-          expect(shake['amplitude'], isNot(equals(badShake)),
-              reason: '$name: mangaShake.amplitude pinned to old default');
-        }
-        final hb = j['heartbeat'];
-        if (hb is Map) {
-          expect(hb['intensity'], isNot(equals(badHeartbeat)),
-              reason: '$name: heartbeat.intensity pinned to old default');
-        }
-        final sp = j['slowPush'];
-        if (sp is Map) {
-          expect(sp['pushFrac'], isNot(equals(badSlowPush)),
-              reason: '$name: slowPush.pushFrac pinned to old default');
+        for (final e in floors.entries) {
+          final v = pinned(j, e.key);
+          if (v == null) continue;
+          expect(v, greaterThanOrEqualTo(e.value),
+              reason: '$name: ${e.key}=$v 低于 §6.1 下限 ${e.value}'
+                  '（stale 重发把值退回 v1.4 前的旧默认了吗？）');
         }
       }
     });

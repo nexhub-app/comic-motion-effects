@@ -56,6 +56,13 @@ class MotionMath {
   }
 
   /// 对齐后的周期值：durationSec / cycleCount，保证整数周期无缝。
-  static double alignedPeriodSec(double durationSec, double periodSec) =>
-      durationSec / cycleCount(durationSec, periodSec);
+  /// 与 `cycleCount` 的「恒 >= 1」契约对偶，这里也保证返回值**恒为正且有限**：
+  /// 消费点是 `2π·t/alignedPeriod`（frame_compositor 的视差/呼吸），0 周期会
+  /// 变成 Infinity→NaN。`durationSec` 在 EffectConfig 构造时已校验为正，
+  /// 兜底分支只防御外部 JSON 或直接调用；兜底值取 1.0 秒（每秒一个整周期）。
+  /// 正常路径的浮点运算与旧实现逐位一致（同一次除法、同样的操作数）。
+  static double alignedPeriodSec(double durationSec, double periodSec) {
+    final aligned = durationSec / cycleCount(durationSec, periodSec);
+    return aligned > 0 && aligned.isFinite ? aligned : 1.0;
+  }
 }
