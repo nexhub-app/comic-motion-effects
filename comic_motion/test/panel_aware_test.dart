@@ -52,11 +52,15 @@ void main() {
     return im;
   }
 
+  // Task 3.6 R28：分格 fixture 做成**与档位无关** —— twoPanelRaster 最长边 300，
+  // maxDimension 取 300 ⇒ 两档都不降采样。降采样算法随档位不同（standard 面积
+  // 平均 vs legacy 最近邻），缩到 200 会把 20px 白带抹到检不出 2 格，那是降采样
+  // 边际效应而不是分格逻辑；把上限抬到不缩放，两条档位的分格断言才都在跑。
   Map<String, dynamic> cfgJson(bool panel) => <String, dynamic>{
         'effects': ['parallax'],
         'fps': 24,
         'durationSec': 2.0,
-        'maxDimension': 200,
+        'maxDimension': 300,
         'outputFormat': 'gif',
         'seed': 7,
         if (panel) 'panelAware': true,
@@ -189,7 +193,8 @@ void main() {
           'effects': ['parallax', 'rain'],
           'fps': 24,
           'durationSec': 2.0,
-          'maxDimension': 200,
+          // 同 cfgJson：300 ⇒ 两档都不降采样，分格断言与档位无关（R28）。
+          'maxDimension': 300,
           'outputFormat': 'gif',
           'seed': 11,
           if (panel) 'panelAware': true,
@@ -201,7 +206,7 @@ void main() {
           'effects': ['parallax', 'snow'],
           'fps': 24,
           'durationSec': 2.0,
-          'maxDimension': 200,
+          'maxDimension': 300,
           'outputFormat': 'gif',
           'seed': 11,
           if (panel) 'panelAware': true,
@@ -262,7 +267,10 @@ void main() {
     }
 
     test('红雨 panelAware:true → 白带行零渗漏（legacy 段路径 _blendPx 加 clip）', () {
-      expectNoRainInGutter(rainCompositor(null), 'legacy');
+      // Task 3.6：缺 quality 段的 JSON 现在解析成 standard（R24 锁步）⇒
+      // 「legacy 段路径」必须显式钉 tier=legacy，标签才诚实；AA 段路径由
+      // 下一条显式 standard 的用例覆盖，两档覆盖都没有掉。
+      expectNoRainInGutter(rainCompositor('legacy'), 'legacy');
     });
 
     test('红雨 standard 档 → AA 段路径同样不跨白带（R7 drawSegmentAA 加 clip）', () {

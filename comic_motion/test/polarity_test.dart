@@ -316,7 +316,10 @@ void main() {
       expect(s.lightLighter + s.darkDarker, 0);
     });
 
-    test('legacy 档逐字节不变（R10 冻结契约，含默认档）', () {
+    test('显式 legacy 档逐字节不变（R10 冻结契约）', () {
+      // R28（Task 3.6）：默认档已升到 standard ⇒「含默认档」的前提死了，本条
+      // 只保留**显式 tier: legacy** 的五个冻结用例（金标准一字未改），它们才是
+      // 「legacy 仍供显式选择且字节冻结」的证据；默认档那一半拆到下一条测试。
       // 摘要取自**改动前的 HEAD**（把 BASE 的三个 lib 文件复制进临时包跑同一
       // 份脚本），这里逐条对上 ⇒ 「新极性只活在 standard+」是可执行证明，
       // 而不只是口头承诺；改动后再跑一次同脚本报数完全一致。
@@ -363,18 +366,36 @@ void main() {
         expect(_fnv(render(kinds, tier, t).data), equals(want),
             reason: '${e.key} 的 legacy 产物被改动了');
       }
-      // 默认 quality.tier 就是 legacy：不写质量的调用方同样逐字节冻结。
-      final def = FrameCompositor(
-              layers,
-              img,
-              EffectConfig(effects: const [
-                EffectKind.parallax,
-                EffectKind.speedLines,
-                EffectKind.impactFlash
-              ], fps: 8, durationSec: 2, seed: 77))
+    });
+
+    test('默认档已是 standard：行为门可核验，绝对 digest 归 Task 3.7', () {
+      // R24/R28（Task 3.6）：不写 quality 段的配置现在解析成 standard，
+      // 「默认档也逐字节冻结成 legacy」的前提已经不存在。
+      // 行为半（本轮就能绿，且是真的门）：默认档产物必须**等于**显式 standard、
+      // **不等于**显式 legacy ⇒ 默认档确实翻到了 standard，legacy 只剩显式选择。
+      const kinds = [
+        EffectKind.parallax,
+        EffectKind.speedLines,
+        EffectKind.impactFlash
+      ];
+      final def = FrameCompositor(layers, img,
+              EffectConfig(
+                  effects: kinds, fps: 8, durationSec: 2, seed: 77))
           .renderFrame(0.05);
+      expect(EffectConfig(effects: kinds, fps: 8, durationSec: 2, seed: 77).quality.tier,
+          RenderTier.standard,
+          reason: '默认 quality.tier 必须是 standard（R24）');
+      expect(def.data,
+          equals(render(kinds, RenderTier.standard, 0.05).data),
+          reason: '默认档（不写 quality）应与显式 standard 逐字节一致');
+      expect(def.data,
+          isNot(equals(render(kinds, RenderTier.legacy, 0.05).data)),
+          reason: '默认档不应再等于 legacy 字节');
+      // 绝对半（字面量按硬约束一字不改，红必须是 digest 不匹配）：这条摘要是
+      // 改动前 HEAD 的 **legacy 默认档**字节 ⇒ Task 3.6 后必然对不上，
+      // 由 Task 3.7 用 standard 默认档的新摘要重新锚定（R31）。
       expect(_fnv(def.data), equals(_BASE_DEFAULT_TIER),
-          reason: '默认档（不写 quality）的产物必须仍是 legacy 字节');
+          reason: '默认档 digest 待 Task 3.7 re-baseline（本轮预期红，且只红在这一行）');
     });
 
     test('standard 档与 legacy 档确实不同（极性生效）', () {

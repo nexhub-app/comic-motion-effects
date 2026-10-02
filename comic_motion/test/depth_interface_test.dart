@@ -122,6 +122,11 @@ void main() {
       final cfg = EffectConfig.fromJson(<String, dynamic>{
         ...cfgJson(),
         'panelAware': true,
+        // Task 3.6 R28：fixture 做成与档位无关 —— maxDimension ≥ 最长边（160）
+        // ⇒ 两档都**不降采样**。降采样算法随档位不同（standard 面积平均 vs legacy
+        // 最近邻），缩到 120 会把 160×120 图的白带边缘抹平、PanelSplitter 检不到
+        // 2 格；这是降采样边际效应，不是分格逻辑坏了。
+        'maxDimension': 160,
       });
       // 两格竖排图（白带 90..110，内容块两侧）。
       final im = RgbaImage(width: 120, height: 160);

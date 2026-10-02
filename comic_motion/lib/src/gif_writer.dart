@@ -274,6 +274,22 @@ class GifFrameEncoder {
   }
 }
 
+/// standard+ 档的调色板探针帧下标（v1.4 Task 3.6 / R27：3 帧 → 6 帧）。
+///
+/// 均匀铺开 `[0, n~/5, 2n~/5, 3n~/5, 4n~/5, n-1]`，让只在个别时刻出现的
+/// 饱和亮色（加粗墨线、闪光帧）有更多机会进 256 色板（§6.4「不被量化吞」）。
+/// 确定性：纯函数、无随机无时钟；返回序单调不降，小 n 会出现重复下标，由
+/// 调用方的插入序 Map（`putIfAbsent`）天然去重 ⇒ `primePalette` 入参顺序
+/// 依旧确定。legacy 档（wantsProbes=false）的单探针 `[0]` 分支不经此函数。
+List<int> paletteProbeIndices(int n) => [
+      0,
+      n ~/ 5,
+      (2 * n) ~/ 5,
+      (3 * n) ~/ 5,
+      (4 * n) ~/ 5,
+      n - 1,
+    ];
+
 /// Streaming GIF89a writer: builds ONE palette via median-cut, then quantizes +
 /// LZW-encodes each frame on the fly and discards it.
 /// Memory stays O(one frame) instead of O(all frames).
@@ -322,7 +338,8 @@ class StreamingGifBuilder {
   /// 按帧序进行（worker 只做量化回传索引图），确定性由按序汇聚保证。
   final bool rectDiff;
 
-  /// 管线用：standard+ 档在流式提交前先给三帧探针建调色板。
+  /// 管线用：standard+ 档在流式提交前先给六帧探针建调色板（v1.4 R27，
+  /// 下标见 [paletteProbeIndices]；legacy 档仍是 v1.2 的首帧建板）。
   bool get wantsProbes => tier.atLeastStandard;
 
   final BytesBuilder _body = BytesBuilder();

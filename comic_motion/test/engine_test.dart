@@ -527,9 +527,11 @@ void main() {
     test('并行与串行输出逐字节一致（GIF 与 PNG 帧序列）', () async {
       final inPath = '${tmp.path}/in.png';
       File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(96, 64)));
+      // 12 帧（v1.4 Task 3.6 起 standard 档探针占 6 帧）：必须留足非探针帧，
+      // worker 路径才有真实负载可被「parallel>1」这条断言钉住。
       final cfg = EffectConfig(
         fps: 6,
-        durationSec: 1,
+        durationSec: 2,
         maxDimension: 96,
         outputFormat: OutputFormat.both,
         effects: const [
@@ -957,7 +959,10 @@ void main() {
     test('后台中途取消：E_CANCELLED 上抛到调用方', () async {
       final inPath = '${tmp.path}/in.png';
       File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(64, 64)));
-      final cfg = EffectConfig(fps: 6, durationSec: 1, maxDimension: 64);
+      // 18 帧（v1.4 Task 3.6 起 standard 档 6 探针会一口气渲染掉小场景的
+      // 全部帧）：留足探针之后的帧，首个进度回传后取消才能落在渲染中途，
+      // 而不是任务已完成。
+      final cfg = EffectConfig(fps: 6, durationSec: 3, maxDimension: 64);
       final token = MotionCancelToken();
       final jobDir = '${tmp.path}/bg_cancel/in_${ImageIO.contentHash8(_pngEncode(_gradientImage(64, 64)))}_${cfg.configHash.substring(0, 8)}';
       await expectLater(
@@ -1102,15 +1107,26 @@ void main() {
       });
     });
 
-    test('默认路径：序列化与 configHash 完全不变（条件序列化保持）', () {
+    test('默认路径：新默认写 quality 三键，便捷参数与嵌套参数仍等价（R24/R26）', () {
       final base = EffectConfig();
-      // null 与显式默认值同路径
-      expect(EffectConfig(dither: false).configHash, base.configHash);
+      // null 便捷参数与全默认同路径
       expect(EffectConfig(dither: null, amplitude: null).configHash,
           base.configHash);
-      // 经典配置不出现 quality 段（v1.2 指纹不变）
-      expect(base.toJson().containsKey('quality'), isFalse);
+      // v1.4 R24：默认档 standard ≠ 省略哨兵 ⇒ quality 段出现且恰这三键
+      final q = base.toJson()['quality'] as Map;
+      expect(q, {'dither': true, 'ditherMode': 'sierra', 'tier': 'standard'});
+      // 便捷参数与显式嵌套参数序列化一致（相对契约，不落在绝对指纹上）
+      final explicit = EffectConfig()
+        ..quality = const QualityParams(dither: false);
+      expect(EffectConfig(dither: false).toJson(), explicit.toJson());
+      expect(EffectConfig(dither: false).configHash, explicit.configHash);
+      // 往返稳定：哈希即身份
       expect(EffectConfig.fromJson(base.toJson()).configHash, base.configHash);
+      // 显式旧哨兵组合（legacy/floyd/false）仍然整段不写
+      final legacySentinel = EffectConfig()
+        ..quality = const QualityParams(
+            dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
+      expect(legacySentinel.toJson().containsKey('quality'), isFalse);
       // 非 null 便捷参数才写 quality 段
       expect(EffectConfig(dither: true).toJson()['quality'], isNotNull);
     });
@@ -1180,16 +1196,56 @@ void main() {
     });
 
     test('estimateCost：1080p 典型场景覆盖 bench 实测区间', () {
+      // 被测契约：估算**区间必须罩住实测**，且模型必须区分档位
+      // （v1.4 Task 3.6/R27 把默认档翻到 standard ⇒ 旧区间的 legacy 锚点失效）。
       final cfg = EffectConfig(fps: 24, durationSec: 4, maxDimension: 1600);
       final est = estimateCost(cfg, sourceWidth: 1920, sourceHeight: 1080);
       expect(est.workingWidth, 1600, reason: '最长边降到 maxDimension');
       expect(est.workingHeight, 900);
       expect(est.frameCount, 96);
-      // bench 实测（README 性能参考）：1080p 534MB/2.25s、1600 上限 607MB
-      expect(est.minPeakMemoryMb <= 534, isTrue, reason: '实测值应落在区间内');
-      expect(est.maxPeakMemoryMb >= 607, isTrue);
-      expect(est.minDurationMs <= 2300, isTrue);
-      expect(est.maxDurationMs >= 2200, isTrue);
+      // v1.4 Task 3.6 重锚定的实测来源（本机 18 核、parallel=8、jit 预热后二跑）：
+      //  A. tool/bench.dart（sample_images/01_portrait.png 900×1300，写
+      //     build/bench/bench_report.json）：
+      //      draft_480p legacy 227ms / 453.0MB；typical_1080p legacy 2228ms /
+      //      572.0MB；standard_1080p 4212ms / 675.6MB；preview_1600 legacy
+      //      4451ms / 675.6MB；parallel=1 扫档 standard_1080p 18527ms。
+      //     ⇒ spec §7 P3「typical_1080p ≤ 5s」在新默认（standard）下实测 4.21s
+      //     仍然成立（六探针已计入这次实测）。
+      //  B. 本用例场景的专用锚定跑（把同一张样图烘成 1920×1080 ⇒ 工作栅格恰为
+      //     1600×900，与 estimateCost 的模型一致）：standard（新默认，6 探针）
+      //     **7041ms**，显式 legacy 同工作量 **4249ms**。
+      // 内存：模型档位无关（每 worker 一整套层栅格），锚点取 A 的两端实测。
+      expect(est.minPeakMemoryMb <= 572, isTrue,
+          reason: '下界不得高过 1080p 实测 RSS（572MB）');
+      expect(est.maxPeakMemoryMb >= 675, isTrue,
+          reason: '上界必须覆盖 1600 档实测 RSS（675.6MB）');
+      // 耗时（standard 臂）：实测 7041ms 必须落在区间内。
+      expect(est.minDurationMs <= 7041, isTrue,
+          reason: '下界（桌面多核理想）不得高过 standard 实测 7041ms');
+      expect(est.maxDurationMs >= 7041, isTrue,
+          reason: '上界（低端单核近似）必须罩住 standard 实测 7041ms');
+      // 档位区分：同一工作量的显式 legacy 区间必须整体低于 standard，
+      // 否则模型根本没在区分两档（翻默认 = 白翻）。
+      final legacyEst = estimateCost(
+          EffectConfig(
+              fps: 24,
+              durationSec: 4,
+              maxDimension: 1600,
+              quality: const QualityParams(tier: RenderTier.legacy)),
+          sourceWidth: 1920,
+          sourceHeight: 1080);
+      expect(legacyEst.minDurationMs, lessThan(est.minDurationMs),
+          reason: 'standard 下界必须高于 legacy（AA 光栅 + 面积平均更贵）');
+      expect(legacyEst.maxDurationMs, lessThan(est.maxDurationMs),
+          reason: 'standard 上界必须高于 legacy');
+      // 比值锚定 ns/帧像素：standard 22 vs legacy 12 ⇒ 1.83×，
+      // 低于 1.5× 说明档位系数被抹平（真门，非放宽）。
+      expect(est.minDurationMs / legacyEst.minDurationMs,
+          greaterThanOrEqualTo(1.5),
+          reason: 'standard 下界应显著高于 legacy 下界');
+      // legacy 臂自己的实测（B：4249ms）也必须落在 legacy 区间内。
+      expect(legacyEst.minDurationMs <= 4249, isTrue);
+      expect(legacyEst.maxDurationMs >= 4249, isTrue);
       expect(est.note, contains('empirical'));
       expect(est.toJson()['maxPeakMemoryMb'], isNotNull);
     });
@@ -1666,7 +1722,7 @@ void main() {
       }, onProgress: (done, total) => progress.add(done))
           .processFile(inPath, '${tmp.path}/of_out');
       expect(indices, [for (var i = 0; i < cfg.frameCount; i++) i],
-          reason: '一帧恰好一次、严格升序（探针帧 0/中/末 也在其中）');
+          reason: '一帧恰好一次、严格升序（v1.4 六探针帧也在其中）');
       for (final i in indices) {
         expect(pngs[i],
             equals(File(ImageIO.pngPathFor(r.frameDir, i)).readAsBytesSync()),
@@ -2188,7 +2244,21 @@ void main() {
     final layers = LayerSplitter(layerCount: 3).split(img, bandDepth());
 
     test('峰值帧相邻层反向摆动：far/mid/near 质心位移反号且相对位移翻倍', () {
-      final comp = FrameCompositor(layers, img, cfg);
+      // 本判别式**本质上只在纯正弦成立**：它取 t=0 作「位移恰为 0」的基线帧
+      // （sin(0+li·π)=0），再取 t=period/4 的峰值帧，才有下面那些像素级理论值
+      // （far ~7.5 / mid ~15 / near ~22.5）。Task 3.6 把默认档升到 standard 后
+      // 载体换成 snapWave，而 snapWave(0)=0.3387≠0 ⇒ 基线假设失效。
+      // 因此这里显式钉 legacy 档，钉的是「正弦载体的峰值/零位基线」这一半契约；
+      // 新默认（standard + snapWave）的同一反相判别由本组末尾
+      // 「标准档同款判别式」那条测试覆盖（R28），覆盖没有掉。
+      final sineCfg = EffectConfig(
+        effects: const [EffectKind.parallax],
+        fps: 8,
+        durationSec: period,
+        parallax: ParallaxParams(amplitude: amp, periodSec: period),
+        quality: const QualityParams(tier: RenderTier.legacy),
+      );
+      final comp = FrameCompositor(layers, img, sineCfg);
       final base = comp.renderFrame(0.0); // phase=0：位移为 0 的基线
       final peak = comp.renderFrame(period / 4); // phase=π/2：正弦峰值
 
@@ -2272,59 +2342,75 @@ void main() {
       // directionDeg=90 → dyDir=sin(π/2)=1、dxDir=cos(π/2)≈0：层位移纯竖向，
       // 这才真正触达 frame_compositor.dart 视差 else 分支的竖向 snapDy 项
       // （默认 0 时 dyDir=0，dy 项恒 0、从不被本组水平用例覆盖）。
-      final cfgV = EffectConfig(
-        effects: [EffectKind.parallax],
-        fps: 8,
-        durationSec: period,
-        parallax:
-            ParallaxParams(amplitude: amp, periodSec: period, directionDeg: 90),
-      );
       const col = 150; // 三根色条同列，均在缩放枢轴所在列上
-      final compV = FrameCompositor(layers, img, cfgV);
-      // R19 竖向基底 = dyCycles/duration·2π（cycles=1 时 dyCycles=1），
-      // 取 t=0 与 t=duration/2（半周期=π 相位推进）这一对帧：li·π 反相步进
-      // 保证 sin(dyPhase+li·π+0.9) 在相邻层反号，差分后位移方向亦反号。
-      // t=0 竖向位移非零（sin(0.9)≠0），故不做「零位移基线」假设——只测差分。
-      final tLo = 0.0;
-      final tHi = period / 2;
-      final a = compV.renderFrame(tLo);
-      final b = compV.renderFrame(tHi);
-      final dFar =
-          barCentroidCol(b, col, isRed) - barCentroidCol(a, col, isRed);
-      final dMid =
-          barCentroidCol(b, col, isGreen) - barCentroidCol(a, col, isGreen);
-      final dNear =
-          barCentroidCol(b, col, isBlue) - barCentroidCol(a, col, isBlue);
+      // R28（Task 3.6 翻默认档）：同一组断言在两档载体上各跑一遍。
+      //  · legacy 载体是纯正弦 ⇒ 仍取原 t=0 ↔ t=period/2 这一对（下面
+      //    0.783/1.567 的核验算术只对这一对成立）。
+      //  · standard（Task 3.6 起为新默认）载体是 snapWave：t=0 恰落在波形平台区，
+      //    far 层差分只剩 3.0px（正好等于阈值）⇒ 重挑时刻 t=period/6 ↔
+      //    period/6+period/2（仍相差半周期，u 恰 +0.5 ⇒ li·π 反相步进保证相邻层
+      //    反号），实测 {4.0, −4.5, 15.0}。断言与阈值一字未放宽。
+      for (final arm in [
+        (tier: RenderTier.legacy, tLo: 0.0),
+        (tier: RenderTier.standard, tLo: period / 6),
+      ]) {
+        final cfgV = EffectConfig(
+          effects: [EffectKind.parallax],
+          fps: 8,
+          durationSec: period,
+          parallax: ParallaxParams(
+              amplitude: amp, periodSec: period, directionDeg: 90),
+          quality: QualityParams(tier: arm.tier),
+        );
+        final compV = FrameCompositor(layers, img, cfgV);
+        // R19 竖向基底 = dyCycles/duration·2π（cycles=1 时 dyCycles=1），
+        // 取相差半周期（π 相位推进）的一对帧：li·π 反相步进保证
+        // sin(dyPhase+li·π+0.9) 在相邻层反号，差分后位移方向亦反号。
+        // t=0 竖向位移非零（sin(0.9)≠0），故不做「零位移基线」假设——只测差分。
+        final a = compV.renderFrame(arm.tLo);
+        final b = compV.renderFrame(arm.tLo + period / 2);
+        final dFar =
+            barCentroidCol(b, col, isRed) - barCentroidCol(a, col, isRed);
+        final dMid =
+            barCentroidCol(b, col, isGreen) - barCentroidCol(a, col, isGreen);
+        final dNear =
+            barCentroidCol(b, col, isBlue) - barCentroidCol(a, col, isBlue);
 
-      // 每层都发生可见竖向摆动（远超质心量化噪声）。
-      expect(dFar.abs(), greaterThan(3.0), reason: 'far 层应有竖向位移');
-      expect(dMid.abs(), greaterThan(3.0), reason: 'mid 层应有竖向位移');
-      expect(dNear.abs(), greaterThan(3.0), reason: 'near 层应有竖向位移');
+        // 每层都发生可见竖向摆动（远超质心量化噪声）。
+        expect(dFar.abs(), greaterThan(3.0), reason: '${arm.tier.name} far 层应有竖向位移');
+        expect(dMid.abs(), greaterThan(3.0), reason: '${arm.tier.name} mid 层应有竖向位移');
+        expect(dNear.abs(), greaterThan(3.0), reason: '${arm.tier.name} near 层应有竖向位移');
 
-      // 判别式（算术可核验，sin 以弧度计）：R19 后竖向基底
-      // dyPhase(t) = 2π·t·dyCycles/duration，本配置 cycles=1 → dyCycles=1、
-      // duration=period=3，故 dyPhase(0)=0、dyPhase(period/2)=π。
-      //   t=0:        sin(li·π+0.9) ≈ {+0.783, −0.783, +0.783}
-      //   t=period/2: sin(π+li·π+0.9) = −sin(li·π+0.9) ≈ {−0.783, +0.783, −0.783}
-      // → 三层差分 ≈ {−1.567, +1.567, −1.567}：相邻层竖向摆动方向相反
-      //（far/mid 反、mid/near 反）。
-      // 对照旧竖向项 sin(phase·0.8 + li·0.5 + 0.9)（3.2 前的反相步进 + 非整
-      // 0.8 倍率；phase=2π·t/periodSec）：
-      //   t=0:        sin(li·0.5+0.9) ≈ {+0.783, +0.985, +0.946}（三者同号）
-      //   t=period/2: sin(0.8π+li·0.5+0.9) ≈ {−0.268, −0.697, −0.955}
-      // → 差分 ≈ {−1.052, −1.683, −1.902} 全同号，far/mid、mid/near 都同向
-      // → 本反号断言在旧代码下必红（真判别式）。
-      expect(dFar.sign, -dMid.sign, reason: 'far 与 mid 应竖向反向摆动');
-      expect(dMid.sign, -dNear.sign, reason: 'mid 与 near 应竖向反向摆动');
+        // 判别式（算术可核验，sin 以弧度计）：R19 后竖向基底
+        // dyPhase(t) = 2π·t·dyCycles/duration，本配置 cycles=1 → dyCycles=1、
+        // duration=period=3，故 dyPhase(0)=0、dyPhase(period/2)=π。
+        //   t=0:        sin(li·π+0.9) ≈ {+0.783, −0.783, +0.783}
+        //   t=period/2: sin(π+li·π+0.9) = −sin(li·π+0.9) ≈ {−0.783, +0.783, −0.783}
+        // → 三层差分 ≈ {−1.567, +1.567, −1.567}：相邻层竖向摆动方向相反
+        //（far/mid 反、mid/near 反）。
+        // standard 臂上同样的反号来自 snapWave 的 1、3 次奇谐波（半周期反瓣），
+        // 2 次谐波项 0.42·sin(2w+π/2) 半周期不变号但幅值小于奇谐波之和 ⇒ 反号保持，
+        // 实测差分 {4.0, −4.5, 15.0} 与 legacy 臂 {4.0, −5.0, 14.5} 同号形。
+        // 对照旧竖向项 sin(phase·0.8 + li·0.5 + 0.9)（3.2 前的反相步进 + 非整
+        // 0.8 倍率；phase=2π·t/periodSec）：
+        //   t=0:        sin(li·0.5+0.9) ≈ {+0.783, +0.985, +0.946}（三者同号）
+        //   t=period/2: sin(0.8π+li·0.5+0.9) ≈ {−0.268, −0.697, −0.955}
+        // → 差分 ≈ {−1.052, −1.683, −1.902} 全同号，far/mid、mid/near 都同向
+        // → 本反号断言在旧代码下必红（真判别式）。
+        expect(dFar.sign, -dMid.sign, reason: '${arm.tier.name} far 与 mid 应竖向反向摆动');
+        expect(dMid.sign, -dNear.sign, reason: '${arm.tier.name} mid 与 near 应竖向反向摆动');
 
-      // 相邻层竖向相对分离 ≈ 两位移绝对值之和（反相特征，同相仅为之差），
-      // 与水平判别式同一「超出同相基线」的表达。
-      expect((dFar - dMid).abs(), greaterThan(0.85 * (dFar.abs() + dMid.abs())));
-      expect((dMid - dNear).abs(),
-          greaterThan(0.85 * (dMid.abs() + dNear.abs())));
+        // 相邻层竖向相对分离 ≈ 两位移绝对值之和（反相特征，同相仅为之差），
+        // 与水平判别式同一「超出同相基线」的表达。
+        expect((dFar - dMid).abs(), greaterThan(0.85 * (dFar.abs() + dMid.abs())),
+            reason: '${arm.tier.name} far/mid 分离不足反相特征');
+        expect((dMid - dNear).abs(),
+            greaterThan(0.85 * (dMid.abs() + dNear.abs())),
+            reason: '${arm.tier.name} mid/near 分离不足反相特征');
+      }
       // 注：R19 竖向基底已改为 dyCycles 整周期，dyDir≠0 时竖向也整周期闭合
-      //（见 3.5 组的竖向无缝 test）；本 test 取 t=0 与 t=period/2 这一对
-      // 相差半周期（π 相位推进）的帧做差分判别。
+      //（见 3.5 组的竖向无缝 test）；本 test 每档取相差半周期（π 相位推进）
+      // 的一对帧做差分判别。
     });
 
     test('标准档同款判别式：standard 层相邻层水平反向摆动（Task 3.6 默认档）', () {
@@ -2752,8 +2838,14 @@ void main() {
       expect(j.containsKey('fog'), isTrue);
       expect(j.containsKey('snow'), isFalse, reason: '未启用不序列化');
       expect((j['quality'] as Map)['dither'], isTrue);
-      // 默认（dither=false）不写 quality 段：保经典指纹
-      expect(EffectConfig().toJson().containsKey('quality'), isFalse);
+      // v1.4 R24/R26：新默认（standard+sierra+dither）非省略哨兵 ⇒ 默认配置写整段三键
+      final defaultQ = EffectConfig().toJson()['quality'] as Map;
+      expect(defaultQ.keys.toSet(), {'dither', 'ditherMode', 'tier'});
+      // 显式旧哨兵组合（legacy/floyd/false）仍不写 quality 段：经典指纹通路保留
+      final legacySentinel = EffectConfig()
+        ..quality = const QualityParams(
+            dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
+      expect(legacySentinel.toJson().containsKey('quality'), isFalse);
       final restored = EffectConfig.fromJson(_decodeJson(cfg.toJsonString()));
       expect(restored.configHash, cfg.configHash);
       expect(restored.fog.blobs, 10);
@@ -2821,12 +2913,20 @@ void main() {
           equals(Uint8List.fromList(_pngEncode(f))));
     });
 
-    test('QualityParams 默认 legacy 且默认配置不序列化 quality 段', () {
-      expect(EffectConfig().toJson().containsKey('quality'), isFalse);
-      expect(EffectConfig().quality.tier, RenderTier.legacy);
-      // v1.2 语义：仅 dither=true 时出现且只含 dither 一个键
-      final d = EffectConfig()..quality = QualityParams(dither: true);
-      expect(d.toJson()['quality'], {'dither': true});
+    test('v1.4 默认 quality 段序列化三键；显式 legacy 哨兵组合仍整段省略（R24/R26）', () {
+      // 新默认：standard 档 + sierra + dither ⇒ 不等于省略哨兵，quality 段必然出现在 JSON 里
+      final q = EffectConfig().toJson()['quality'] as Map;
+      expect(q, {'dither': true, 'ditherMode': 'sierra', 'tier': 'standard'});
+      expect(EffectConfig().quality.tier, RenderTier.standard);
+      // 哨兵语义未变：legacy/floyd/false 的显式旧默认组合仍然「等于旧默认就不写」
+      final legacySentinel = EffectConfig()
+        ..quality = const QualityParams(
+            dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
+      expect(legacySentinel.toJson().containsKey('quality'), isFalse);
+      // 只改一个字段也要写全三键（不写单键，避免「缺键即 legacy」的旧歧义）
+      final d = EffectConfig()..quality = const QualityParams(dither: false);
+      expect(d.toJson()['quality'],
+          {'dither': false, 'ditherMode': 'sierra', 'tier': 'standard'});
     });
 
     test('tier/ditherMode/mipLevels JSON 往返且哈希稳定', () {
@@ -2848,10 +2948,12 @@ void main() {
       expect(back.quality.edgeStretchPx, 0);
     });
 
-    test('quality 段缺省 dither 时与构造默认一致（不静默开抖动）', () {
+    test('quality 段缺省 dither 时与构造默认一致（R24 锁步：缺键 ⇒ 新默认 true）', () {
       final back = EffectConfig.fromJson(_decodeJson(
           '{"effects":["parallax","breathing"],"quality":{"tier":"standard"}}'));
-      expect(back.quality.dither, isFalse);
+      // v1.4：缺键兜底与构造默认锁步 ⇒ 不再静默关抖动
+      expect(back.quality.dither, isTrue);
+      expect(back.quality.ditherMode, 'sierra');
       expect(back.quality.tier, RenderTier.standard);
       final cli = EffectConfig()
         ..effects = const [EffectKind.parallax, EffectKind.breathing];
@@ -2907,15 +3009,17 @@ void main() {
       expect(EngineWorkerException(3, 'x').code, 'E_WORKER_CRASH');
     });
 
-    test('越界质量参数被钳制、未知 tier 回落 legacy、未知 ditherMode 回落 floyd', () {
+    test('越界质量参数被钳制、未知 tier 回落 legacy、未知 ditherMode 回落新默认 sierra', () {
       final q = QualityParams.fromJson({
         'tier': 'ultra',
         'ditherMode': 'blue-noise',
         'mipLevels': 9,
         'edgeStretchPx': -4,
       });
+      // tier 键存在但未知名 ⇒ RenderTier.parse 的既有 sanitise（legacy）不变；
+      // ditherMode 未知名 ⇒ R24 兜底翻到新默认 sierra（仅显式 'floyd' 走 floyd）。
       expect(q.tier, RenderTier.legacy);
-      expect(q.ditherMode, 'floyd');
+      expect(q.ditherMode, 'sierra');
       expect(q.mipLevels, 2);
       expect(q.edgeStretchPx, 0);
     });
@@ -3211,10 +3315,21 @@ void main() {
     });
 
     test('focusLines 仅在启用时序列化，JSON 往返保哈希', () {
-      final cfg = fcfg(focus: const FocusLinesParams(mode: 'both', lines: 40));
+      // R24 后新默认档（standard）写满 quality 三键 ⇒ 往返保哈希；
+      // 混档（tier=legacy 但其余为新默认）是有损组合，不在往返契约里（见报告顾虑）。
+      final cfg = fcfg(
+          focus: const FocusLinesParams(mode: 'both', lines: 40),
+          tier: RenderTier.standard);
       final j = _decodeJson(cfg.toJsonString());
       expect(j['focusLines']['mode'], 'both');
       expect(EffectConfig.fromJson(j).configHash, cfg.configHash);
+      // 哨兵形状：整套旧默认（legacy/floyd/false）仍不写 quality 段
+      final legacyArm = fcfg(focus: const FocusLinesParams(mode: 'both', lines: 40))
+        ..quality = const QualityParams(
+            dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
+      // 注意：整段省略 ⇒ 该 JSON 重新解析落到**新默认 standard**
+      //（spec §6.4「quality-less JSON 现在意味着 standard」），它不是哈希冻结路径。
+      expect(legacyArm.toJson().containsKey('quality'), isFalse);
       final off = EffectConfig(effects: const [EffectKind.parallax]);
       expect(off.toJson().containsKey('focusLines'), isFalse,
           reason: '未启用时不得写入 JSON，否则经典指纹会变');
@@ -3395,11 +3510,20 @@ void main() {
     });
 
     test('screenTone 仅在启用时序列化，JSON 往返保哈希', () {
-      final cfg =
-          tcfg(tone: const ScreenToneParams(mode: 'cross', spacingPx: 10));
+      // R24：往返用 standard 档（quality 段三键完整）保哈希
+      final cfg = tcfg(
+          tone: const ScreenToneParams(mode: 'cross', spacingPx: 10),
+          tier: RenderTier.standard);
       final j = _decodeJson(cfg.toJsonString());
       expect(j['screenTone']['mode'], 'cross');
       expect(EffectConfig.fromJson(j).configHash, cfg.configHash);
+      final legacyArm =
+          tcfg(tone: const ScreenToneParams(mode: 'cross', spacingPx: 10))
+            ..quality = const QualityParams(
+                dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
+      // 注意：整段省略 ⇒ 该 JSON 重新解析落到**新默认 standard**
+      //（spec §6.4「quality-less JSON 现在意味着 standard」），它不是哈希冻结路径。
+      expect(legacyArm.toJson().containsKey('quality'), isFalse);
       final off = EffectConfig(effects: const [EffectKind.parallax]);
       expect(off.toJson().containsKey('screenTone'), isFalse,
           reason: '未启用时不得写入 JSON，否则经典指纹会变');
@@ -3710,13 +3834,20 @@ void main() {
     });
 
     test('impactRings 仅在启用时序列化，JSON 往返保哈希', () {
-      final cfg = rcfg(
-          rings: const ImpactRingsParams(
-              rings: 7, thicknessPx: 6.0, mode: 'shock', pulses: 3));
+      final rings = const ImpactRingsParams(
+          rings: 7, thicknessPx: 6.0, mode: 'shock', pulses: 3);
+      // R24：往返用 standard 档（quality 段三键完整）保哈希
+      final cfg = rcfg(rings: rings, tier: RenderTier.standard);
       final j = _decodeJson(cfg.toJsonString());
       expect(j['impactRings']['rings'], 7);
       expect(j['impactRings']['mode'], 'shock');
       expect(EffectConfig.fromJson(j).configHash, cfg.configHash);
+      final legacyArm = rcfg(rings: rings)
+        ..quality = const QualityParams(
+            dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
+      // 注意：整段省略 ⇒ 该 JSON 重新解析落到**新默认 standard**
+      //（spec §6.4「quality-less JSON 现在意味着 standard」），它不是哈希冻结路径。
+      expect(legacyArm.toJson().containsKey('quality'), isFalse);
       final off = EffectConfig(effects: const [EffectKind.parallax]);
       expect(off.toJson().containsKey('impactRings'), isFalse);
     });
@@ -3897,13 +4028,20 @@ void main() {
     });
 
     test('brushStreak 仅在启用时序列化，JSON 往返保哈希', () {
-      final cfg = bcfg(
-          brush: const BrushStreakParams(
-              streaks: 5, thicknessPx: 9.5, gapFreq: 0.2, angleDeg: -20));
+      final brush = const BrushStreakParams(
+          streaks: 5, thicknessPx: 9.5, gapFreq: 0.2, angleDeg: -20);
+      // R24：往返用 standard 档（quality 段三键完整）保哈希
+      final cfg = bcfg(brush: brush, tier: RenderTier.standard);
       final j = _decodeJson(cfg.toJsonString());
       expect(j['brushStreak']['streaks'], 5);
       expect(j['brushStreak']['angleDeg'], -20);
       expect(EffectConfig.fromJson(j).configHash, cfg.configHash);
+      final legacyArm = bcfg(brush: brush)
+        ..quality = const QualityParams(
+            dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
+      // 注意：整段省略 ⇒ 该 JSON 重新解析落到**新默认 standard**
+      //（spec §6.4「quality-less JSON 现在意味着 standard」），它不是哈希冻结路径。
+      expect(legacyArm.toJson().containsKey('quality'), isFalse);
       final off = EffectConfig(effects: const [EffectKind.parallax]);
       expect(off.toJson().containsKey('brushStreak'), isFalse);
     });
@@ -4251,32 +4389,44 @@ void main() {
     });
 
     test('五效仅在启用时序列化，JSON 往返保哈希', () {
-      final f =
-          flame(const FlameParams(tongues: 9, hot: 'ff0000', cold: '0000ff'));
+      // R24/R26：往返用 standard 档配置（quality 段写满三键，可无损往返）。
+      // 混档（tier=legacy 且其余为新默认）是有意省略 tier 的有损组合，见报告顾虑。
+      final f = flame(
+          const FlameParams(tongues: 9, hot: 'ff0000', cold: '0000ff'),
+          RenderTier.standard);
       final jf = _decodeJson(f.toJsonString());
       expect(jf['flame']['tongues'], 9);
       expect(jf['flame']['hot'], 'ff0000');
       expect(EffectConfig.fromJson(jf).configHash, f.configHash);
 
-      final s = smoke(const SmokeParams(puffs: 3, color: '112233'));
+      final s = smoke(const SmokeParams(puffs: 3, color: '112233'), RenderTier.standard);
       final js = _decodeJson(s.toJsonString());
       expect(js['smoke']['puffs'], 3);
       expect(EffectConfig.fromJson(js).configHash, s.configHash);
 
-      final b = bubbles(const BubblesParams(count: 7, wobblePx: 3.0));
+      final b = bubbles(const BubblesParams(count: 7, wobblePx: 3.0), RenderTier.standard);
       final jb = _decodeJson(b.toJsonString());
       expect(jb['bubbles']['count'], 7);
       expect(EffectConfig.fromJson(jb).configHash, b.configHash);
 
-      final l = leaves(const LeavesParams(count: 5, palette: 'summer'));
+      final l = leaves(const LeavesParams(count: 5, palette: 'summer'), RenderTier.standard);
       final jl = _decodeJson(l.toJsonString());
       expect(jl['leaves']['palette'], 'summer');
       expect(EffectConfig.fromJson(jl).configHash, l.configHash);
 
-      final m = meteors(const MeteorsParams(count: 3, angleDeg: 60));
+      final m = meteors(const MeteorsParams(count: 3, angleDeg: 60), RenderTier.standard);
       final jm = _decodeJson(m.toJsonString());
       expect(jm['meteors']['angleDeg'], 60);
       expect(EffectConfig.fromJson(jm).configHash, m.configHash);
+
+      // 哨兵形状路径：整套旧默认（legacy/floyd/false）仍命中省略哨兵 ⇒ 不写 quality 段
+      //（翻默认没有把「等于旧默认就不写」这条语义改掉）。
+      final legacySentinel = smoke(const SmokeParams(puffs: 3, color: '112233'))
+        ..quality = const QualityParams(
+            dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
+      // 注意：整段省略 ⇒ 该 JSON 重新解析落到**新默认 standard**（spec §6.4
+      // 「quality-less JSON 现在意味着 standard」），它不是哈希冻结路径。
+      expect(legacySentinel.toJson().containsKey('quality'), isFalse);
 
       final off = EffectConfig(effects: const [EffectKind.parallax]).toJson();
       for (final key in ['flame', 'smoke', 'bubbles', 'leaves', 'meteors']) {
@@ -4396,9 +4546,11 @@ void main() {
     });
 
     test('moodScript 仅在启用时序列化，JSON 往返保哈希', () {
+      // R24/R26：往返用 standard 档（quality 段写满三键）
       final cfg = of([EffectKind.moodScript],
           mood:
-              const MoodScriptParams(mood: 'eerie', cycles: 3, strength: 0.4));
+              const MoodScriptParams(mood: 'eerie', cycles: 3, strength: 0.4),
+          tier: RenderTier.standard);
       final j = _decodeJson(cfg.toJsonString());
       expect(j['moodScript']['mood'], 'eerie');
       expect(j['moodScript']['cycles'], 3);
@@ -4406,6 +4558,15 @@ void main() {
       final back = EffectConfig.fromJson(j);
       expect(back.configHash, cfg.configHash);
       expect(back.warnings, isEmpty);
+
+      // 哨兵形状路径：整套旧默认（legacy/floyd/false）仍命中省略哨兵 ⇒ 无 quality 段
+      final legacySentinel = of([EffectKind.moodScript],
+          mood: const MoodScriptParams(mood: 'eerie', cycles: 3, strength: 0.4))
+        ..quality = const QualityParams(
+            dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
+      // 注意：整段省略 ⇒ 该 JSON 重新解析落到**新默认 standard**（spec §6.4
+      // 「quality-less JSON 现在意味着 standard」），它不是哈希冻结路径。
+      expect(legacySentinel.toJson().containsKey('quality'), isFalse);
 
       final off = _decodeJson(of([EffectKind.parallax]).toJsonString());
       expect(off.containsKey('moodScript'), isFalse,
@@ -4729,6 +4890,245 @@ void main() {
       expect(a, equals(b), reason: 'contentAware on 双跑逐字节确定（真实 worker 路径）');
       expect(a, isNot(equals(o)),
           reason: 'focusLines 现消费 anchor，on 应区别于 off');
+    });
+  });
+
+  group('v1.4 Task 3.6：默认档 standard + sierra 抖动（R24/R26）', () {
+    test('QualityParams 新默认 = dither/sierra/standard，哨兵仍按旧默认判 isDefault',
+        () {
+      // Step 1（RED）：翻默认前此三条必红。
+      const q = QualityParams();
+      expect(q.dither, isTrue);
+      expect(q.ditherMode, 'sierra');
+      expect(q.tier, RenderTier.standard);
+      // 不动的字段（R24 只点名三键）。
+      expect(q.mipLevels, 2);
+      expect(q.edgeStretchPx, 6);
+      // 哨兵语义不变：isDefault 仍以 legacy/floyd/false 为「等于旧默认」判据
+      // ⇒ 新默认必然非默认 ⇒ quality 段开始序列化（spec §6.4 的「默认不写变
+      // 为非默认」，configHash 变化并入 3.7 re-baseline）。
+      expect(q.isDefault, isFalse);
+    });
+
+    test('默认配置序列化恰含三键 quality 段；显式 legacy 仍整段省略', () {
+      final j = EffectConfig().toJson();
+      expect(j['quality'],
+          {'dither': true, 'ditherMode': 'sierra', 'tier': 'standard'},
+          reason: '默认 JSON 恰多出这三键，不多不少（R24）');
+      final legacy = EffectConfig(
+          quality: const QualityParams(
+              dither: false, ditherMode: 'floyd', tier: RenderTier.legacy));
+      expect(legacy.toJson().containsKey('quality'), isFalse,
+          reason: '哨兵留在旧默认：完全等于旧默认的显式 legacy 配置整段省略');
+    });
+
+    test('R24 lockstep 不变量：quality-less JSON == 构造默认；往返哈希稳定', () {
+      // 「同一份 JSON 只有一种渲染行为」——缺键兜底与构造默认必须逐字段相等，
+      // 否则 configHash 不再标识渲染路径（哈希即身份）。
+      final back = EffectConfig.fromJson({'effects': ['rain']}).quality;
+      const def = QualityParams();
+      expect(back.dither, def.dither);
+      expect(back.ditherMode, def.ditherMode);
+      expect(back.tier, def.tier);
+      expect(back.mipLevels, def.mipLevels);
+      expect(back.edgeStretchPx, def.edgeStretchPx);
+
+      final x = EffectConfig();
+      final j1 = _decodeJson(x.toJsonString());
+      final y = EffectConfig.fromJson(j1);
+      expect(y.configHash, x.configHash);
+      expect(_decodeJson(y.toJsonString()), j1,
+          reason: 'toJson→fromJson→toJson 逐字节稳定（缺键兜底=构造默认）');
+
+      // 显式降级键仍被尊重（R24：tier 走 containsKey 而非 parse(null) 暗兜）。
+      expect(
+          EffectConfig.fromJson({
+            'quality': {'tier': 'legacy'}
+          }).quality.tier,
+          RenderTier.legacy);
+      expect(
+          EffectConfig.fromJson({
+            'quality': {'ditherMode': 'floyd'}
+          }).quality.ditherMode,
+          'floyd');
+      expect(
+          EffectConfig.fromJson({
+            'quality': {'dither': false}
+          }).quality.dither,
+          isFalse);
+    });
+
+    test('sierra 默认真的落到编码轴：fromConfig 等于显式 standard+sierra', () {
+      RgbaImage grad() {
+        final img = RgbaImage(width: 40, height: 24);
+        for (var y = 0; y < 24; y++) {
+          for (var x = 0; x < 40; x++) {
+            final v = x * 255 ~/ 39;
+            img.setPixel(x, y, v, 255 - v, 128);
+          }
+        }
+        return img;
+      }
+
+      Uint8List encode(StreamingGifBuilder b) {
+        b.addFrame(grad());
+        return Uint8List.fromList(b.finish());
+      }
+
+      final fromCfg =
+          encode(StreamingGifBuilder.fromConfig(EffectConfig(), 40, 24));
+      final explicit = encode(StreamingGifBuilder(40, 24,
+          fps: 24,
+          dither: true,
+          ditherMode: 'sierra',
+          tier: RenderTier.standard));
+      final floyd = encode(StreamingGifBuilder(40, 24,
+          fps: 24,
+          dither: true,
+          ditherMode: 'floyd',
+          tier: RenderTier.standard));
+      expect(fromCfg, equals(explicit),
+          reason: '默认 quality（standard+sierra+dither）必须与显式同参逐字节同板同码');
+      expect(fromCfg, isNot(equals(floyd)),
+          reason: '默认若仍走 floyd/无抖动，sierra 默认就没落地');
+      // 可解码性不破（编码轴是行为门，不是只读字段的摆设）。
+      expect(pkg.GifDecoder(fromCfg).info!.numFrames, 1);
+    });
+
+    test('paletteProbeIndices：6 帧均匀铺开、含首末、单调、小 n 去重后仍 ≥1（R27）',
+        () {
+      // 形状门（§2.4 的「管线级断言」）：探针集合含 0 与 n-1、索引单调不降、
+      // 小 n 的重复下标去重后仍覆盖首末且 ≥1。
+      List<int> dedup(List<int> ks) {
+        final seen = <int>{};
+        final out = <int>[];
+        for (final k in ks) {
+          if (seen.add(k)) out.add(k);
+        }
+        return out;
+      }
+
+      expect(dedup(paletteProbeIndices(1)), [0]);
+      expect(dedup(paletteProbeIndices(2)), [0, 1]);
+      final p8 = paletteProbeIndices(8);
+      for (var i = 1; i < p8.length; i++) {
+        expect(p8[i] >= p8[i - 1], isTrue, reason: '索引必须单调不降');
+        expect(p8[i] >= 0 && p8[i] < 8, isTrue, reason: '下标越界：$p8');
+      }
+      expect(p8.first, 0);
+      expect(p8.last, 7, reason: '末帧必须被探针覆盖');
+      expect(dedup(paletteProbeIndices(96)).length, 6, reason: '常规 n 下恰 6 帧');
+      // 判别式：n=8 时旧 3 探针集合是 {0, 4, 7}；新集合必须包含至少一个
+      // 旧集合之外的帧（否则 3→6 只是口号）。
+      final old3 = {0, 8 ~/ 2, 7};
+      expect(dedup(p8).toSet().difference(old3), isNotEmpty,
+          reason: '6 探针必须比旧 3 探针真的多覆盖帧');
+      // 确定性：纯函数两次调用逐字节一致（无 Random/时钟/跨帧状态）。
+      expect(paletteProbeIndices(96), paletteProbeIndices(96));
+    });
+
+    test('探针 3→6 的调色板行为门：只在中段帧出现的亮墨色进得了 256 色板', () {
+      // §6.4 目的本身：加粗墨线（饱和亮色）只出现在某一帧时，旧 3 探针
+      // {0, n~/2, n-1} 采不到它 → 被 256 色量化吞掉；6 探针采到 → 进板。
+      // 这是双向判别：同一场景，3 探针（旧）必红、6 探针（新）必绿。
+      const n = 8, wd = 24, ht = 24;
+      const inkR = 255, inkG = 40, inkB = 0; // 渐变底里没有的饱和墨橙
+      // 底色：中性灰度渐变（R==G==B），与墨橙相距甚远。
+      RgbaImage base() {
+        final img = RgbaImage(width: wd, height: ht);
+        for (var y = 0; y < ht; y++) {
+          for (var x = 0; x < wd; x++) {
+            final v = 40 + x * 160 ~/ (wd - 1);
+            img.setPixel(x, y, v, v, v);
+          }
+        }
+        return img;
+      }
+
+      final frames = [for (var k = 0; k < n; k++) base()];
+      // 亮色只出现在帧 3：n=8 时它不在旧 3 探针 {0,4,7}，在 6 探针集合内。
+      for (var y = 6; y < 18; y++) {
+        for (var x = 6; x < 18; x++) {
+          frames[3].setPixel(x, y, inkR, inkG, inkB);
+        }
+      }
+
+      Uint8List encode(List<int> probes) {
+        final b = StreamingGifBuilder(wd, ht,
+            fps: 8, dither: false, tier: RenderTier.standard);
+        b.primePalette([for (final k in probes) frames[k]]);
+        for (final f in frames) {
+          b.addFrame(f);
+        }
+        return Uint8List.fromList(b.finish());
+      }
+
+      // dither=false：量化是纯最近色 ⇒ 「板上有没有这个色」直接可读，
+      // 抖动扩散与探针覆盖是正交的两件事，这里只钉后者。
+      final six = encode(paletteProbeIndices(n));
+      final px6 = pkg.GifDecoder(six).decodeFrame(3)!.getPixel(12, 12);
+      expect((px6.r.toInt() - inkR).abs(), lessThanOrEqualTo(48),
+          reason: '6 探针采到帧 3，墨橙应几乎原色进板：$px6');
+      expect((px6.g.toInt() - inkG).abs(), lessThanOrEqualTo(48));
+      expect((px6.b.toInt() - inkB).abs(), lessThanOrEqualTo(48));
+
+      final three = encode([0, n ~/ 2, n - 1]); // 旧 3 探针集合
+      final px3 = pkg.GifDecoder(three).decodeFrame(3)!.getPixel(12, 12);
+      expect((px3.r.toInt() - inkR).abs() + (px3.g.toInt() - inkG).abs(),
+          greaterThan(96),
+          reason: '旧 3 探针采不到帧 3，墨橙必须被量化吞掉（负向判别）');
+
+      // 确定性：同探针集两跑逐字节一致。
+      expect(encode(paletteProbeIndices(n)), equals(six));
+    });
+
+    test('管线接线行为门：默认档 GIF 字节 == 六探针重编码，且 != 旧三探针编码（R27）',
+        () async {
+      // 上面两条钉的是「探针集合本身」；本条钉 **管线真的把这份集合喂给了
+      // primePalette**：把 MotionPipeline 真实渲染出的帧序列取回来，用同一份
+      // StreamingGifBuilder.fromConfig 分别按 6 探针 / 旧 3 探针重编码，
+      // 要求管线产物与 6 探针逐字节相同、与 3 探针确实不同。
+      // ⇒ 谁把 pipeline.dart 的探针循环改回 [0, n~/2, n-1]，这条立刻红。
+      final tmp = Directory.systemTemp.createTempSync('cm_probe_wiring');
+      try {
+        final inPath = '${tmp.path}/in.png';
+        File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(96, 72)));
+        // 12 帧：6 探针 = {0,2,4,7,9,11}，旧 3 探针 = {0,6,11} —— 两者互差四帧。
+        final cfg = EffectConfig(
+            fps: 6,
+            durationSec: 2,
+            maxDimension: 96,
+            outputFormat: OutputFormat.gif);
+        final frames = <int, RgbaImage>{};
+        final r = await MotionPipeline(cfg,
+                parallel: 1, onFrame: (i, png) => frames[i] = ImageIO.decode(png))
+            .processFile(inPath, '${tmp.path}/out');
+        final n = cfg.frameCount;
+        expect(n, 12);
+        expect(frames.keys.toSet(), {for (var k = 0; k < n; k++) k},
+            reason: '帧流回调必须覆盖全部帧');
+        final wd = frames[0]!.width, ht = frames[0]!.height;
+
+        Uint8List reencode(List<int> probes) {
+          // 与 pipeline.dart 同一构造入口 ⇒ 唯一变量就是探针集合。
+          final b = StreamingGifBuilder.fromConfig(cfg, wd, ht);
+          b.primePalette([for (final k in probes) frames[k]!]);
+          for (var k = 0; k < n; k++) {
+            b.addFrame(frames[k]!);
+          }
+          return Uint8List.fromList(b.finish());
+        }
+
+        final six = reencode(paletteProbeIndices(n));
+        final three = reencode([0, n ~/ 2, n - 1]);
+        // 判别力前提：这个场景对探针集合必须真的敏感，否则「等于 six」是巧合。
+        expect(three, isNot(equals(six)),
+            reason: '场景对 3/6 探针不敏感 ⇒ 本门失去判别力，换场景');
+        expect(File(r.outputGif).readAsBytesSync(), equals(six),
+            reason: '管线索引进板的帧集合必须就是 paletteProbeIndices(n)');
+      } finally {
+        tmp.deleteSync(recursive: true);
+      }
     });
   });
 }

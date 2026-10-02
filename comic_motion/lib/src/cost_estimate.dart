@@ -11,6 +11,12 @@ import 'effect_config.dart';
 /// - 1600 上限（1600×900 × 96 帧）→ 峰值 RSS 607MB、3.49s
 /// - 1080p standard 档 4.26s；1080p 全 32 效果 standard 5.20s、628MB
 ///
+/// v1.4 Task 3.6（默认档翻 standard）复测：`tool/bench.dart` 同图同参
+/// typical_1080p legacy 2.23s/572MB、standard_1080p 4.21s、preview_1600 legacy
+/// 4.45s；1600×900 × 96 帧（含六探针）standard 7.04s、legacy 4.25s。
+/// ⇒ standard 的 ns/帧像素系数（`estimateCost` 内 22/160）与实测仍同量级，档位比
+/// 1.83× 与实测 1.66× 同向；`engine_test` 的区间断言按这批数字重新锚定。
+///
 /// RSS 与像素的关系受 VM 基线 / GC 波动影响很大，因此输出的是**区间**：
 /// 下界为 parallel=1 的模型画像，上界为桌面默认并行度（kDefaultParallel）
 /// 的保守画像 + VM 基线余量。低端机可行性判断**以 max 端为准**。

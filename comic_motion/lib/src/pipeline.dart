@@ -625,14 +625,16 @@ class MotionPipeline {
     final apngRect =
         wantApng && !wantGif && config.encoding.diffMode == 'rect';
     // 调色板探针必须在派工之前定板（worker 只共享板，不建板）。
-    // legacy = v1.2 的「首帧建板」；standard+ = 首/中/末三帧，避免只在中间帧
-    // 出现的动效亮色挤不进 256 色。renderFrame 是 t 的纯函数，乱序预渲染安全。
+    // legacy = v1.2 的「首帧建板」；standard+ = 六帧均匀探针（v1.4 R27，
+    // 原首/中/末三帧），避免只在中间帧出现的动效亮色挤不进 256 色。
+    // renderFrame 是 t 的纯函数，乱序预渲染安全；探针下标由纯函数
+    // paletteProbeIndices 给出、经插入序 Map 去重 ⇒ primePalette 入参确定。
     final presolved = <int, FrameOutput>{};
     RgbaImage? firstFrameRgba;
     if (gif != null) {
       final probes = <int, RgbaImage>{};
       checkCancel(); // 探针帧渲染前检查
-      for (final k in gif.wantsProbes ? [0, n ~/ 2, n - 1] : [0]) {
+      for (final k in gif.wantsProbes ? paletteProbeIndices(n) : const [0]) {
         checkCancel();
         final frame =
             probes.putIfAbsent(k, () => compositor.renderFrame(k / config.fps));

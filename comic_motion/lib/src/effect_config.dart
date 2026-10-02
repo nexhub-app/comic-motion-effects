@@ -1088,24 +1088,24 @@ class MoodScriptParams {
       );
 }
 
-/// 渲染质量参数（v1.2 引入抖动，v1.3 引入分级）。
+/// 渲染质量参数（v1.2 引入抖动，v1.3 引入分级，v1.4 默认档升为 standard）。
 class QualityParams {
   const QualityParams({
-    this.dither = false,
-    this.ditherMode = 'floyd',
-    this.tier = RenderTier.legacy,
+    this.dither = true,
+    this.ditherMode = 'sierra',
+    this.tier = RenderTier.standard,
     this.mipLevels = 2,
     this.edgeStretchPx = 6,
   });
 
-  /// 误差扩散抖动：显著减轻 GIF 256 色渐变色带。
-  /// 关闭后回退到最近色映射（v1.1 行为）。
+  /// 误差扩散抖动：显著减轻 GIF 256 色渐变色带（v1.4 起默认开启）。
+  /// 显式关闭后回退到最近色映射（v1.1 行为）。
   final bool dither;
 
-  /// 抖动核：floyd（v1.2 行为）| sierra（更柔和，standard+ 才有意义）。
+  /// 抖动核：sierra（v1.4 默认，更柔和，standard+ 才生效）| floyd（v1.2 行为）。
   final String ditherMode;
 
-  /// 渲染档位；legacy 保证与 v1.2 逐字节一致。
+  /// 渲染档位；v1.4 起默认 standard，legacy 仍供显式选择并逐字节冻结 v1.2。
   final RenderTier tier;
 
   /// 层栅格预建的 mipmap 级数（1..2），供 scale<1 的面积平均取样。
@@ -1114,7 +1114,10 @@ class QualityParams {
   /// 层边缘色外扩像素（0..16），消除视差位移时的露底双边。
   final int edgeStretchPx;
 
-  /// v1.2 兼容：全默认时整段不序列化，保经典配置指纹不变。
+  /// v1.2 兼容哨兵（v1.4 裁决 R24 保持不变）：全等于**旧默认**（legacy/floyd/
+  /// false）才整段不序列化。构造默认已升到 standard/sierra/true ⇒ 默认配置
+  /// 的 quality 段开始写入（spec §6.4：「默认不写」变为「非默认」），该项
+  /// configHash 变化并入 Task 3.7 re-baseline；显式 legacy 全默认仍整段省略。
   bool get isDefault =>
       !dither &&
       ditherMode == 'floyd' &&
@@ -1144,10 +1147,20 @@ class QualityParams {
         if (edgeStretchPx != 6) 'edgeStretchPx': edgeStretchPx,
       };
 
+  /// 缺键兜底与构造默认**锁步**（R24）：quality-less JSON 必须解析出与
+  /// `QualityParams()` 相同的对象，否则同一份 JSON 有两种渲染行为，
+  /// configHash 不再标识渲染路径（哈希即身份契约）。
+  /// 注意：省略**哨兵**仍是 legacy/floyd/false（见 isDefault/toJson），
+  /// 这里取反的是「键缺失时的兜底」。
   static QualityParams fromJson(Map<String, dynamic> j) => QualityParams(
-        dither: j['dither'] as bool? ?? false,
-        ditherMode: (j['ditherMode'] == 'sierra') ? 'sierra' : 'floyd',
-        tier: RenderTier.parse(j['tier'] as String?),
+        dither: j['dither'] as bool? ?? true,
+        // 与现状「非 sierra 一律 floyd」的宽容方向对称：缺失/未知 ⇒ 新默认
+        // sierra，仅显式 'floyd' 才回落 floyd。
+        ditherMode: (j['ditherMode'] == 'floyd') ? 'floyd' : 'sierra',
+        // 不让 RenderTier.parse(null) 悄悄兜成 legacy：键缺失 ⇒ 新默认
+        // standard；键存在但名字未知 ⇒ parse 的既有 sanitise（legacy）不动。
+        tier:
+            j.containsKey('tier') ? RenderTier.parse(j['tier']) : RenderTier.standard,
         mipLevels: ((j['mipLevels'] as num?)?.toInt() ?? 2).clamp(1, 2),
         edgeStretchPx:
             ((j['edgeStretchPx'] as num?)?.toInt() ?? 6).clamp(0, 16),
@@ -1246,7 +1259,8 @@ class EffectConfig {
     /// ---- R5 顶层便捷参数（null = 不触碰对应嵌套字段）----
     /// 嵌入方在一处设齐全部渲染参数；非 null 时映射到既有字段，与显式
     /// 传嵌套参数**逐字节等价**（序列化与 configHash 均相同，等价性矩阵
-    /// 有测试覆盖）。默认路径（全 null）的序列化与 configHash 完全不变。
+    /// 有测试覆盖）。v1.4 R24 起 quality 默认为 standard/sierra/true ⇒
+    /// 默认路径也会序列化 quality 段（绝对指纹并入 Task 3.7 re-baseline）。
     bool? dither,
     double? amplitude,
     double? directionDeg,
@@ -1443,7 +1457,8 @@ class EffectConfig {
         if (effects.contains(EffectKind.meteors)) 'meteors': meteors.toJson(),
         if (effects.contains(EffectKind.moodScript))
           'moodScript': moodScript.toJson(),
-        // v1.2 质量段：仅非默认时序列化，保经典指纹不变
+        // v1.2 质量段：等于旧默认（legacy 全哨兵）时整段省略；v1.4 起构造
+        // 默认非 legacy ⇒ 默认配置开始写 quality 段（Task 3.7 re-baseline）。
         if (!quality.isDefault) 'quality': quality.toJson(),
         if (!encoding.isDefault) 'encoding': encoding.toJson(),
         'fps': fps,

@@ -113,20 +113,20 @@ const List<ParamSpec> kRenderParamSpecs = [
     name: 'dither',
     type: 'bool',
     strictRange: false,
-    defaultValue: false,
+    defaultValue: true,
     mapsTo: 'quality.dither',
-    description: 'GIF 256 色误差扩散抖动，显著减轻渐变色带；关闭回退最近色'
-        '（v1.1 行为）',
+    description: 'GIF 256 色误差扩散抖动，显著减轻渐变色带；v1.4 起默认开启，'
+        '显式关闭回退最近色（v1.1 行为）',
   ),
   ParamSpec(
     name: 'qualityTier',
     type: 'enum',
     enumValues: ['legacy', 'standard', 'rich'],
     strictRange: false,
-    defaultValue: RenderTier.legacy,
+    defaultValue: RenderTier.standard,
     mapsTo: 'quality.tier',
-    description: '渲染档位：legacy 逐字节复现 v1.2（回滚载体）；standard '
-        '抗锯齿 + 面积平均重采样；rich 目前与 standard 等价',
+    description: '渲染档位：v1.4 起默认 standard（抗锯齿 + 面积平均重采样）；'
+        'legacy 逐字节复现 v1.2，仍供显式选择（回滚载体）；rich 与 standard 等价',
   ),
   ParamSpec(
     name: 'diffMode',
