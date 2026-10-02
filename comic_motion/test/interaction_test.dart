@@ -82,6 +82,32 @@ void main() {
               '与去掉 parallax 效果的静帧逐位一致');
     });
 
+    // R37 锚点线程化的「关路径无副作用」门：contentAware 显式 false（回滚开关）
+    // 时，交互导出与静帧渲染都必须与改动前逐字节一致——把 anchors 传进
+    // FrameCompositor 只能改变落位加权开启时的行为，不得扰动回滚路径。
+    // 口径：测试内实时对比两路产物，不写任何摘要字面量。
+    test('contentAware=false 回滚路径：phase=0 帧仍与无 parallax 静帧逐字节一致',
+        () async {
+      final png = samplePng();
+      final cfg = EffectConfig(
+        fps: 4,
+        durationSec: 1,
+        maxDimension: 64,
+        contentAware: false,
+        parallax: const ParallaxParams(amplitude: 0.05),
+      );
+      final r = await MotionPipeline(cfg, parallel: 1)
+          .exportInteractionFrames(input: png, steps: 5);
+      final zero = r.sets.single.pngBytes[2]; // phases[2] == 0.0
+      final still = await MotionPipeline(
+        cfg.withoutEffect(EffectKind.parallax),
+        parallel: 1,
+      ).renderStillFrame(input: png, t: 0);
+      expect(zero, still,
+          reason: 'anchors 线程化对 contentAware=false 必须是 no-op：'
+              '回滚路径的交互帧与静帧逐字节一致');
+    });
+
     test('相位驱动位移：全部帧两两不同，+1 与 -1 不同', () async {
       final r = await MotionPipeline(makeCfg(), parallel: 1)
           .exportInteractionFrames(input: samplePng(), steps: 5);

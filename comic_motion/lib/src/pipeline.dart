@@ -963,13 +963,21 @@ class MotionPipeline {
 
   /// 导出类入口（交互帧集 / 入场帧序列，见 `interaction.dart`）与渲染管线
   /// 共享的前置段：同一条降采样 + 深度 + 分层主干，保证导出帧与既有产物
-  /// 同源（工作分辨率、分层口径完全一致）。导出路径暂不消费 AnchorMap（放置
-  /// 属 Task 2.1+），此处丢弃第三个返回值。
+  /// 同源（工作分辨率、分层口径完全一致）。本签名不含 [AnchorMap]；
+  /// 需要在主 isolate 自建 `FrameCompositor` 的导出路径请改用
+  /// [downscaleSplitAnchorsForExport]（R37）。
   (RgbaImage, List<LayerImage>) downscaleAndSplitForExport(RgbaImage src) {
-    final (working, layers, _) =
-        _downscaleAndSplit(src, config.maxDimension);
+    final (working, layers, _) = downscaleSplitAnchorsForExport(src);
     return (working, layers);
   }
+
+  /// 与 [downscaleAndSplitForExport] 同一条降采样 + 分层主干，但**保留**
+  /// `_downscaleAndSplit` 派生的 [AnchorMap]：任何要在主 isolate 自建
+  /// `FrameCompositor` 的导出路径必须走这里，否则 contentAware 默认开启后
+  /// 同一 config 在渲染路径与导出路径会落位不一致（R37）。
+  (RgbaImage, List<LayerImage>, AnchorMap?) downscaleSplitAnchorsForExport(
+      RgbaImage src) =>
+      _downscaleAndSplit(src, config.maxDimension);
 
   /// 导出类入口专用的降采样段（入场帧序列用：入场是整页效果，不做分层，
   /// 跳过深度估算与切层的开销）。降采样算法口径与 [_downscaleAndSplit]

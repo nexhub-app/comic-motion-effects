@@ -202,8 +202,13 @@ Future<InteractionExportResult> _runInteractionExport(
   try {
     // 派发前检查：已取消则零渲染、零文件。
     _checkInteractionCancel(pipeline, deadline, 'entry');
-    final (working, layers) = pipeline.downscaleAndSplitForExport(src);
-    final compositor = FrameCompositor(layers, working, cfg);
+    final (working, layers, anchors) =
+        pipeline.downscaleSplitAnchorsForExport(src);
+    // R37：交互帧集与静帧/GIF 路径共用同一条主干派生的 AnchorMap，否则
+    // contentAware 默认开启后同一 config 在两条路径落位不一致，
+    // phase=0 ≡ t=0 静帧的红线（interaction_test.dart）即断裂。
+    final compositor =
+        FrameCompositor(layers, working, cfg, anchors: anchors);
 
     // 均匀采样 [-1, 1]，含两端点：phases[i] = -1 + 2i/(steps-1)。
     final phases = <double>[
