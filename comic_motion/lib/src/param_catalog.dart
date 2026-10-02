@@ -113,10 +113,11 @@ const List<ParamSpec> kRenderParamSpecs = [
     name: 'dither',
     type: 'bool',
     strictRange: false,
-    defaultValue: true,
+    defaultValue: false,
     mapsTo: 'quality.dither',
-    description: 'GIF 256 色误差扩散抖动，显著减轻渐变色带；v1.4 起默认开启，'
-        '显式关闭回退最近色（v1.1 行为）',
+    description: 'GIF 256 色误差扩散抖动，可减轻渐变色带，但 GIF 字节 ×2.2–2.4'
+        '（R34 实测）；R38 起默认关闭（flat-ink + 线稿语料不划算），显式 true '
+        '才启用 sierra/floyd 核，默认关闭即最近色映射（v1.1 行为）',
   ),
   ParamSpec(
     name: 'qualityTier',

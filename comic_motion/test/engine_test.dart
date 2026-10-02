@@ -1112,8 +1112,8 @@ void main() {
       // null 便捷参数与全默认同路径
       expect(EffectConfig(dither: null, amplitude: null).configHash,
           base.configHash);
-      // R32：哨兵与构造默认同源 ⇒ 默认档（standard/sierra/true）命中省略，
-      // 默认 JSON 不再带 quality 键。
+      // R32/R38：哨兵与构造默认同源 ⇒ 默认档（standard/sierra/**dither off**）
+      // 命中省略 ⇒ 默认 JSON 不再带 quality 键。
       expect(base.toJson().containsKey('quality'), isFalse,
           reason: '默认配置必须整段省略 quality（R32）');
       // 便捷参数与显式嵌套参数序列化一致（相对契约，不落在绝对指纹上）
@@ -1124,13 +1124,24 @@ void main() {
       // 往返稳定：哈希即身份
       expect(EffectConfig.fromJson(base.toJson()).configHash, base.configHash);
       // 显式旧默认组合（legacy/floyd/false）现在**写出整段**（R32 的反向半）：
-      // 回滚意图必须可持久化，不能靠省略键表达。
+      // 回滚意图必须可持久化，不能靠省略键表达。R38 后 dither 等于自身默认 ⇒
+      // 该键按逐键习语省略，缺键兜底 false 读回同一个 false（往返仍无损）。
       final legacySentinel = EffectConfig()
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
+      expect(legacySentinel.toJson()['quality'],
+          {'ditherMode': 'floyd', 'tier': 'legacy'});
       expect(
-          legacySentinel.toJson()['quality'],
-          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+          (legacySentinel.toJson()['quality'] as Map).containsKey('dither'),
+          isFalse,
+          reason: 'R38：dither == 自身默认 ⇒ 段内也不写该键（:1152 逐键习语）');
+      final legacyRestored =
+          EffectConfig.fromJson(_decodeJson(legacySentinel.toJsonString()));
+      expect(legacyRestored.quality.dither, isFalse,
+          reason: '缺 dither 键必须兜回新默认 false，回滚语义不丢');
+      expect(legacyRestored.quality.tier, RenderTier.legacy);
+      expect(legacySentinel.configHash, isNot(base.configHash),
+          reason: '回滚与默认同哈希 ⇒ 回滚不可表达');
       expect(
           EffectConfig.fromJson(legacySentinel.toJson()).configHash,
           legacySentinel.configHash,
@@ -1138,8 +1149,12 @@ void main() {
       // 非默认便捷参数（显式降到 legacy 档）才写 quality 段
       expect(EffectConfig(qualityTier: RenderTier.legacy).toJson()['quality'],
           isNotNull);
-      // 等于默认的非 null 便捷参数（dither:true）与不传等价 ⇒ 仍整段省略
-      expect(EffectConfig(dither: true).toJson().containsKey('quality'), isFalse);
+      // R38 反转：等于默认的非 null 便捷参数（dither:false）与不传等价 ⇒ 仍整段
+      // 省略；显式 dither:true 现在才是「非默认」⇒ 写出段与键。
+      expect(EffectConfig(dither: false).toJson().containsKey('quality'), isFalse);
+      expect(EffectConfig(dither: true).toJson()['quality'], {'dither': true});
+      expect(EffectConfig(dither: true).configHash,
+          isNot(EffectConfig().configHash));
     });
 
     test('顶层便捷参数不绕过 fail-fast；建议范围越界不抛', () {
@@ -2843,29 +2858,32 @@ void main() {
         effects: [EffectKind.parallax, EffectKind.fog, EffectKind.vignette],
         fog: FogParams(blobs: 10, opacity: 0.14),
         vignette: VignetteParams(strength: 0.4),
-        // R32：dither:true 已等于默认 ⇒ 整段省略；这里要钉「非默认才写段」，
-        // 所以取一个真正非默认的 quality（关抖动）。
-        quality: QualityParams(dither: false),
+        // R32/R38：dither 的默认值现在是 false ⇒ 整段省略；这里要钉「非默认才
+        // 写段」，所以取一个真正非默认的 quality（**显式开抖动**）。
+        quality: QualityParams(dither: true),
       );
       final j = cfg.toJson();
       expect(j.containsKey('fog'), isTrue);
       expect(j.containsKey('snow'), isFalse, reason: '未启用不序列化');
-      expect((j['quality'] as Map)['dither'], isFalse);
-      // R32/R26：新默认（standard+sierra+dither）就是省略哨兵本身 ⇒ 默认配置
+      expect((j['quality'] as Map)['dither'], isTrue,
+          reason: 'R38：dither:true 是非默认值 ⇒ 段与键都写出');
+      // R32/R26：新默认（standard+sierra+**关抖动**）就是省略哨兵本身 ⇒ 默认配置
       // 整段不写 quality 键（缺键兜底与哨兵同源，往返无损）。
       expect(EffectConfig().toJson().containsKey('quality'), isFalse);
-      // 反向半：显式 v1.2 旧默认组合现在**写出整段**（回滚可持久化）。
+      // 反向半：显式 v1.2 旧默认组合现在**写出整段**（回滚可持久化）。R38 后
+      // 段里的 dither 等于自身默认 ⇒ 该键省略，读回靠 `?? false` 兜底。
       final legacySentinel = EffectConfig()
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
       expect(
           legacySentinel.toJson()['quality'],
-          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'},
+          {'ditherMode': 'floyd', 'tier': 'legacy'},
           reason: 'legacy 必须能从 JSON 显式表达（spec §6.4「legacy 仍供显式选择」）');
       final restored = EffectConfig.fromJson(_decodeJson(cfg.toJsonString()));
       expect(restored.configHash, cfg.configHash);
       expect(restored.fog.blobs, 10);
-      expect(restored.quality.dither, isFalse);
+      expect(restored.quality.dither, isTrue,
+          reason: '显式开抖动的非默认段往返必须保 true');
       // 回滚配置的往返同样无损（这一半在 R24 哨兵设计下是丢的）。
       final backLegacy =
           EffectConfig.fromJson(_decodeJson(legacySentinel.toJsonString()));
@@ -2939,21 +2957,23 @@ void main() {
       // R32：默认 = 哨兵 ⇒ 段不出现；「段不出现」从此唯一地意味着新默认，
       // 而 legacy 只能靠显式写出表达（这正是 R24 哨兵设计丢掉的那一半）。
       expect(EffectConfig().toJson().containsKey('quality'), isFalse,
-          reason: '新默认 standard+sierra+dither 命中省略哨兵 ⇒ 不写段');
+          reason: '新默认 standard+sierra+**关抖动**（R38）命中省略哨兵 ⇒ 不写段');
       expect(EffectConfig().quality.tier, RenderTier.standard);
       final legacySentinel = EffectConfig()
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
       expect(
           legacySentinel.toJson()['quality'],
-          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'},
-          reason: '整套旧默认现在必须写出（回滚路径可持久化）');
+          {'ditherMode': 'floyd', 'tier': 'legacy'},
+          reason: '整套旧默认现在必须写出（回滚路径可持久化）；R38 后 dither 等于自身'
+              '默认 ⇒ 该键按逐键习语省略');
       // 只改一个键 ⇒ 只写那一个键（等于自己默认的键仍省略）。这不再退回
       // 「缺键即 legacy」的旧歧义，因为缺键兜底 == 该键默认：下面直接验。
-      final d = EffectConfig()..quality = const QualityParams(dither: false);
-      expect(d.toJson()['quality'], {'dither': false});
+      final d = EffectConfig()..quality = const QualityParams(dither: true);
+      expect(d.toJson()['quality'], {'dither': true},
+          reason: 'R38：唯一非默认的键是 dither ⇒ 段里只有它');
       final back = EffectConfig.fromJson(_decodeJson(d.toJsonString()));
-      expect(back.quality.dither, isFalse);
+      expect(back.quality.dither, isTrue);
       expect(back.quality.ditherMode, 'sierra', reason: '缺 ditherMode 键 ⇒ 该键默认');
       expect(back.quality.tier, RenderTier.standard, reason: '缺 tier 键 ⇒ 该键默认');
       expect(back.configHash, d.configHash);
@@ -2969,7 +2989,8 @@ void main() {
             edgeStretchPx: 0);
       final j = cfg.toJson()['quality'] as Map;
       // R32：tier/ditherMode 等于自己的默认 ⇒ 省略；mipLevels/edgeStretchPx
-      // 非默认 ⇒ 逐键写出。dither 恒写（段只在非默认时出现）。
+      // 非默认 ⇒ 逐键写出。dither 自 R38 起同样是逐键条件项，这里它是 true
+      // （非默认）⇒ 写出；段本身也只在非默认时出现。
       expect(j.containsKey('tier'), isFalse, reason: 'tier==默认就不写（R32）');
       expect(j.containsKey('ditherMode'), isFalse);
       expect(j['dither'], isTrue);
@@ -2994,13 +3015,22 @@ void main() {
           reason: '混档往返必须保哈希（R32 前这里会静默变 standard）');
     });
 
-    test('quality 段缺省 dither 时与构造默认一致（R24 锁步：缺键 ⇒ 新默认 true）', () {
+    test('quality 段缺省 dither 时与构造默认一致（R24 锁步 + R38：缺键 ⇒ 新默认 false）', () {
       final back = EffectConfig.fromJson(_decodeJson(
           '{"effects":["parallax","breathing"],"quality":{"tier":"standard"}}'));
-      // v1.4：缺键兜底与构造默认锁步 ⇒ 不再静默关抖动
-      expect(back.quality.dither, isTrue);
+      // v1.4 R24 + R38：缺键兜底与构造默认锁步 ⇒ 缺键就是「关抖动」这个新默认，
+      // 绝不因为历史上曾默认 true 就静默把抖动打开。
+      expect(back.quality.dither, isFalse);
       expect(back.quality.ditherMode, 'sierra');
       expect(back.quality.tier, RenderTier.standard);
+      // 兜底只兜「没说过」：显式 true 必须仍然打开抖动（否则 R38 变成禁功能）。
+      expect(
+          EffectConfig.fromJson(_decodeJson(
+                  '{"effects":["parallax","breathing"],"quality":{"dither":true}}'))
+              .quality
+              .dither,
+          isTrue,
+          reason: '显式 dither:true 不得被新默认吞掉');
       final cli = EffectConfig()
         ..effects = const [EffectKind.parallax, EffectKind.breathing];
       cli.quality = cli.quality.copyWith(tier: RenderTier.standard);
@@ -3375,12 +3405,18 @@ void main() {
       final legacyArm = fcfg(focus: const FocusLinesParams(mode: 'both', lines: 40))
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
-      expect(
-          legacyArm.toJson()['quality'],
-          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+      // R38：dither 的默认值翻回 false ⇒ 这份 v1.2 回滚段里 dither **等于自身
+      // 默认** ⇒ 按逐键习语省略该键；缺 dither 键由 `?? false` 兜底读回同一个
+      // false ⇒ 回滚语义一字不丢，往返仍无损（R32 的门没被削弱）。
+      expect(legacyArm.toJson()['quality'],
+          {'ditherMode': 'floyd', 'tier': 'legacy'});
+      expect((legacyArm.toJson()['quality'] as Map).containsKey('dither'), isFalse,
+          reason: '逐键习语（effect_config.dart:1152）：等于自身默认的键不写');
       final legacyBack =
           EffectConfig.fromJson(_decodeJson(legacyArm.toJsonString()));
       expect(legacyBack.quality.tier, RenderTier.legacy);
+      expect(legacyBack.quality.dither, isFalse,
+          reason: '缺 dither 键 ⇒ 兜底新默认 false，回滚不被静默洗成开抖动');
       expect(legacyBack.configHash, legacyArm.configHash,
           reason: 'legacy 回滚配置往返必须保哈希（R32）');
       final off = EffectConfig(effects: const [EffectKind.parallax]);
@@ -3576,12 +3612,18 @@ void main() {
           tcfg(tone: const ScreenToneParams(mode: 'cross', spacingPx: 10))
             ..quality = const QualityParams(
                 dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
-      expect(
-          legacyArm.toJson()['quality'],
-          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+      // R38：dither 的默认值翻回 false ⇒ 这份 v1.2 回滚段里 dither **等于自身
+      // 默认** ⇒ 按逐键习语省略该键；缺 dither 键由 `?? false` 兜底读回同一个
+      // false ⇒ 回滚语义一字不丢，往返仍无损（R32 的门没被削弱）。
+      expect(legacyArm.toJson()['quality'],
+          {'ditherMode': 'floyd', 'tier': 'legacy'});
+      expect((legacyArm.toJson()['quality'] as Map).containsKey('dither'), isFalse,
+          reason: '逐键习语（effect_config.dart:1152）：等于自身默认的键不写');
       final legacyBack =
           EffectConfig.fromJson(_decodeJson(legacyArm.toJsonString()));
       expect(legacyBack.quality.tier, RenderTier.legacy);
+      expect(legacyBack.quality.dither, isFalse,
+          reason: '缺 dither 键 ⇒ 兜底新默认 false，回滚不被静默洗成开抖动');
       expect(legacyBack.configHash, legacyArm.configHash,
           reason: 'legacy 回滚配置往返必须保哈希（R32）');
       final off = EffectConfig(effects: const [EffectKind.parallax]);
@@ -3906,12 +3948,18 @@ void main() {
       final legacyArm = rcfg(rings: rings)
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
-      expect(
-          legacyArm.toJson()['quality'],
-          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+      // R38：dither 的默认值翻回 false ⇒ 这份 v1.2 回滚段里 dither **等于自身
+      // 默认** ⇒ 按逐键习语省略该键；缺 dither 键由 `?? false` 兜底读回同一个
+      // false ⇒ 回滚语义一字不丢，往返仍无损（R32 的门没被削弱）。
+      expect(legacyArm.toJson()['quality'],
+          {'ditherMode': 'floyd', 'tier': 'legacy'});
+      expect((legacyArm.toJson()['quality'] as Map).containsKey('dither'), isFalse,
+          reason: '逐键习语（effect_config.dart:1152）：等于自身默认的键不写');
       final legacyBack =
           EffectConfig.fromJson(_decodeJson(legacyArm.toJsonString()));
       expect(legacyBack.quality.tier, RenderTier.legacy);
+      expect(legacyBack.quality.dither, isFalse,
+          reason: '缺 dither 键 ⇒ 兜底新默认 false，回滚不被静默洗成开抖动');
       expect(legacyBack.configHash, legacyArm.configHash,
           reason: 'legacy 回滚配置往返必须保哈希（R32）');
       final off = EffectConfig(effects: const [EffectKind.parallax]);
@@ -4106,12 +4154,18 @@ void main() {
       final legacyArm = bcfg(brush: brush)
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
-      expect(
-          legacyArm.toJson()['quality'],
-          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+      // R38：dither 的默认值翻回 false ⇒ 这份 v1.2 回滚段里 dither **等于自身
+      // 默认** ⇒ 按逐键习语省略该键；缺 dither 键由 `?? false` 兜底读回同一个
+      // false ⇒ 回滚语义一字不丢，往返仍无损（R32 的门没被削弱）。
+      expect(legacyArm.toJson()['quality'],
+          {'ditherMode': 'floyd', 'tier': 'legacy'});
+      expect((legacyArm.toJson()['quality'] as Map).containsKey('dither'), isFalse,
+          reason: '逐键习语（effect_config.dart:1152）：等于自身默认的键不写');
       final legacyBack =
           EffectConfig.fromJson(_decodeJson(legacyArm.toJsonString()));
       expect(legacyBack.quality.tier, RenderTier.legacy);
+      expect(legacyBack.quality.dither, isFalse,
+          reason: '缺 dither 键 ⇒ 兜底新默认 false，回滚不被静默洗成开抖动');
       expect(legacyBack.configHash, legacyArm.configHash,
           reason: 'legacy 回滚配置往返必须保哈希（R32）');
       final off = EffectConfig(effects: const [EffectKind.parallax]);
@@ -4498,20 +4552,38 @@ void main() {
       final legacySentinel = smoke(const SmokeParams(puffs: 3, color: '112233'))
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
+      // R38：回滚段仍写出（tier/ditherMode 非默认），但 dither 现在等于自身默认
+      // ⇒ 该键按逐键习语省略，缺键由 `?? false` 兜回 false ⇒ 往返无损。
+      expect(legacySentinel.toJson()['quality'],
+          {'ditherMode': 'floyd', 'tier': 'legacy'});
       expect(
-          legacySentinel.toJson()['quality'],
-          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+          (legacySentinel.toJson()['quality'] as Map).containsKey('dither'),
+          isFalse,
+          reason: '逐键习语：dither == 默认（R38）时不写键');
       final legacyBack =
           EffectConfig.fromJson(_decodeJson(legacySentinel.toJsonString()));
       expect(legacyBack.quality.tier, RenderTier.legacy);
+      expect(legacyBack.quality.dither, isFalse,
+          reason: '缺 dither 键 ⇒ 兜底新默认 false（回滚不被洗成开抖动）');
       expect(legacyBack.quality.ditherMode, 'floyd');
       expect(legacyBack.configHash, legacySentinel.configHash,
           reason: 'v1.2 回滚配置往返必须保哈希（R32）');
       // 混档（tier=legacy 而其余为新默认）同样是可表达、可往返的形状。
       final mixedLegacy = smoke(const SmokeParams(puffs: 3, color: '112233'));
-      expect(mixedLegacy.toJson()['quality'], {'dither': true, 'tier': 'legacy'});
+      // R38：dither 现在**等于自身默认**（false）⇒ 段里只写非默认的 tier 键，
+      // 缺键由兜底读回 false；显式 dither:true 才两个键都写（逐键习语正/反两半）。
+      expect(mixedLegacy.toJson()['quality'], {'tier': 'legacy'});
       expect(EffectConfig.fromJson(_decodeJson(mixedLegacy.toJsonString()))
           .configHash, mixedLegacy.configHash);
+      final mixedLegacyOn = smoke(const SmokeParams(puffs: 3, color: '112233'))
+        ..quality = const QualityParams(
+            dither: true, tier: RenderTier.legacy);
+      expect(mixedLegacyOn.toJson()['quality'],
+          {'dither': true, 'tier': 'legacy'},
+          reason: '显式开抖动 ⇒ dither 键写出（R38 后它是条件项，不是恒写项）');
+      expect(
+          EffectConfig.fromJson(_decodeJson(mixedLegacyOn.toJsonString()))
+              .configHash, mixedLegacyOn.configHash);
 
       final off = EffectConfig(effects: const [EffectKind.parallax]).toJson();
       for (final key in ['flame', 'smoke', 'bubbles', 'leaves', 'meteors']) {
@@ -4654,12 +4726,19 @@ void main() {
           mood: const MoodScriptParams(mood: 'eerie', cycles: 3, strength: 0.4))
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
+      // R38：回滚段仍写出（tier/ditherMode 非默认），但 dither 现在等于自身默认
+      // ⇒ 该键按逐键习语省略，缺键由 `?? false` 兜回 false ⇒ 往返无损。
+      expect(legacySentinel.toJson()['quality'],
+          {'ditherMode': 'floyd', 'tier': 'legacy'});
       expect(
-          legacySentinel.toJson()['quality'],
-          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+          (legacySentinel.toJson()['quality'] as Map).containsKey('dither'),
+          isFalse,
+          reason: '逐键习语：dither == 默认（R38）时不写键');
       final legacyBack =
           EffectConfig.fromJson(_decodeJson(legacySentinel.toJsonString()));
       expect(legacyBack.quality.tier, RenderTier.legacy);
+      expect(legacyBack.quality.dither, isFalse,
+          reason: '缺 dither 键 ⇒ 兜底新默认 false（回滚不被洗成开抖动）');
       expect(legacyBack.configHash, legacySentinel.configHash,
           reason: 'v1.2 回滚配置往返必须保哈希（R32）');
 
@@ -4991,41 +5070,48 @@ void main() {
     });
   });
 
-  group('v1.4 Task 3.6：默认档 standard + sierra 抖动（R24/R26）', () {
-    test('QualityParams 新默认 = dither/sierra/standard，哨兵与新默认锁步（R32）',
+  group('v1.4 Task 3.6：默认档 standard + sierra 核（R24/R26）·R38 默认关抖动', () {
+    test('QualityParams 默认 = 关抖动/sierra/standard，哨兵与默认锁步（R32/R38）',
         () {
-      // Step 1（RED）：翻默认前此三条必红。
+      // Step 1（RED）：翻默认前此条必红（R38 把 dither 从 true 翻回 false）。
       const q = QualityParams();
-      expect(q.dither, isTrue);
+      expect(q.dither, isFalse,
+          reason: 'R38 用户裁决：出厂默认不做误差扩散（GIF 字节 ×2.2–2.4 不值）');
       expect(q.ditherMode, 'sierra');
-      expect(q.tier, RenderTier.standard);
-      // 不动的字段（R24 只点名三键）。
+      expect(q.tier, RenderTier.standard,
+          reason: 'R38 只关抖动，Task 3.6 的 standard 档必须原地留着');
+      // 不动的字段（R24 只点名三键，R38 只回退其中的 dither）。
       expect(q.mipLevels, 2);
       expect(q.edgeStretchPx, 6);
       // R32：省略哨兵与构造默认同源 ⇒ 新默认命中 isDefault ⇒ 默认 JSON 不写
       // quality 段（默认不写 = 缺键兜底 = 构造默认，三者同一个对象，往返无损）。
-      // 旧 R24 设计在这里断言 isFalse（哨兵留在 legacy/floyd/false），那正是
-      // 「完整 v1.2 回滚配置命中哨兵、一次往返被抹成新默认」的缺陷源头。
       expect(q.isDefault, isTrue);
-      // 反向：旧默认组合不再命中哨兵（legacy 必须能显式写进 JSON）。
+      // 反向：v1.2 回滚组合（legacy/floyd/false）里的 tier/ditherMode 仍非默认
+      // ⇒ 整段写出；显式开抖动（dither:true）现在也是「非默认」⇒ 同样写出。
       expect(
           const QualityParams(
                   dither: false, ditherMode: 'floyd', tier: RenderTier.legacy)
               .isDefault,
           isFalse,
           reason: 'v1.2 回滚配置非默认 ⇒ 整段写出（R32）');
+      expect(const QualityParams(dither: true).isDefault, isFalse,
+          reason: 'R38：开抖动现在是需要显式表达的非默认档');
     });
 
-    test('默认配置不写 quality 段；显式 legacy 回滚写出 tier:legacy（R32）', () {
+    test('默认配置不写 quality 段；显式 legacy 回滚写出 tier:legacy（R32/R38）', () {
       expect(EffectConfig().toJson().containsKey('quality'), isFalse,
-          reason: '新默认命中省略哨兵 ⇒ 默认 JSON 不带 quality 键（R32）');
+          reason: '新默认（含 R38 关抖动）命中省略哨兵 ⇒ 默认 JSON 不带 quality 键');
       final legacy = EffectConfig(
           quality: const QualityParams(
               dither: false, ditherMode: 'floyd', tier: RenderTier.legacy));
       expect(
           legacy.toJson()['quality'],
-          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'},
-          reason: '反向半：显式 legacy 回滚必须整段写出，否则 legacy 从 JSON 不可达');
+          {'ditherMode': 'floyd', 'tier': 'legacy'},
+          reason: '反向半：显式 legacy 回滚必须整段写出，否则 legacy 从 JSON 不可达；'
+              'R38 后 dither 等于自身默认 ⇒ 该键省略，缺键兜底 false 读回 false');
+      expect(
+          EffectConfig.fromJson(legacy.toJson()).quality.dither, isFalse,
+          reason: '缺 dither 键 ⇒ 兜底新默认 false（回滚不被洗成开抖动）');
       // 两半合起来才是「无损」：默认与回滚各自往返回自己（见 R32 组门）。
       expect(EffectConfig.fromJson(EffectConfig().toJson()).configHash,
           EffectConfig().configHash);
@@ -5069,7 +5155,8 @@ void main() {
           isFalse);
     });
 
-    test('sierra 默认真的落到编码轴：fromConfig 等于显式 standard+sierra', () {
+    test('R38 默认编码轴：fromConfig 等于显式 standard+关抖动，且与开 sierra/floyd 都不同',
+        () {
       RgbaImage grad() {
         final img = RgbaImage(width: 40, height: 24);
         for (var y = 0; y < 24; y++) {
@@ -5088,7 +5175,12 @@ void main() {
 
       final fromCfg =
           encode(StreamingGifBuilder.fromConfig(EffectConfig(), 40, 24));
-      final explicit = encode(StreamingGifBuilder(40, 24,
+      final noDither = encode(StreamingGifBuilder(40, 24,
+          fps: 24,
+          dither: false,
+          ditherMode: 'sierra',
+          tier: RenderTier.standard));
+      final sierra = encode(StreamingGifBuilder(40, 24,
           fps: 24,
           dither: true,
           ditherMode: 'sierra',
@@ -5098,11 +5190,15 @@ void main() {
           dither: true,
           ditherMode: 'floyd',
           tier: RenderTier.standard));
-      expect(fromCfg, equals(explicit),
-          reason: '默认 quality（standard+sierra+dither）必须与显式同参逐字节同板同码');
+      expect(fromCfg, equals(noDither),
+          reason: 'R38：出厂默认（standard+sierra 核+关抖动）必须与显式同参逐字节同板同码');
+      expect(fromCfg, isNot(equals(sierra)),
+          reason: '默认若仍走误差扩散，R38 的裁决就没落到编码轴');
       expect(fromCfg, isNot(equals(floyd)),
-          reason: '默认若仍走 floyd/无抖动，sierra 默认就没落地');
-      // 可解码性不破（编码轴是行为门，不是只读字段的摆设）。
+          reason: '默认若被兜成 floyd 抖动，同样是 R38 没落地');
+      // ditherMode 的 sierra/floyd 区分度仍在（显式开抖动时才生效，R38 不改核默认）。
+      expect(sierra, isNot(equals(floyd)),
+          reason: 'sierra 与 floyd 在 standard+ 档必须仍可区分');
       expect(pkg.GifDecoder(fromCfg).info!.numFrames, 1);
     });
 
@@ -5255,36 +5351,42 @@ void main() {
   //      isDefault ⇒ 整段 quality 不写 ⇒ 重解析成新默认 standard/sierra/true，
   //      一次 toJson→fromJson（服务端 API、预设再导出、withEffect 链）就静默
   //      抹掉回滚意图，RenderTier.legacy 从 JSON 根本不可持久化。
-  // R32 把哨兵翻到新默认（tier 默认 standard、ditherMode 默认 sierra、
+  // R32 把哨兵翻到当时的新默认（tier 默认 standard、ditherMode 默认 sierra、
   // dither 默认 true；mipLevels 2 / edgeStretchPx 6 本来就是自己的默认），
-  // 于是「默认 ⇒ 整段省略」「回滚 ⇒ 整段写出且逐键无损」。下面三组门在修复前
-  // 必红（见报告的红输出），修复后必绿。
-  group('v1.4 Task 3.6 修复轮 R32：哨兵=兜底=构造默认，quality JSON 双向无损', () {
+  // 于是「默认 ⇒ 整段省略」「回滚 ⇒ 整段写出且逐键无损」。
+  // R38（Task 3.6e）把 dither 的默认值翻回 false 时，**五处同源一起动**：
+  // 构造默认、缺键兜底、isDefault 哨兵、toJson 的逐键省略条件、param_catalog
+  // 声明值。dither 从此不再是「段内恒写」的特例，而是与其他键同一条
+  // 「等于自身默认就不写」的习语（缺键 ⇒ `?? false` 兜回 false，双向仍无损）。
+  // 下面这组门在修复前必红（见报告的红输出），修复后必绿。
+  group('v1.4 Task 3.6 修复轮 R32：哨兵=兜底=构造默认，quality JSON 双向无损（R38 同步）', () {
     // 逐键默认（与 QualityParams 构造默认一一对应，故意写死字面量：
     // 这里若与实现漂移，本组的门就该红，而不是跟着实现走）。
-    const defDither = true;
+    const defDither = false;
     const defDitherMode = 'sierra';
     const defTier = RenderTier.standard;
     const defMip = 2;
     const defStretch = 6;
 
     const cases = <String, QualityParams>{
-      // 新默认：命中哨兵 ⇒ 整段省略，重解析仍等于构造默认。
-      'default(standard/sierra/dither)':
+      // 新默认（R38）：命中哨兵 ⇒ 整段省略，重解析仍等于构造默认。
+      'default(standard/sierra/no-dither)':
+          QualityParams(dither: false, ditherMode: 'sierra', tier: defTier),
+      // 默认档上唯一非默认的键是 dither ⇒ 段写出且只写 dither 一个键。
+      'default but dither on':
           QualityParams(dither: true, ditherMode: 'sierra', tier: defTier),
-      // 完整 v1.2/v1.3 回滚配置：必须写出整段（R32 的核心正例）。
+      // 完整 v1.2/v1.3 回滚配置：必须写出整段（R32 的核心正例）。R38 后
+      // dither 等于自身默认 ⇒ 该键省略，段里只剩 floyd/legacy。
       'v1.2 rollback(legacy/floyd/no-dither)':
           QualityParams(
               dither: false, ditherMode: 'floyd', tier: RenderTier.legacy),
-      // 混档三例：旧实现（哨兵停在 legacy/floyd/false）全部有损。
-      'mixed legacy+sierra':
+      // 混档：旧实现（哨兵停在 legacy/floyd/false）全部有损，这里逐键验。
+      'mixed legacy+sierra+dither':
           QualityParams(dither: true, ditherMode: 'sierra', tier: RenderTier.legacy),
+      'mixed standard+floyd+dither':
+          QualityParams(dither: true, ditherMode: 'floyd', tier: RenderTier.standard),
       'mixed standard+floyd+no-dither':
           QualityParams(dither: false, ditherMode: 'floyd', tier: RenderTier.standard),
-      'mixed standard+floyd':
-          QualityParams(dither: true, ditherMode: 'floyd', tier: RenderTier.standard),
-      'mixed standard/sierra/no-dither':
-          QualityParams(dither: false, ditherMode: 'sierra', tier: RenderTier.standard),
       // 连 mipLevels/edgeStretchPx 一起降级：每键只在自己等于默认时省略。
       'rollback + mip1 + stretch0': QualityParams(
           dither: false,
@@ -5292,7 +5394,7 @@ void main() {
           tier: RenderTier.legacy,
           mipLevels: 1,
           edgeStretchPx: 0),
-      // 只动哨兵邻键（dither 恒写、tier/ditherMode 条件写）的边界。
+      // 只动哨兵邻键（五键现在全是条件写）的边界。
       'default but mip1': QualityParams(mipLevels: 1),
     };
 
@@ -5306,11 +5408,15 @@ void main() {
             reason: '省略判定必须就是 toJson 的省略条件：$q');
         final seg = j['quality'] as Map?;
         if (seg != null) {
-          // dither 是布尔键 ⇒ 段一旦写出就恒写（默认值 $defDither 由本条锚定，
-          // 不允许「缺 dither 键」这种要靠兜底才能读回的形状）。
-          expect(seg.containsKey('dither'), isTrue, reason: 'dither 恒写');
-          expect(seg['dither'], q.dither);
-          expect(defDither, isTrue, reason: 'R32 锚点：dither 的默认值就是 true');
+          // R38：dither 与其余键同一条逐键习语 —— 等于自身默认就不写。
+          // 无损性因此来自「缺键兜底 == 构造默认」（下面逐字段往返直接验），
+          // 而不是来自旧的「段内恒写」特权（那会在 R38 之后写出一个等于
+          // 自身默认的 dither:false 键，违背 :1152 习语）。
+          expect(defDither, isFalse,
+              reason: 'R38 锚点：dither 的默认值就是 false（与实现漂移时本组必红）');
+          expect(seg.containsKey('dither'), q.dither != defDither,
+              reason: 'dither 省略条件漂移：${q.dither}');
+          if (seg.containsKey('dither')) expect(seg['dither'], q.dither);
           // 逐键：仅当该键等于**自己的默认**才省略。
           expect(seg.containsKey('ditherMode'), q.ditherMode != defDitherMode,
               reason: 'ditherMode 省略条件漂移：${q.ditherMode}');
@@ -5334,7 +5440,7 @@ void main() {
 
     test('R32 形状：默认整段省略，显式 legacy 回滚写出 tier:legacy 且仍可解析', () {
       expect(const QualityParams().isDefault, isTrue,
-          reason: 'R32：isDefault 必须认新默认（standard/sierra/true/2/6）');
+          reason: 'R32/R38：isDefault 必须认新默认（standard/sierra/false/2/6）');
       expect(EffectConfig().toJson().containsKey('quality'), isFalse,
           reason: '默认配置不再写 quality 段');
 
@@ -5343,8 +5449,9 @@ void main() {
               dither: false, ditherMode: 'floyd', tier: RenderTier.legacy));
       expect(
           rollback.toJson()['quality'],
-          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'},
-          reason: 'v1.2 回滚配置必须逐字可持久化（spec §6.4「legacy 仍供显式选择」）');
+          {'ditherMode': 'floyd', 'tier': 'legacy'},
+          reason: 'v1.2 回滚配置必须逐字可持久化（spec §6.4「legacy 仍供显式选择」）；'
+              'R38 后 dither 等于自身默认 ⇒ 该键按逐键习语省略');
       // 两个方向都得能表达：默认与回滚的 JSON/哈希不能撞车。
       expect(rollback.configHash, isNot(EffectConfig().configHash),
           reason: '回滚与默认同哈希 ⇒ 回滚意图不可表达');
@@ -5352,6 +5459,10 @@ void main() {
           EffectConfig.fromJson(_decodeJson(rollback.toJsonString())).quality.tier,
           RenderTier.legacy,
           reason: '回滚 JSON 重解析必须是 legacy（读路径同样锁步）');
+      expect(
+          EffectConfig.fromJson(_decodeJson(rollback.toJsonString())).quality.dither,
+          isFalse,
+          reason: '省略的 dither 键必须由兜底读回 false（缺键兜底 == 构造默认）');
       expect(
           EffectConfig.fromJson(_decodeJson(rollback.toJsonString())).configHash,
           rollback.configHash);
@@ -5366,7 +5477,8 @@ void main() {
       });
       expect(nul.tier, RenderTier.standard, reason: '显式 null tier 不得暗兜 legacy');
       expect(nul.ditherMode, 'sierra');
-      expect(nul.dither, isTrue);
+      expect(nul.dither, isFalse,
+          reason: 'R38：显式 null dither = 「没说过」 ⇒ 落新默认 false，不得静默开抖动');
       // 整段为 null 的 quality 键：等价缺段 ⇒ 构造默认。
       expect(EffectConfig.fromJson({'quality': <String, dynamic>{}}).quality,
           isNot(isNull));
@@ -5380,7 +5492,7 @@ void main() {
           'sierra', reason: '未知 ditherMode ⇒ 新默认（R24 兜底方向不变）');
     });
 
-    test('R32 便捷参数：qualityTier=null/dither=null 不写段，显式 legacy 写段', () {
+    test('R32 便捷参数：qualityTier=null/dither=false 不写段，显式 legacy 写段', () {
       expect(EffectConfig(dither: null, qualityTier: null)
           .toJson()
           .containsKey('quality'), isFalse);
@@ -5388,13 +5500,17 @@ void main() {
           EffectConfig(
                   quality: const QualityParams(tier: RenderTier.legacy))
               .configHash,
-          reason: '顶层便捷参数与嵌套参数必须逐字节等价（R5 契约在 R32 后仍成立）');
+          reason: '顶层便捷参数与嵌套参数必须逐字节等价（R5 契约在 R32/R38 后仍成立）');
       final j = EffectConfig(qualityTier: RenderTier.legacy).toJson()['quality']
           as Map;
       expect(j['tier'], 'legacy');
-      // 显式 dither:true（= 默认）与不传便捷参数等价 ⇒ 仍整段省略。
-      expect(EffectConfig(dither: true).toJson().containsKey('quality'), isFalse);
-      expect(EffectConfig(dither: true).configHash, EffectConfig().configHash);
+      // R38 反转方向：等于默认的便捷参数现在是 dither:false ⇒ 仍整段省略；
+      // 显式 dither:true 才是非默认 ⇒ 写出段与键。
+      expect(EffectConfig(dither: false).toJson().containsKey('quality'), isFalse);
+      expect(EffectConfig(dither: false).configHash, EffectConfig().configHash);
+      expect(EffectConfig(dither: true).toJson()['quality'], {'dither': true});
+      expect(EffectConfig(dither: true).configHash,
+          isNot(EffectConfig().configHash));
     });
   });
 
@@ -5497,6 +5613,191 @@ void main() {
       // （绝对字面量归 3.7 重锚定，这里钉的是「3.6b 自身不移动默认哈希」）。
       expect(EffectConfig().toJson().containsKey('contentAware'), isFalse);
       expect(EffectConfig(contentAware: true).toJson(), EffectConfig().toJson());
+    });
+  });
+
+  // ---------- Task 3.6e：dither 默认 true→false（R38，用户裁决） ----------
+  //
+  // R34 实测：误差扩散抖动单独把 GIF 字节乘 2.2–2.4×（它的高频噪声打穿 LZW），
+  // 而对 flat-ink + 线稿漫画语料换不来可见收益 ⇒ 用户裁决 R38 把出厂默认关回
+  // `dither: false`。**tier 仍是 standard**（用户要的锐度来自渲染档，不是抖动），
+  // `ditherMode` 的默认 'sierra' 一字不动：它在 dither==false 时是惰性的
+  // （gif_writer.dart:311 `sierra = dither && ditherMode=='sierra' &&
+  // tier.atLeastStandard`，本轮不碰这条门）。
+  //
+  // 习语与 R32 / 3.6b 同源，但这次锁步的是**五处**（四处 effect_config.dart +
+  // 一处 param_catalog.dart）：
+  //   构造默认 == 缺键兜底 == isDefault 哨兵 == toJson 逐键省略条件 == 目录
+  //   defaultValue（engine_test.dart:1298 的 declared-vs-actual 守卫，R24-ii）。
+  // 少翻一处就重演「一次 toJson→fromJson 静默改写用户配置」。
+  //
+  // 为什么 toJson 从「dither 恒写」改成逐键条件 `if (dither)`：段本身已经是
+  // 「非默认才出现」，段内再写一个等于**自身默认**的 `dither: false` 违背
+  // :1152 的逐键习语；而 `if (dither)` 对新 `?? false` 兜底是双向无损的。
+  // 默认 ⇒ 整段省略 ⇒ 默认 JSON 的键集与 configHash 本次一字不动。
+  group('v1.4 Task 3.6e：dither 默认 false（R38），构造默认=兜底=哨兵=目录锁步', () {
+    // 锚点：故意写死字面量（与 R32 / 3.6b 组同一口径）——实现若与本组锚点
+    // 漂移，这里的门就该红，而不是跟着实现走。
+    const defDither = false;
+
+    test('3.6e 默认 false：构造默认 == 缺键兜底 == 省略哨兵，且默认 JSON 里根本没有 dither 键', () {
+      expect(const QualityParams().dither, defDither,
+          reason: '构造默认必须等于本组锚点（false，R38）');
+      expect(EffectConfig().quality.dither, isFalse,
+          reason: 'R38：出厂默认不做误差扩散（投诉「太糊/太大」的体积修复）');
+      // R38 只关抖动，不关渲染档：Task 3.6 的 standard 必须原地留着。
+      expect(EffectConfig().quality.tier, RenderTier.standard,
+          reason: '本次不得把 tier 一起 undo（tier 仍是 standard，R24/R28）');
+      expect(EffectConfig().quality.ditherMode, 'sierra',
+          reason: 'ditherMode 默认仍是 sierra（dither=false 时惰性，不动）');
+      // 段级哨兵同步：默认命中 isDefault ⇒ 整段省略 ⇒ 默认序列化的键集一字不动。
+      expect(EffectConfig().quality.isDefault, isTrue,
+          reason: '哨兵必须认新默认（false/sierra/standard/2/6）');
+      expect(EffectConfig().toJson().containsKey('quality'), isFalse,
+          reason: '默认配置不写 quality 段（R32 习语保持不变）');
+      expect(EffectConfig().toJsonString().contains('"dither"'), isFalse,
+          reason: '默认 JSON 里不得出现 dither 键（整段或段内都不行）⇒ 默认键集'
+              '与翻转前逐字节相同 ⇒ 默认 configHash 本次不移动');
+      // 缺键兜底 = 新默认（锁步第二源）；显式 null 与缺键同义。
+      expect(EffectConfig.fromJson({'effects': ['rain']}).quality.dither,
+          defDither,
+          reason: 'quality-less JSON 必须解析出构造默认（哈希即身份）');
+      expect(
+          QualityParams.fromJson({'dither': null}).dither, defDither,
+          reason: '显式 null = 「没说过」 ⇒ 落新默认 false，绝不静默落 true');
+      // 锁步第五源：参数目录的声明值（R24-ii 的坑，engine_test:1298 同款守卫）。
+      expect(
+          kRenderParamSpecs.firstWhere((s) => s.name == 'dither').defaultValue,
+          defDither,
+          reason: 'param_catalog 的 dither.defaultValue 必须与构造默认同源');
+      // 往返稳定（相对契约；绝对默认指纹由本任务的「不写 dither 键」保证不动）。
+      final base = EffectConfig();
+      expect(EffectConfig.fromJson(_decodeJson(base.toJsonString())).configHash,
+          base.configHash);
+    });
+
+    test('3.6e 显式 true：段写出、键写出、往返保 true 保哈希，且与默认哈希不同', () {
+      final on = EffectConfig(dither: true);
+      expect(
+          on.toJson()['quality'], {'dither': true},
+          reason: 'R38 后 dither 是「非默认才写」的逐键条件项：显式 true ⇒ 段与键都出现');
+      final back = EffectConfig.fromJson(_decodeJson(on.toJsonString()));
+      expect(back.quality.dither, isTrue, reason: '显式开启的意图必须往返保住');
+      expect(back.configHash, on.configHash,
+          reason: '一次往返就改 configHash = 同一份 JSON 有两种渲染行为');
+      expect(back.toJson(), on.toJson(), reason: '往返后序列化形状必须不动');
+      expect(on.configHash, isNot(EffectConfig().configHash),
+          reason: '开抖动与默认同哈希 ⇒ 该选择不可表达');
+      // 混档（R24 哨兵设计下有损的那一类）仍走同一条逐键契约。
+      final mixed = EffectConfig(dither: true, qualityTier: RenderTier.legacy);
+      expect(mixed.toJson()['quality'], {'dither': true, 'tier': 'legacy'},
+          reason: '逐键：等于自身默认的键省略，非默认的键写出');
+      expect(
+          EffectConfig.fromJson(_decodeJson(mixed.toJsonString())).configHash,
+          mixed.configHash);
+    });
+
+    test('3.6e 显式 false == 新默认：整段省略；非默认段内该键同样省略且读回 false', () {
+      final off = EffectConfig(dither: false);
+      expect(off.toJson().containsKey('quality'), isFalse,
+          reason: 'dither:false 现在就是默认 ⇒ 不写段（旧 R24「恒写 false」形状消失）');
+      expect(off.configHash, EffectConfig().configHash,
+          reason: '显式默认值与不传逐字节等价（R5 便捷参数契约）');
+      expect(
+          EffectConfig.fromJson({'effects': ['rain'], 'dither': false})
+              .quality
+              .dither,
+          isFalse);
+      // v1.2 回滚段：tier/ditherMode 非默认 ⇒ 写出；dither 等于自身默认 ⇒ 省略，
+      // 读回靠 `?? false` 兜底复原。R32 的「回滚必须可持久化」仍成立（缺键即
+      // 默认，而默认就是回滚想要的那个值），且这次不会再被兜成 true。
+      final rollback = EffectConfig(
+          quality: const QualityParams(
+              dither: false, ditherMode: 'floyd', tier: RenderTier.legacy));
+      final seg = rollback.toJson()['quality'] as Map;
+      expect(seg, {'ditherMode': 'floyd', 'tier': 'legacy'},
+          reason: '段内逐键省略：等于自身默认的 dither 不写（:1152 习语）');
+      final rb = EffectConfig.fromJson(_decodeJson(rollback.toJsonString()));
+      expect(rb.quality.dither, isFalse, reason: '缺 dither 键 ⇒ 兜底新默认 false');
+      expect(rb.quality.ditherMode, 'floyd');
+      expect(rb.quality.tier, RenderTier.legacy,
+          reason: 'legacy 仍必须能从 JSON 显式达（spec §6.4）');
+      expect(rb.configHash, rollback.configHash,
+          reason: '回滚配置一次往返就改哈希 = R32 事故重演');
+      expect(rollback.configHash, isNot(EffectConfig().configHash),
+          reason: '回滚（floyd+legacy）与默认同哈希 ⇒ 回滚意图不可表达');
+    });
+
+    test('3.6e 行为门（编码轴）：默认档 GIF 逐字节等于显式关抖动、不等于开启后', () {
+      RgbaImage grad() {
+        final img = RgbaImage(width: 40, height: 24);
+        for (var y = 0; y < 24; y++) {
+          for (var x = 0; x < 40; x++) {
+            final v = x * 255 ~/ 39;
+            img.setPixel(x, y, v, 255 - v, 128);
+          }
+        }
+        return img;
+      }
+
+      Uint8List encode(EffectConfig cfg) {
+        final b = StreamingGifBuilder.fromConfig(cfg, 40, 24);
+        b.addFrame(grad());
+        return Uint8List.fromList(b.finish());
+      }
+
+      final def = encode(EffectConfig());
+      final explicitOff = encode(EffectConfig(
+          quality: const QualityParams(dither: false, tier: RenderTier.standard)));
+      final on = encode(EffectConfig(
+          quality: const QualityParams(
+              dither: true, ditherMode: 'sierra', tier: RenderTier.standard)));
+      expect(def, equals(explicitOff),
+          reason: '出厂默认必须与「显式 standard + 关抖动」同板同码（R38 落到字节）');
+      expect(def, isNot(equals(on)),
+          reason: '默认若仍与 dither:true 同字节 ⇒ 默认翻转没进渲染路径，R38 是摆设');
+      expect(pkg.GifDecoder(def).info!.numFrames, 1, reason: '默认档产物仍可解码');
+      // R34 的成本归因（抖动撑大 GIF）在同一帧上直接可读。
+      expect(def.length, lessThan(on.length),
+          reason: '误差扩散的高频噪声必须让同一帧变大（本任务省掉的正是这份字节）');
+    });
+
+    test('3.6e 端到端：同图同参，出厂默认产物 != 显式 dither:true，且双跑逐字节确定',
+        () async {
+      final tmp = Directory.systemTemp.createTempSync('cm_36e_dither');
+      try {
+        final inPath = '${tmp.path}/in.png';
+        File(inPath).writeAsBytesSync(_pngEncode(_gradientImage(96, 72)));
+        final def = EffectConfig(
+            fps: 8,
+            durationSec: 1,
+            maxDimension: 96,
+            outputFormat: OutputFormat.gif);
+        final on = EffectConfig(
+            fps: 8,
+            durationSec: 1,
+            maxDimension: 96,
+            dither: true,
+            outputFormat: OutputFormat.gif);
+        expect(on.quality.tier, def.quality.tier,
+            reason: '唯一变量必须是 dither（R38 不动 tier）');
+        expect(on.quality.dither, isTrue);
+        expect(def.quality.dither, isFalse);
+        final a = File((await MotionPipeline(def).processFile(inPath, '${tmp.path}/a'))
+                .outputGif)
+            .readAsBytesSync();
+        final a2 = File((await MotionPipeline(def).processFile(inPath, '${tmp.path}/a2'))
+                .outputGif)
+            .readAsBytesSync();
+        final b = File((await MotionPipeline(on).processFile(inPath, '${tmp.path}/b'))
+                .outputGif)
+            .readAsBytesSync();
+        expect(a, equals(a2), reason: '默认档双跑必须逐字节确定（字节确定性红线）');
+        expect(a, isNot(equals(b)),
+            reason: '出厂默认若与 dither:true 同字节 ⇒ 默认值没走到真实渲染管线');
+      } finally {
+        tmp.deleteSync(recursive: true);
+      }
     });
   });
 }
