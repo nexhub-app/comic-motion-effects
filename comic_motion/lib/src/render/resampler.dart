@@ -41,7 +41,7 @@ Uint8List _areaAxisX(Uint8List src, int w, int h, int nw) {
     for (var x = 0; x < nw; x++) {
       final a = x * scale;
       final i0 = a.floor().clamp(0, w - 1);
-      final i1 = (a + scale - 1).floor().clamp(0, w - 1);
+      final i1 = ((a + scale).ceil() - 1).clamp(0, w - 1);
       _spanSums(src, rowIn + i0 * 4, i0, i1, a, a + scale, 4, acc);
       final o = rowOut + x * 4;
       for (var c = 0; c < 4; c++) {
@@ -61,7 +61,7 @@ Uint8List _areaAxisY(Uint8List src, int w, int h, int nh) {
   for (var y = 0; y < nh; y++) {
     final a = y * scale;
     final j0 = a.floor().clamp(0, h - 1);
-    final j1 = (a + scale - 1).floor().clamp(0, h - 1);
+    final j1 = ((a + scale).ceil() - 1).clamp(0, h - 1);
     for (var x = 0; x < w; x++) {
       _spanSums(src, x * 4 + j0 * stride, j0, j1, a, a + scale, stride, acc);
       final o = (y * w + x) * 4;

@@ -411,14 +411,14 @@ void main() {
   // 高，导出必然降采样。这里补的正是那条路径，并且**不写 quality 段**（默认档
   // 即 standard，R32），用断言把「跑的是面积平均」钉住。
   //
-  // 缩放比选 **精确整数 2×**（1920×2400 → 960×1200）：这是真实可用的导出档位
-  // 组合（原页 1920×2400、draft 上限 1200），也是面积平均滤波器归一化正确
-  // （整窗权重恰等于 scale）的形状。非整数比（1.5×、2.4×、1.9991×）的形状
-  // 见下面那条 skip 用例与 task-3.6-report.md 的修复轮 §B：boxDownscale 的
-  // `_spanSums` 末纹素漏算（`i1 = (a + scale - 1).floor()`，应为 `.ceil()`），
-  // 加权只覆盖到 floor(b) 却按 scale 归一，纯白被压成交替的 113/170（1.5×）
-  // 或 191（1.9991×），白带行的近白占比跌破 whiteRatio 0.90 → 检不出分格。
-  // 那是降采样滤波器的产品缺陷，不是分格逻辑，也不靠加宽带/换形状绕开。
+  // 形状覆盖两种缩放比：精确整数 2×（1920×2400 → 960×1200）与非整数 1.5×
+  // （1920×2400 → 1280×1600，真实导出上限）。后者历史上是**失败**的：
+  // `_areaAxisX/_areaAxisY` 把窗口末纹素算成 `(a + scale - 1).floor()`，比正确
+  // 值 `(a + scale).ceil() - 1` 少一根，加权只覆盖到 floor(b) 却仍按 scale 归一，
+  // 纯白被压成交替的 113/170 ⇒ 白带行的近白占比跌破 whiteRatio 0.90 → 检不出
+  // 分格（整数比恰好不受影响，所以前一条用例一直是绿的）。R33 已修：两条用例
+  // 现在都跑在真实导出主路径上；平场不变量本身由 `render_test.dart` 的
+  // 「boxDownscale 平场不变量」门直接钉住。
   group('降采样 + panelAware 在新默认档下仍分格（修复轮 finding 2）', () {
     /// w×h 两格竖排页：中央 [h/2 - gutter/2, +gutter) 纯白带，上下格各一块
     /// 深色内容（四周留 inset 纸白边）。与 twoPanelRaster 同构，只是可参数化尺寸。
@@ -494,12 +494,12 @@ void main() {
     });
 
     test('同形状 maxDimension 1600（非整数比 1.5×）默认档也必须检出 2 格', () {
-      // finding 2 的诚实形状：真实导出上限 1600（缩放比 1.5）。当前**失败**，
-      // 且失败机制是 boxDownscale 归一化缺陷（见上面 group 注释与报告 §B）：
-      //   default(standard) → working=1280x1600, 白带行像素 113/170 交替 →
-      //                       PanelSplitter 1 格、debugPanelRects 0 个、层退化成 3
-      //   显式 tier=legacy   → 同一形状 2 格 / 2 矩形 / 6 层（双线性不受影响）
-      // 不放宽白带、不改形状凑绿；等裁决修好滤波器后去掉 skip 即为回归门。
+      // finding 2 的真实导出形状：原页 1920×2400、导出上限 1600 ⇒ 缩放比 1.5。
+      // R33 之前这里必然退化（working=1280x1600 的白带被面积平均压成 113/170 →
+      // PanelSplitter 1 格、debugPanelRects 0 个、层退化成 3），当时以 skip 记账；
+      // 修好 `_areaAxisX/_areaAxisY` 的窗口末纹素后本例转绿，且断言一句未放宽：
+      // 仍是 2 格 / 2 个矩形 / 6 层（2 格 × 3 层），白带 30px、形状不换。
+      // 显式 tier=legacy 在同一形状从来是 2 格（双线性不做面积平均，不受影响）。
       final cfg = EffectConfig.fromJson(pageCfg(1600));
       expect(cfg.quality.tier, RenderTier.standard);
       final src = pageRaster(1920, 2400, 30, 120);
@@ -508,11 +508,10 @@ void main() {
       expect(working.width, 1280);
       expect(working.height, 1600);
       expect(const PanelSplitter().split(working), hasLength(2),
-          reason: '1.5× 面积平均把纯白压到 113/170 → 白带检不出（已知缺陷）');
+          reason: '1.5× 面积平均必须保持纯白 DC（否则白带检不出 ⇒ 退化整页）');
       expect(
           FrameCompositor(layers, working, cfg).debugPanelRects(), hasLength(2));
       expect(layers, hasLength(6));
-    }, skip: 'boxDownscale 非整数缩放比归一化缺陷（255→113/170 @1.5×），'
-        'finding 2 实测证据，修复权留给裁决（见 task-3.6-report.md 修复轮 §B）');
+    });
   });
 }

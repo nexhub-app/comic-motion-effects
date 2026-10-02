@@ -61,6 +61,30 @@ RgbaImage _bilinearDownscale(RgbaImage src, int maxDim) {
   return out;
 }
 
+/// 纯白不透明平场（四通道全 255）。
+///
+/// 常量输入是面积平均滤波器的**下界**不变量：覆盖权重求和后除以 scale 必须还原
+/// 同一个常量，任何一根纹素没被计入都会让整幅输出按轴乘上 `(scale - frac)/scale`。
+RgbaImage _flatWhite(int w, int h) {
+  final data = Uint8List(w * h * 4);
+  data.fillRange(0, data.length, 255);
+  return RgbaImage.fromBytes(width: w, height: h, data: data);
+}
+
+/// 逐通道全栅格扫描（不抽查：缺陷是周期性的，抽查可能恰好落在好像素上），
+/// 返回 `(最小值, 最大值, 不等于 [want] 的像素个数)`。
+(int, int, int) _byteRange(RgbaImage img, int want) {
+  var lo = 256, hi = -1, bad = 0;
+  final data = img.data;
+  for (var i = 0; i < data.length; i++) {
+    final v = data[i];
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+    if (v != want) bad++;
+  }
+  return (lo, hi, bad);
+}
+
 /// 竖直正弦光栅（连续信号 128+120·cos(2πu/period) 按像素中心采样）。
 RgbaImage _grating(int w, int h, {double periodPx = 2.5}) {
   final img = RgbaImage(width: w, height: h);
@@ -259,6 +283,34 @@ void main() {
         expect('${a.width}x${a.height}', '${b.width}x${b.height}');
       }
       expect(boxDownscale(src, 2000), same(src));
+    });
+
+    test('boxDownscale 平场不变量：纯白进必须纯白出（非整数比，R33）', () {
+      // 面积平均的归一化下界：常量场在任意缩放比下都必须逐通道还原成同一个
+      // 常量。历史缺陷（修复轮 R33）在 `_areaAxisX/_areaAxisY` 里把窗口末纹素
+      // 算成 `(a + scale - 1).floor()`，比正确的 `(a + scale).ceil() - 1` 少一个
+      // 纹素，却仍按 scale 归一，于是每个轴乘上 (scale - frac(a+scale))/scale < 1；
+      // 两轴可分离 ⇒ 损失复利。实测：1.5× 纯白变成交替的 113/170，典型漫画页宽度
+      // 的 1.2× 掉到 36…213 的条带；**整数比恰好不受影响**，所以既有整比用例
+      // （2×、3×）与相对误差用例全绿也照不出它 —— 这条门就是为此而写。
+      // 直接调 boxDownscale（不经过档位）⇒ 与 quality.tier 无关的纯滤波器契约。
+      for (final (sw, sh, maxDim, ratioLabel) in [
+        (2400, 2400, 1600, '1.5×'),
+        (1920, 1080, 1600, '1.2× 典型漫画页宽度'),
+        (300, 200, 200, '1.5×（小图，含尺寸取整）'),
+      ]) {
+        final src = _flatWhite(sw, sh);
+        final out = boxDownscale(src, maxDim);
+        final tag = '$sw x $sh -> $maxDim（$ratioLabel，出 ${out.width}x${out.height}）';
+        expect(out.width, lessThan(sw), reason: '$tag：必须真的降采样');
+        expect(out.height, lessThan(sh), reason: '$tag：必须真的降采样');
+        final (lo, hi, bad) = _byteRange(out, 255);
+        expect(bad, 0,
+            reason: '$tag：存在 $bad 个非 255 通道，实测值域 $lo..$hi'
+                '（尾纹素漏算会把纯白压成灰条带）');
+        expect(lo, 255, reason: '$tag：下界必须是 255，实测 $lo');
+        expect(hi, 255, reason: '$tag：上界必须是 255，实测 $hi');
+      }
     });
 
     test('legacy 档 drawLayer 与 v1.2 双线性参考实现逐字节一致', () {
