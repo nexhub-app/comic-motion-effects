@@ -1107,14 +1107,15 @@ void main() {
       });
     });
 
-    test('默认路径：新默认写 quality 三键，便捷参数与嵌套参数仍等价（R24/R26）', () {
+    test('默认路径：新默认整段省略 quality，便捷参数与嵌套参数仍等价（R32/R26）', () {
       final base = EffectConfig();
       // null 便捷参数与全默认同路径
       expect(EffectConfig(dither: null, amplitude: null).configHash,
           base.configHash);
-      // v1.4 R24：默认档 standard ≠ 省略哨兵 ⇒ quality 段出现且恰这三键
-      final q = base.toJson()['quality'] as Map;
-      expect(q, {'dither': true, 'ditherMode': 'sierra', 'tier': 'standard'});
+      // R32：哨兵与构造默认同源 ⇒ 默认档（standard/sierra/true）命中省略，
+      // 默认 JSON 不再带 quality 键。
+      expect(base.toJson().containsKey('quality'), isFalse,
+          reason: '默认配置必须整段省略 quality（R32）');
       // 便捷参数与显式嵌套参数序列化一致（相对契约，不落在绝对指纹上）
       final explicit = EffectConfig()
         ..quality = const QualityParams(dither: false);
@@ -1122,13 +1123,23 @@ void main() {
       expect(EffectConfig(dither: false).configHash, explicit.configHash);
       // 往返稳定：哈希即身份
       expect(EffectConfig.fromJson(base.toJson()).configHash, base.configHash);
-      // 显式旧哨兵组合（legacy/floyd/false）仍然整段不写
+      // 显式旧默认组合（legacy/floyd/false）现在**写出整段**（R32 的反向半）：
+      // 回滚意图必须可持久化，不能靠省略键表达。
       final legacySentinel = EffectConfig()
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
-      expect(legacySentinel.toJson().containsKey('quality'), isFalse);
-      // 非 null 便捷参数才写 quality 段
-      expect(EffectConfig(dither: true).toJson()['quality'], isNotNull);
+      expect(
+          legacySentinel.toJson()['quality'],
+          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+      expect(
+          EffectConfig.fromJson(legacySentinel.toJson()).configHash,
+          legacySentinel.configHash,
+          reason: '回滚配置往返必须保哈希（否则「省略=默认」的旧歧义回来了）');
+      // 非默认便捷参数（显式降到 legacy 档）才写 quality 段
+      expect(EffectConfig(qualityTier: RenderTier.legacy).toJson()['quality'],
+          isNotNull);
+      // 等于默认的非 null 便捷参数（dither:true）与不传等价 ⇒ 仍整段省略
+      expect(EffectConfig(dither: true).toJson().containsKey('quality'), isFalse);
     });
 
     test('顶层便捷参数不绕过 fail-fast；建议范围越界不抛', () {
@@ -2832,24 +2843,34 @@ void main() {
         effects: [EffectKind.parallax, EffectKind.fog, EffectKind.vignette],
         fog: FogParams(blobs: 10, opacity: 0.14),
         vignette: VignetteParams(strength: 0.4),
-        quality: QualityParams(dither: true),
+        // R32：dither:true 已等于默认 ⇒ 整段省略；这里要钉「非默认才写段」，
+        // 所以取一个真正非默认的 quality（关抖动）。
+        quality: QualityParams(dither: false),
       );
       final j = cfg.toJson();
       expect(j.containsKey('fog'), isTrue);
       expect(j.containsKey('snow'), isFalse, reason: '未启用不序列化');
-      expect((j['quality'] as Map)['dither'], isTrue);
-      // v1.4 R24/R26：新默认（standard+sierra+dither）非省略哨兵 ⇒ 默认配置写整段三键
-      final defaultQ = EffectConfig().toJson()['quality'] as Map;
-      expect(defaultQ.keys.toSet(), {'dither', 'ditherMode', 'tier'});
-      // 显式旧哨兵组合（legacy/floyd/false）仍不写 quality 段：经典指纹通路保留
+      expect((j['quality'] as Map)['dither'], isFalse);
+      // R32/R26：新默认（standard+sierra+dither）就是省略哨兵本身 ⇒ 默认配置
+      // 整段不写 quality 键（缺键兜底与哨兵同源，往返无损）。
+      expect(EffectConfig().toJson().containsKey('quality'), isFalse);
+      // 反向半：显式 v1.2 旧默认组合现在**写出整段**（回滚可持久化）。
       final legacySentinel = EffectConfig()
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
-      expect(legacySentinel.toJson().containsKey('quality'), isFalse);
+      expect(
+          legacySentinel.toJson()['quality'],
+          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'},
+          reason: 'legacy 必须能从 JSON 显式表达（spec §6.4「legacy 仍供显式选择」）');
       final restored = EffectConfig.fromJson(_decodeJson(cfg.toJsonString()));
       expect(restored.configHash, cfg.configHash);
       expect(restored.fog.blobs, 10);
-      expect(restored.quality.dither, isTrue);
+      expect(restored.quality.dither, isFalse);
+      // 回滚配置的往返同样无损（这一半在 R24 哨兵设计下是丢的）。
+      final backLegacy =
+          EffectConfig.fromJson(_decodeJson(legacySentinel.toJsonString()));
+      expect(backLegacy.quality.tier, RenderTier.legacy);
+      expect(backLegacy.configHash, legacySentinel.configHash);
     });
 
     test('GIF 抖动开关：dither=true 可解码且与关闭时输出不同', () {
@@ -2913,20 +2934,29 @@ void main() {
           equals(Uint8List.fromList(_pngEncode(f))));
     });
 
-    test('v1.4 默认 quality 段序列化三键；显式 legacy 哨兵组合仍整段省略（R24/R26）', () {
-      // 新默认：standard 档 + sierra + dither ⇒ 不等于省略哨兵，quality 段必然出现在 JSON 里
-      final q = EffectConfig().toJson()['quality'] as Map;
-      expect(q, {'dither': true, 'ditherMode': 'sierra', 'tier': 'standard'});
+    test('v1.4 默认不写 quality 段；显式 legacy 写出整段、单键降级逐键省略（R32/R26）',
+        () {
+      // R32：默认 = 哨兵 ⇒ 段不出现；「段不出现」从此唯一地意味着新默认，
+      // 而 legacy 只能靠显式写出表达（这正是 R24 哨兵设计丢掉的那一半）。
+      expect(EffectConfig().toJson().containsKey('quality'), isFalse,
+          reason: '新默认 standard+sierra+dither 命中省略哨兵 ⇒ 不写段');
       expect(EffectConfig().quality.tier, RenderTier.standard);
-      // 哨兵语义未变：legacy/floyd/false 的显式旧默认组合仍然「等于旧默认就不写」
       final legacySentinel = EffectConfig()
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
-      expect(legacySentinel.toJson().containsKey('quality'), isFalse);
-      // 只改一个字段也要写全三键（不写单键，避免「缺键即 legacy」的旧歧义）
+      expect(
+          legacySentinel.toJson()['quality'],
+          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'},
+          reason: '整套旧默认现在必须写出（回滚路径可持久化）');
+      // 只改一个键 ⇒ 只写那一个键（等于自己默认的键仍省略）。这不再退回
+      // 「缺键即 legacy」的旧歧义，因为缺键兜底 == 该键默认：下面直接验。
       final d = EffectConfig()..quality = const QualityParams(dither: false);
-      expect(d.toJson()['quality'],
-          {'dither': false, 'ditherMode': 'sierra', 'tier': 'standard'});
+      expect(d.toJson()['quality'], {'dither': false});
+      final back = EffectConfig.fromJson(_decodeJson(d.toJsonString()));
+      expect(back.quality.dither, isFalse);
+      expect(back.quality.ditherMode, 'sierra', reason: '缺 ditherMode 键 ⇒ 该键默认');
+      expect(back.quality.tier, RenderTier.standard, reason: '缺 tier 键 ⇒ 该键默认');
+      expect(back.configHash, d.configHash);
     });
 
     test('tier/ditherMode/mipLevels JSON 往返且哈希稳定', () {
@@ -2938,14 +2968,30 @@ void main() {
             mipLevels: 1,
             edgeStretchPx: 0);
       final j = cfg.toJson()['quality'] as Map;
-      expect(j['tier'], 'standard');
-      expect(j['ditherMode'], 'sierra');
+      // R32：tier/ditherMode 等于自己的默认 ⇒ 省略；mipLevels/edgeStretchPx
+      // 非默认 ⇒ 逐键写出。dither 恒写（段只在非默认时出现）。
+      expect(j.containsKey('tier'), isFalse, reason: 'tier==默认就不写（R32）');
+      expect(j.containsKey('ditherMode'), isFalse);
+      expect(j['dither'], isTrue);
       expect(j['mipLevels'], 1);
       expect(j['edgeStretchPx'], 0);
       final back = EffectConfig.fromJson(_decodeJson(cfg.toJsonString()));
       expect(back.configHash, cfg.configHash);
       expect(back.quality.tier, RenderTier.standard);
+      expect(back.quality.ditherMode, 'sierra');
       expect(back.quality.edgeStretchPx, 0);
+
+      // 混档（R24 哨兵设计下有损的那一类）现在也走同一条契约：写出 tier、
+      // 省略等于默认的键，重解析逐字段复原。
+      final mixed = EffectConfig(fps: 12, durationSec: 3, maxDimension: 640)
+        ..quality = const QualityParams(
+            dither: true, ditherMode: 'sierra', tier: RenderTier.legacy);
+      expect(mixed.toJson()['quality'], {'dither': true, 'tier': 'legacy'});
+      final mixedBack = EffectConfig.fromJson(_decodeJson(mixed.toJsonString()));
+      expect(mixedBack.quality.tier, RenderTier.legacy);
+      expect(mixedBack.quality.ditherMode, 'sierra');
+      expect(mixedBack.configHash, mixed.configHash,
+          reason: '混档往返必须保哈希（R32 前这里会静默变 standard）');
     });
 
     test('quality 段缺省 dither 时与构造默认一致（R24 锁步：缺键 ⇒ 新默认 true）', () {
@@ -3315,21 +3361,28 @@ void main() {
     });
 
     test('focusLines 仅在启用时序列化，JSON 往返保哈希', () {
-      // R24 后新默认档（standard）写满 quality 三键 ⇒ 往返保哈希；
-      // 混档（tier=legacy 但其余为新默认）是有损组合，不在往返契约里（见报告顾虑）。
+      // 往返用新默认档（standard）：quality 段命中省略哨兵 ⇒ 不写键，
+      // 缺键兜底 == 构造默认 == 哨兵（R32）⇒ 往返逐字段复原。
       final cfg = fcfg(
           focus: const FocusLinesParams(mode: 'both', lines: 40),
           tier: RenderTier.standard);
       final j = _decodeJson(cfg.toJsonString());
       expect(j['focusLines']['mode'], 'both');
       expect(EffectConfig.fromJson(j).configHash, cfg.configHash);
-      // 哨兵形状：整套旧默认（legacy/floyd/false）仍不写 quality 段
+      // R32 反向半：整套旧默认（legacy/floyd/false）现在**写出** quality 段并
+      // 无损往返。R24 的旧断言（整段省略 ⇒ 重解析成 standard）会静默抹掉回滚，
+      // 那正是本轮修掉的缺陷，这里改为钉住「回滚可持久化」。
       final legacyArm = fcfg(focus: const FocusLinesParams(mode: 'both', lines: 40))
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
-      // 注意：整段省略 ⇒ 该 JSON 重新解析落到**新默认 standard**
-      //（spec §6.4「quality-less JSON 现在意味着 standard」），它不是哈希冻结路径。
-      expect(legacyArm.toJson().containsKey('quality'), isFalse);
+      expect(
+          legacyArm.toJson()['quality'],
+          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+      final legacyBack =
+          EffectConfig.fromJson(_decodeJson(legacyArm.toJsonString()));
+      expect(legacyBack.quality.tier, RenderTier.legacy);
+      expect(legacyBack.configHash, legacyArm.configHash,
+          reason: 'legacy 回滚配置往返必须保哈希（R32）');
       final off = EffectConfig(effects: const [EffectKind.parallax]);
       expect(off.toJson().containsKey('focusLines'), isFalse,
           reason: '未启用时不得写入 JSON，否则经典指纹会变');
@@ -3510,20 +3563,27 @@ void main() {
     });
 
     test('screenTone 仅在启用时序列化，JSON 往返保哈希', () {
-      // R24：往返用 standard 档（quality 段三键完整）保哈希
+      // 往返用新默认档（standard）：quality 段被省略、缺键兜底同源 ⇒ 无损（R32）。
       final cfg = tcfg(
           tone: const ScreenToneParams(mode: 'cross', spacingPx: 10),
           tier: RenderTier.standard);
       final j = _decodeJson(cfg.toJsonString());
       expect(j['screenTone']['mode'], 'cross');
       expect(EffectConfig.fromJson(j).configHash, cfg.configHash);
+      // R32：整套旧默认（legacy/floyd/false）现在写出 quality 段并可无损往返
+      //（旧断言「整段省略」等于把回滚意图丢掉，本轮改为钉住可持久化）。
       final legacyArm =
           tcfg(tone: const ScreenToneParams(mode: 'cross', spacingPx: 10))
             ..quality = const QualityParams(
                 dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
-      // 注意：整段省略 ⇒ 该 JSON 重新解析落到**新默认 standard**
-      //（spec §6.4「quality-less JSON 现在意味着 standard」），它不是哈希冻结路径。
-      expect(legacyArm.toJson().containsKey('quality'), isFalse);
+      expect(
+          legacyArm.toJson()['quality'],
+          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+      final legacyBack =
+          EffectConfig.fromJson(_decodeJson(legacyArm.toJsonString()));
+      expect(legacyBack.quality.tier, RenderTier.legacy);
+      expect(legacyBack.configHash, legacyArm.configHash,
+          reason: 'legacy 回滚配置往返必须保哈希（R32）');
       final off = EffectConfig(effects: const [EffectKind.parallax]);
       expect(off.toJson().containsKey('screenTone'), isFalse,
           reason: '未启用时不得写入 JSON，否则经典指纹会变');
@@ -3836,18 +3896,24 @@ void main() {
     test('impactRings 仅在启用时序列化，JSON 往返保哈希', () {
       final rings = const ImpactRingsParams(
           rings: 7, thicknessPx: 6.0, mode: 'shock', pulses: 3);
-      // R24：往返用 standard 档（quality 段三键完整）保哈希
+      // 往返用新默认档（standard）：quality 段省略、缺键兜底同源 ⇒ 无损（R32）。
       final cfg = rcfg(rings: rings, tier: RenderTier.standard);
       final j = _decodeJson(cfg.toJsonString());
       expect(j['impactRings']['rings'], 7);
       expect(j['impactRings']['mode'], 'shock');
       expect(EffectConfig.fromJson(j).configHash, cfg.configHash);
+      // R32：旧默认整套（legacy/floyd/false）现在写出段且无损往返。
       final legacyArm = rcfg(rings: rings)
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
-      // 注意：整段省略 ⇒ 该 JSON 重新解析落到**新默认 standard**
-      //（spec §6.4「quality-less JSON 现在意味着 standard」），它不是哈希冻结路径。
-      expect(legacyArm.toJson().containsKey('quality'), isFalse);
+      expect(
+          legacyArm.toJson()['quality'],
+          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+      final legacyBack =
+          EffectConfig.fromJson(_decodeJson(legacyArm.toJsonString()));
+      expect(legacyBack.quality.tier, RenderTier.legacy);
+      expect(legacyBack.configHash, legacyArm.configHash,
+          reason: 'legacy 回滚配置往返必须保哈希（R32）');
       final off = EffectConfig(effects: const [EffectKind.parallax]);
       expect(off.toJson().containsKey('impactRings'), isFalse);
     });
@@ -4030,18 +4096,24 @@ void main() {
     test('brushStreak 仅在启用时序列化，JSON 往返保哈希', () {
       final brush = const BrushStreakParams(
           streaks: 5, thicknessPx: 9.5, gapFreq: 0.2, angleDeg: -20);
-      // R24：往返用 standard 档（quality 段三键完整）保哈希
+      // 往返用新默认档（standard）：quality 段省略、缺键兜底同源 ⇒ 无损（R32）。
       final cfg = bcfg(brush: brush, tier: RenderTier.standard);
       final j = _decodeJson(cfg.toJsonString());
       expect(j['brushStreak']['streaks'], 5);
       expect(j['brushStreak']['angleDeg'], -20);
       expect(EffectConfig.fromJson(j).configHash, cfg.configHash);
+      // R32：旧默认整套（legacy/floyd/false）现在写出段且无损往返。
       final legacyArm = bcfg(brush: brush)
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
-      // 注意：整段省略 ⇒ 该 JSON 重新解析落到**新默认 standard**
-      //（spec §6.4「quality-less JSON 现在意味着 standard」），它不是哈希冻结路径。
-      expect(legacyArm.toJson().containsKey('quality'), isFalse);
+      expect(
+          legacyArm.toJson()['quality'],
+          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+      final legacyBack =
+          EffectConfig.fromJson(_decodeJson(legacyArm.toJsonString()));
+      expect(legacyBack.quality.tier, RenderTier.legacy);
+      expect(legacyBack.configHash, legacyArm.configHash,
+          reason: 'legacy 回滚配置往返必须保哈希（R32）');
       final off = EffectConfig(effects: const [EffectKind.parallax]);
       expect(off.toJson().containsKey('brushStreak'), isFalse);
     });
@@ -4389,8 +4461,9 @@ void main() {
     });
 
     test('五效仅在启用时序列化，JSON 往返保哈希', () {
-      // R24/R26：往返用 standard 档配置（quality 段写满三键，可无损往返）。
-      // 混档（tier=legacy 且其余为新默认）是有意省略 tier 的有损组合，见报告顾虑。
+      // R32/R26：往返用新默认档（standard ⇒ quality 段省略）配置，缺键兜底与
+      // 省略哨兵同源 ⇒ 逐字段无损；混档（tier=legacy 且其余为新默认）现在也
+      // 写出 tier 键、同样无损，见下方 mixedLegacy。
       final f = flame(
           const FlameParams(tongues: 9, hot: 'ff0000', cold: '0000ff'),
           RenderTier.standard);
@@ -4419,14 +4492,26 @@ void main() {
       expect(jm['meteors']['angleDeg'], 60);
       expect(EffectConfig.fromJson(jm).configHash, m.configHash);
 
-      // 哨兵形状路径：整套旧默认（legacy/floyd/false）仍命中省略哨兵 ⇒ 不写 quality 段
-      //（翻默认没有把「等于旧默认就不写」这条语义改掉）。
+      // R32 反向半：整套旧默认（legacy/floyd/false）不再命中省略哨兵 ⇒ 写出
+      // quality 段，并且**无损往返**（R24 的哨兵设计下它整段省略、重解析成
+      // standard，回滚意图在一次 JSON 往返里静默消失）。
       final legacySentinel = smoke(const SmokeParams(puffs: 3, color: '112233'))
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
-      // 注意：整段省略 ⇒ 该 JSON 重新解析落到**新默认 standard**（spec §6.4
-      // 「quality-less JSON 现在意味着 standard」），它不是哈希冻结路径。
-      expect(legacySentinel.toJson().containsKey('quality'), isFalse);
+      expect(
+          legacySentinel.toJson()['quality'],
+          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+      final legacyBack =
+          EffectConfig.fromJson(_decodeJson(legacySentinel.toJsonString()));
+      expect(legacyBack.quality.tier, RenderTier.legacy);
+      expect(legacyBack.quality.ditherMode, 'floyd');
+      expect(legacyBack.configHash, legacySentinel.configHash,
+          reason: 'v1.2 回滚配置往返必须保哈希（R32）');
+      // 混档（tier=legacy 而其余为新默认）同样是可表达、可往返的形状。
+      final mixedLegacy = smoke(const SmokeParams(puffs: 3, color: '112233'));
+      expect(mixedLegacy.toJson()['quality'], {'dither': true, 'tier': 'legacy'});
+      expect(EffectConfig.fromJson(_decodeJson(mixedLegacy.toJsonString()))
+          .configHash, mixedLegacy.configHash);
 
       final off = EffectConfig(effects: const [EffectKind.parallax]).toJson();
       for (final key in ['flame', 'smoke', 'bubbles', 'leaves', 'meteors']) {
@@ -4546,7 +4631,8 @@ void main() {
     });
 
     test('moodScript 仅在启用时序列化，JSON 往返保哈希', () {
-      // R24/R26：往返用 standard 档（quality 段写满三键）
+      // R32/R26：往返用新默认档（standard）配置 ⇒ quality 段省略、缺键兜底
+      // 与哨兵同源，往返逐字段无损。
       final cfg = of([EffectKind.moodScript],
           mood:
               const MoodScriptParams(mood: 'eerie', cycles: 3, strength: 0.4),
@@ -4558,15 +4644,24 @@ void main() {
       final back = EffectConfig.fromJson(j);
       expect(back.configHash, cfg.configHash);
       expect(back.warnings, isEmpty);
+      // 默认档配置不再写出 quality 键（R32 的省略半）。
+      expect(j.containsKey('quality'), isFalse);
 
-      // 哨兵形状路径：整套旧默认（legacy/floyd/false）仍命中省略哨兵 ⇒ 无 quality 段
+      // 哨兵形状路径（R32 改写）：整套旧默认（legacy/floyd/false）现在**写出**
+      // quality 段并无损往返。旧断言是「整段省略」，而省略意味着新默认 ⇒
+      // 回滚配置自己都会被读成 standard，本轮把它改成钉「回滚可持久化」。
       final legacySentinel = of([EffectKind.moodScript],
           mood: const MoodScriptParams(mood: 'eerie', cycles: 3, strength: 0.4))
         ..quality = const QualityParams(
             dither: false, ditherMode: 'floyd', tier: RenderTier.legacy);
-      // 注意：整段省略 ⇒ 该 JSON 重新解析落到**新默认 standard**（spec §6.4
-      // 「quality-less JSON 现在意味着 standard」），它不是哈希冻结路径。
-      expect(legacySentinel.toJson().containsKey('quality'), isFalse);
+      expect(
+          legacySentinel.toJson()['quality'],
+          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'});
+      final legacyBack =
+          EffectConfig.fromJson(_decodeJson(legacySentinel.toJsonString()));
+      expect(legacyBack.quality.tier, RenderTier.legacy);
+      expect(legacyBack.configHash, legacySentinel.configHash,
+          reason: 'v1.2 回滚配置往返必须保哈希（R32）');
 
       final off = _decodeJson(of([EffectKind.parallax]).toJsonString());
       expect(off.containsKey('moodScript'), isFalse,
@@ -4894,7 +4989,7 @@ void main() {
   });
 
   group('v1.4 Task 3.6：默认档 standard + sierra 抖动（R24/R26）', () {
-    test('QualityParams 新默认 = dither/sierra/standard，哨兵仍按旧默认判 isDefault',
+    test('QualityParams 新默认 = dither/sierra/standard，哨兵与新默认锁步（R32）',
         () {
       // Step 1（RED）：翻默认前此三条必红。
       const q = QualityParams();
@@ -4904,22 +4999,35 @@ void main() {
       // 不动的字段（R24 只点名三键）。
       expect(q.mipLevels, 2);
       expect(q.edgeStretchPx, 6);
-      // 哨兵语义不变：isDefault 仍以 legacy/floyd/false 为「等于旧默认」判据
-      // ⇒ 新默认必然非默认 ⇒ quality 段开始序列化（spec §6.4 的「默认不写变
-      // 为非默认」，configHash 变化并入 3.7 re-baseline）。
-      expect(q.isDefault, isFalse);
+      // R32：省略哨兵与构造默认同源 ⇒ 新默认命中 isDefault ⇒ 默认 JSON 不写
+      // quality 段（默认不写 = 缺键兜底 = 构造默认，三者同一个对象，往返无损）。
+      // 旧 R24 设计在这里断言 isFalse（哨兵留在 legacy/floyd/false），那正是
+      // 「完整 v1.2 回滚配置命中哨兵、一次往返被抹成新默认」的缺陷源头。
+      expect(q.isDefault, isTrue);
+      // 反向：旧默认组合不再命中哨兵（legacy 必须能显式写进 JSON）。
+      expect(
+          const QualityParams(
+                  dither: false, ditherMode: 'floyd', tier: RenderTier.legacy)
+              .isDefault,
+          isFalse,
+          reason: 'v1.2 回滚配置非默认 ⇒ 整段写出（R32）');
     });
 
-    test('默认配置序列化恰含三键 quality 段；显式 legacy 仍整段省略', () {
-      final j = EffectConfig().toJson();
-      expect(j['quality'],
-          {'dither': true, 'ditherMode': 'sierra', 'tier': 'standard'},
-          reason: '默认 JSON 恰多出这三键，不多不少（R24）');
+    test('默认配置不写 quality 段；显式 legacy 回滚写出 tier:legacy（R32）', () {
+      expect(EffectConfig().toJson().containsKey('quality'), isFalse,
+          reason: '新默认命中省略哨兵 ⇒ 默认 JSON 不带 quality 键（R32）');
       final legacy = EffectConfig(
           quality: const QualityParams(
               dither: false, ditherMode: 'floyd', tier: RenderTier.legacy));
-      expect(legacy.toJson().containsKey('quality'), isFalse,
-          reason: '哨兵留在旧默认：完全等于旧默认的显式 legacy 配置整段省略');
+      expect(
+          legacy.toJson()['quality'],
+          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'},
+          reason: '反向半：显式 legacy 回滚必须整段写出，否则 legacy 从 JSON 不可达');
+      // 两半合起来才是「无损」：默认与回滚各自往返回自己（见 R32 组门）。
+      expect(EffectConfig.fromJson(EffectConfig().toJson()).configHash,
+          EffectConfig().configHash);
+      expect(EffectConfig.fromJson(legacy.toJson()).configHash,
+          legacy.configHash);
     });
 
     test('R24 lockstep 不变量：quality-less JSON == 构造默认；往返哈希稳定', () {
@@ -5129,6 +5237,161 @@ void main() {
       } finally {
         tmp.deleteSync(recursive: true);
       }
+    });
+  });
+
+  // ---------- Task 3.6 修复轮：R32 序列化哨兵锁步 ----------
+  //
+  // 「等于默认就不写」这个条件序列化习语，只有在
+  //   省略哨兵 == 缺键兜底 == 构造默认
+  // 三者锁步时才成立。R24 只翻了后两组、把哨兵留在 legacy/floyd/false，于是
+  // JSON 双向有损：
+  //   1. 混档配置（如 tier=legacy 而其余为新默认）在 legacy 哨兵处被省略 tier
+  //      ⇒ 重解析成 standard ⇒ configHash 与渲染字节一起变；
+  //   2. 更严重：**完整的 v1.2 回滚配置**（legacy/floyd/false/2/6）恰好命中
+  //      isDefault ⇒ 整段 quality 不写 ⇒ 重解析成新默认 standard/sierra/true，
+  //      一次 toJson→fromJson（服务端 API、预设再导出、withEffect 链）就静默
+  //      抹掉回滚意图，RenderTier.legacy 从 JSON 根本不可持久化。
+  // R32 把哨兵翻到新默认（tier 默认 standard、ditherMode 默认 sierra、
+  // dither 默认 true；mipLevels 2 / edgeStretchPx 6 本来就是自己的默认），
+  // 于是「默认 ⇒ 整段省略」「回滚 ⇒ 整段写出且逐键无损」。下面三组门在修复前
+  // 必红（见报告的红输出），修复后必绿。
+  group('v1.4 Task 3.6 修复轮 R32：哨兵=兜底=构造默认，quality JSON 双向无损', () {
+    // 逐键默认（与 QualityParams 构造默认一一对应，故意写死字面量：
+    // 这里若与实现漂移，本组的门就该红，而不是跟着实现走）。
+    const defDither = true;
+    const defDitherMode = 'sierra';
+    const defTier = RenderTier.standard;
+    const defMip = 2;
+    const defStretch = 6;
+
+    const cases = <String, QualityParams>{
+      // 新默认：命中哨兵 ⇒ 整段省略，重解析仍等于构造默认。
+      'default(standard/sierra/dither)':
+          QualityParams(dither: true, ditherMode: 'sierra', tier: defTier),
+      // 完整 v1.2/v1.3 回滚配置：必须写出整段（R32 的核心正例）。
+      'v1.2 rollback(legacy/floyd/no-dither)':
+          QualityParams(
+              dither: false, ditherMode: 'floyd', tier: RenderTier.legacy),
+      // 混档三例：旧实现（哨兵停在 legacy/floyd/false）全部有损。
+      'mixed legacy+sierra':
+          QualityParams(dither: true, ditherMode: 'sierra', tier: RenderTier.legacy),
+      'mixed standard+floyd+no-dither':
+          QualityParams(dither: false, ditherMode: 'floyd', tier: RenderTier.standard),
+      'mixed standard+floyd':
+          QualityParams(dither: true, ditherMode: 'floyd', tier: RenderTier.standard),
+      'mixed standard/sierra/no-dither':
+          QualityParams(dither: false, ditherMode: 'sierra', tier: RenderTier.standard),
+      // 连 mipLevels/edgeStretchPx 一起降级：每键只在自己等于默认时省略。
+      'rollback + mip1 + stretch0': QualityParams(
+          dither: false,
+          ditherMode: 'floyd',
+          tier: RenderTier.legacy,
+          mipLevels: 1,
+          edgeStretchPx: 0),
+      // 只动哨兵邻键（dither 恒写、tier/ditherMode 条件写）的边界。
+      'default but mip1': QualityParams(mipLevels: 1),
+    };
+
+    for (final e in cases.entries) {
+      test('R32 往返无损（逐字段 + configHash）：${e.key}', () {
+        final q = e.value;
+        final cfg = EffectConfig(quality: q);
+        final j = cfg.toJson();
+        // 整段省略 ⟺ isDefault（两者不得各判一次）。
+        expect(j.containsKey('quality'), isNot(q.isDefault),
+            reason: '省略判定必须就是 toJson 的省略条件：$q');
+        final seg = j['quality'] as Map?;
+        if (seg != null) {
+          // dither 是布尔键 ⇒ 段一旦写出就恒写（默认值 $defDither 由本条锚定，
+          // 不允许「缺 dither 键」这种要靠兜底才能读回的形状）。
+          expect(seg.containsKey('dither'), isTrue, reason: 'dither 恒写');
+          expect(seg['dither'], q.dither);
+          expect(defDither, isTrue, reason: 'R32 锚点：dither 的默认值就是 true');
+          // 逐键：仅当该键等于**自己的默认**才省略。
+          expect(seg.containsKey('ditherMode'), q.ditherMode != defDitherMode,
+              reason: 'ditherMode 省略条件漂移：${q.ditherMode}');
+          expect(seg.containsKey('tier'), q.tier != defTier,
+              reason: 'tier 省略条件漂移：${q.tier.name}');
+          expect(seg.containsKey('mipLevels'), q.mipLevels != defMip);
+          expect(seg.containsKey('edgeStretchPx'), q.edgeStretchPx != defStretch);
+        }
+        // 写→读必须逐字段复原（哈希即身份）。
+        final back = EffectConfig.fromJson(_decodeJson(cfg.toJsonString()));
+        expect(back.quality.dither, q.dither, reason: 'dither 往返丢失');
+        expect(back.quality.ditherMode, q.ditherMode, reason: 'ditherMode 往返丢失');
+        expect(back.quality.tier, q.tier, reason: 'tier 往返丢失（R32 主案）');
+        expect(back.quality.mipLevels, q.mipLevels);
+        expect(back.quality.edgeStretchPx, q.edgeStretchPx);
+        expect(back.configHash, cfg.configHash,
+            reason: '一次 JSON 往返就改 configHash = 同一份 JSON 有两种渲染行为');
+        expect(back.toJson(), j, reason: '往返后序列化形状必须不动');
+      });
+    }
+
+    test('R32 形状：默认整段省略，显式 legacy 回滚写出 tier:legacy 且仍可解析', () {
+      expect(const QualityParams().isDefault, isTrue,
+          reason: 'R32：isDefault 必须认新默认（standard/sierra/true/2/6）');
+      expect(EffectConfig().toJson().containsKey('quality'), isFalse,
+          reason: '默认配置不再写 quality 段');
+
+      final rollback = EffectConfig(
+          quality: const QualityParams(
+              dither: false, ditherMode: 'floyd', tier: RenderTier.legacy));
+      expect(
+          rollback.toJson()['quality'],
+          {'dither': false, 'ditherMode': 'floyd', 'tier': 'legacy'},
+          reason: 'v1.2 回滚配置必须逐字可持久化（spec §6.4「legacy 仍供显式选择」）');
+      // 两个方向都得能表达：默认与回滚的 JSON/哈希不能撞车。
+      expect(rollback.configHash, isNot(EffectConfig().configHash),
+          reason: '回滚与默认同哈希 ⇒ 回滚意图不可表达');
+      expect(
+          EffectConfig.fromJson(_decodeJson(rollback.toJsonString())).quality.tier,
+          RenderTier.legacy,
+          reason: '回滚 JSON 重解析必须是 legacy（读路径同样锁步）');
+      expect(
+          EffectConfig.fromJson(_decodeJson(rollback.toJsonString())).configHash,
+          rollback.configHash);
+    });
+
+    test('R32 显式 null 键按缺省处理；非空未知名仍 sanitize 成 legacy', () {
+      // null 与缺键同义（都是「没说过」）⇒ 落到新默认，绝不落到 legacy。
+      final nul = QualityParams.fromJson({
+        'tier': null,
+        'ditherMode': null,
+        'dither': null,
+      });
+      expect(nul.tier, RenderTier.standard, reason: '显式 null tier 不得暗兜 legacy');
+      expect(nul.ditherMode, 'sierra');
+      expect(nul.dither, isTrue);
+      // 整段为 null 的 quality 键：等价缺段 ⇒ 构造默认。
+      expect(EffectConfig.fromJson({'quality': <String, dynamic>{}}).quality,
+          isNot(isNull));
+      expect(EffectConfig.fromJson({'quality': null}).quality.tier,
+          RenderTier.standard);
+      // 既有 sanitise 契约不动：非空的未知**名字**仍回落 legacy。
+      expect(QualityParams.fromJson({'tier': 'ultra'}).tier, RenderTier.legacy);
+      expect(QualityParams.fromJson({'tier': ''}).tier, RenderTier.legacy,
+          reason: '空串是一个未知名（走 parse sanitise），不是「缺键」');
+      expect(QualityParams.fromJson({'ditherMode': 'blue-noise'}).ditherMode,
+          'sierra', reason: '未知 ditherMode ⇒ 新默认（R24 兜底方向不变）');
+    });
+
+    test('R32 便捷参数：qualityTier=null/dither=null 不写段，显式 legacy 写段', () {
+      expect(EffectConfig(dither: null, qualityTier: null)
+          .toJson()
+          .containsKey('quality'), isFalse);
+      expect(EffectConfig(qualityTier: RenderTier.legacy).configHash,
+          EffectConfig(
+                  quality: const QualityParams(tier: RenderTier.legacy))
+              .configHash,
+          reason: '顶层便捷参数与嵌套参数必须逐字节等价（R5 契约在 R32 后仍成立）');
+      final j = EffectConfig(qualityTier: RenderTier.legacy).toJson()['quality']
+          as Map;
+      expect(j['tier'], 'legacy');
+      // 显式 dither:true（= 默认）与不传便捷参数等价 ⇒ 仍整段省略。
+      expect(EffectConfig(dither: true).toJson().containsKey('quality'), isFalse);
+      expect(EffectConfig(dither: true).configHash, EffectConfig().configHash);
     });
   });
 }

@@ -402,4 +402,117 @@ void main() {
       expect(a.data, b.data);
     });
   });
+
+  // ---- Task 3.6 修复轮 finding 2：panelAware 在**必须降采样**的形状上、
+  // 跑的是 R32 新默认档（standard 面积平均）通路时仍要检出 ≥2 格。
+  //
+  // 既有分格用例（R28）为了「两档都不降采样」把 maxDimension 抬到 300，于是
+  // 「降采样 + 分格」这条真实导出主路径一直没有覆盖：漫画页原图普遍 1600–2400
+  // 高，导出必然降采样。这里补的正是那条路径，并且**不写 quality 段**（默认档
+  // 即 standard，R32），用断言把「跑的是面积平均」钉住。
+  //
+  // 缩放比选 **精确整数 2×**（1920×2400 → 960×1200）：这是真实可用的导出档位
+  // 组合（原页 1920×2400、draft 上限 1200），也是面积平均滤波器归一化正确
+  // （整窗权重恰等于 scale）的形状。非整数比（1.5×、2.4×、1.9991×）的形状
+  // 见下面那条 skip 用例与 task-3.6-report.md 的修复轮 §B：boxDownscale 的
+  // `_spanSums` 末纹素漏算（`i1 = (a + scale - 1).floor()`，应为 `.ceil()`），
+  // 加权只覆盖到 floor(b) 却按 scale 归一，纯白被压成交替的 113/170（1.5×）
+  // 或 191（1.9991×），白带行的近白占比跌破 whiteRatio 0.90 → 检不出分格。
+  // 那是降采样滤波器的产品缺陷，不是分格逻辑，也不靠加宽带/换形状绕开。
+  group('降采样 + panelAware 在新默认档下仍分格（修复轮 finding 2）', () {
+    /// w×h 两格竖排页：中央 [h/2 - gutter/2, +gutter) 纯白带，上下格各一块
+    /// 深色内容（四周留 inset 纸白边）。与 twoPanelRaster 同构，只是可参数化尺寸。
+    RgbaImage pageRaster(int w, int h, int gutter, int inset) {
+      final im = RgbaImage(width: w, height: h);
+      final mid = h ~/ 2;
+      final top = mid - (gutter / 2).round();
+      final bot = top + gutter;
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+          final o = (y * w + x) * 4;
+          im.data[o + 3] = 255;
+          var r = 255, g = 255, b = 255;
+          if (y >= top && y < bot) {
+            // 白带（分隔带）
+          } else if (y < top) {
+            if (y >= inset && y < top - inset && x >= inset && x < w - inset) {
+              r = 200;
+              g = 30;
+              b = 30;
+            }
+          } else {
+            if (y >= bot + inset &&
+                y < h - inset &&
+                x >= inset &&
+                x < w - inset) {
+              r = 30;
+              g = 30;
+              b = 200;
+            }
+          }
+          im.data[o] = r;
+          im.data[o + 1] = g;
+          im.data[o + 2] = b;
+        }
+      }
+      return im;
+    }
+
+    Map<String, dynamic> pageCfg(int maxDim) => <String, dynamic>{
+          'effects': ['parallax'],
+          'fps': 24,
+          'durationSec': 2.0,
+          'maxDimension': maxDim,
+          'outputFormat': 'gif',
+          'seed': 7,
+          'panelAware': true,
+        };
+
+    test('默认档（R32 standard）+ 必然降采样 2×：1920×2400 页仍检出 2 格、逐格分层', () {
+      final cfg = EffectConfig.fromJson(pageCfg(1200));
+      expect(cfg.toJson().containsKey('quality'), isFalse,
+          reason: '本例不给 quality 段 ⇒ 走 R32 新默认');
+      expect(cfg.quality.tier, RenderTier.standard,
+          reason: '断言跑的是 standard（面积平均）通路，不是 legacy 双线性');
+      final src = pageRaster(1920, 2400, 30, 120);
+      final (working, layers) =
+          MotionPipeline(cfg).downscaleAndSplitForExport(src);
+      expect('${working.width}x${working.height}', '960x1200',
+          reason: '必须真的降采样（否则与既有不缩放用例重复）');
+      expect(const PanelSplitter().split(working), hasLength(2));
+      final rects = FrameCompositor(layers, working, cfg).debugPanelRects();
+      expect(rects, hasLength(2), reason: '降采样后仍要派生 2 个 panel 矩形');
+      expect(layers, hasLength(6), reason: '2 格 × 3 层；回退整页只有 3 层');
+      // 白带在工作分辨率仍是白带（面积平均在整数比下精确保持纯白）。
+      final gy = working.height ~/ 2;
+      for (final x in [0, working.width ~/ 2, working.width - 1]) {
+        final o = (gy * working.width + x) * 4;
+        expect(working.data[o], 255, reason: '白带 x=$x 红通道');
+        expect(working.data[o + 1], 255);
+        expect(working.data[o + 2], 255);
+      }
+    });
+
+    test('同形状 maxDimension 1600（非整数比 1.5×）默认档也必须检出 2 格', () {
+      // finding 2 的诚实形状：真实导出上限 1600（缩放比 1.5）。当前**失败**，
+      // 且失败机制是 boxDownscale 归一化缺陷（见上面 group 注释与报告 §B）：
+      //   default(standard) → working=1280x1600, 白带行像素 113/170 交替 →
+      //                       PanelSplitter 1 格、debugPanelRects 0 个、层退化成 3
+      //   显式 tier=legacy   → 同一形状 2 格 / 2 矩形 / 6 层（双线性不受影响）
+      // 不放宽白带、不改形状凑绿；等裁决修好滤波器后去掉 skip 即为回归门。
+      final cfg = EffectConfig.fromJson(pageCfg(1600));
+      expect(cfg.quality.tier, RenderTier.standard);
+      final src = pageRaster(1920, 2400, 30, 120);
+      final (working, layers) =
+          MotionPipeline(cfg).downscaleAndSplitForExport(src);
+      expect(working.width, 1280);
+      expect(working.height, 1600);
+      expect(const PanelSplitter().split(working), hasLength(2),
+          reason: '1.5× 面积平均把纯白压到 113/170 → 白带检不出（已知缺陷）');
+      expect(
+          FrameCompositor(layers, working, cfg).debugPanelRects(), hasLength(2));
+      expect(layers, hasLength(6));
+    }, skip: 'boxDownscale 非整数缩放比归一化缺陷（255→113/170 @1.5×），'
+        'finding 2 实测证据，修复权留给裁决（见 task-3.6-report.md 修复轮 §B）');
+  });
 }

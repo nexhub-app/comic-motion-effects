@@ -63,6 +63,20 @@ Future<void> main(List<String> args) async {
       'durationSec': 4.0,
       'maxMs': 7000
     },
+    // v1.4 Task 3.6 修复轮（reviewer Important #3）：preview_1600 钉的是 legacy
+    // 档（历史口径），于是 shipped 默认（standard + sierra + dither）在 1600 上限
+    // 的形状没有任何红线覆盖。这一行跑**引擎默认 quality**（不显式传参 ⇒ 走
+    // QualityParams() 构造默认），红线沿用同一条 7000ms（**不放宽**）；超标由
+    // redLineFailures 报出，取舍归控制人/3.7，不在本轮动。
+    {
+      'name': 'standard_1600',
+      'maxDimension': 1600,
+      'fps': 24,
+      'durationSec': 4.0,
+      'tier': 'standard',
+      'defaultQuality': true,
+      'maxMs': 7000,
+    },
     {
       'name': 'rich_1080p',
       'maxDimension': 1080,
@@ -100,14 +114,20 @@ Future<void> main(List<String> args) async {
 
   for (final s in scenarios) {
     final effects = (s['effects'] as List<EffectKind>?) ?? baseEffects;
+    // defaultQuality 行 = 不传 quality ⇒ 引擎构造默认（v1.4：standard+sierra+
+    // dither），用来量 shipped 默认档的真实开销；其余行保持历史口径。
     final cfg = EffectConfig(
       fps: s['fps'] as int,
       durationSec: s['durationSec'] as double,
       maxDimension: s['maxDimension'] as int,
       outputFormat: OutputFormat.gif,
-      quality: QualityParams(
-          tier: RenderTier.parse(s['tier'] ?? 'legacy'),
-          ditherMode: s['tier'] == 'rich' ? 'sierra' : 'floyd'),
+      quality: s['defaultQuality'] == true
+          ? null
+          : QualityParams(
+              tier: RenderTier.parse(s['tier'] ?? 'legacy'),
+              ditherMode: (s['ditherMode'] as String?) ??
+                  (s['tier'] == 'rich' ? 'sierra' : 'floyd'),
+            ),
       effects: effects,
     );
     // warm-up JVM-less; run twice, keep second run (JIT warm)
@@ -118,6 +138,7 @@ Future<void> main(List<String> args) async {
     rows.add({
       'scenario': s['name'],
       'tier': s['tier'] ?? 'legacy',
+      'qualityIsEngineDefault': s['defaultQuality'] == true,
       'maxDimension': s['maxDimension'],
       'fps': s['fps'],
       'durationSec': s['durationSec'],
