@@ -2281,12 +2281,12 @@ void main() {
       );
       const col = 150; // 三根色条同列，均在缩放枢轴所在列上
       final compV = FrameCompositor(layers, img, cfgV);
-      // dy 项带 +0.9 常数相位偏置，renderFrame(0) 的竖向位移并非 0
-      // （sin(li·π+0.9)≠0），故不能拿 t=0 帧当「无位移」基线。取一对竖向反相
-      // 极值帧之差来隔离每层的竖向摆动：峰值帧 period/4 与其竖向反相点
-      // （竖向基底 0.8·2π/loop，半竖周期 = period/1.6，两处 sin 因子恰好反号）。
-      final tLo = period / 4;
-      final tHi = period / 4 + period / 1.6;
+      // R19 竖向基底 = dyCycles/duration·2π（cycles=1 时 dyCycles=1），
+      // 取 t=0 与 t=duration/2（半周期=π 相位推进）这一对帧：li·π 反相步进
+      // 保证 sin(dyPhase+li·π+0.9) 在相邻层反号，差分后位移方向亦反号。
+      // t=0 竖向位移非零（sin(0.9)≠0），故不做「零位移基线」假设——只测差分。
+      final tLo = 0.0;
+      final tHi = period / 2;
       final a = compV.renderFrame(tLo);
       final b = compV.renderFrame(tHi);
       final dFar =
@@ -2301,10 +2301,10 @@ void main() {
       expect(dMid.abs(), greaterThan(3.0), reason: 'mid 层应有竖向位移');
       expect(dNear.abs(), greaterThan(3.0), reason: 'near 层应有竖向位移');
 
-      // 判别式：新 li·π 反相在两个反相极值帧下 dy 因子恒满足
-      // sin(u+li·π+0.9) 与 sin(u+π+li·π+0.9)=−sin(u+li·π+0.9)，且奇偶层反号
+      // 判别式：新 li·π 反相在 t=0 与 t=duration/2 的 dy 因子恒满足
+      // sin(0+li·π+0.9) 与 sin(π+li·π+0.9)=−sin(li·π+0.9)，且奇偶层反号
       // → 相邻层竖向摆动方向相反（far/mid 反、mid/near 反）。旧 li·0.5 在
-      // tLo 因子 sin(0.4π+li·0.5+0.9)≈{+0.835,+0.467,−0.015}：far 与 mid 同号，
+      // t=0 因子 sin(li·0.5+0.9)≈{+0.783,+0.467,−0.015}：far 与 mid 同号，
       // 反相极值相减后 far、mid 位移差仍同号 → 本反号断言在旧代码下必红（真判别式）。
       expect(dFar.sign, -dMid.sign, reason: 'far 与 mid 应竖向反向摆动');
       expect(dMid.sign, -dNear.sign, reason: 'mid 与 near 应竖向反向摆动');
@@ -2314,8 +2314,8 @@ void main() {
       expect((dFar - dMid).abs(), greaterThan(0.85 * (dFar.abs() + dMid.abs())));
       expect((dMid - dNear).abs(),
           greaterThan(0.85 * (dMid.abs() + dNear.abs())));
-      // 注：不在此断言竖向无缝 f(0)==f(period)——phase*0.8 基底每循环推进
-      // 1.6π，dyDir≠0 时竖向本就不整周期闭合（既有性质，超出本任务范围）。
+      // 注：R19 竖向基底已改为 dyCycles 整周期，dyDir≠0 时竖向也整周期闭合；
+      // 本 test 用 period/4 与 period/4+period/2 一对反相帧做差分判别。
     });
 
     test('标准档同款判别式：standard 层相邻层水平反向摆动（Task 3.6 默认档）', () {
@@ -2358,6 +2358,195 @@ void main() {
           greaterThan(0.85 * (dFar.abs() + dMid.abs())));
       expect((dMid - dNear).abs(),
           greaterThan(0.85 * (dMid.abs() + dNear.abs())));
+    });
+  });
+
+  group('v1.4 Task 3.5：periodSec 整数周期对齐（R18/R19）', () {
+    // 复用 3.2 同场景 fixture 的 LayerSplitter + 色条判别模式。
+    const w35 = 300, h35 = 300;
+    const amp35 = 0.1; // 峰值满幅 = amp*w = 30px
+    const dur35 = 3.0;  // durationSec=3
+    const badPeriod = 6.0; // mis-aligned: 3/6=0.5→cycles=1→aligned=3.0
+
+    RgbaImage bandBarScene35() {
+      final img = RgbaImage(width: w35, height: h35);
+      for (var y = 0; y < h35; y++) {
+        final g = y < 126 ? 210 : (y < 210 ? 200 : 190);
+        for (var x = 0; x < w35; x++) {
+          img.setPixel(x, y, g, g, g);
+        }
+      }
+      for (var y = 84; y < 116; y++) {
+        for (var x = 134; x < 166; x++) {
+          img.setPixel(x, y, 235, 25, 35); // far 层红条
+        }
+      }
+      for (var y = 180; y < 210; y++) {
+        for (var x = 134; x < 166; x++) {
+          img.setPixel(x, y, 30, 200, 60); // mid 层绿条
+        }
+      }
+      for (var y = 240; y < 290; y++) {
+        for (var x = 134; x < 166; x++) {
+          img.setPixel(x, y, 40, 70, 235); // near 层蓝条
+        }
+      }
+      return img;
+    }
+
+    DepthMap bandDepth35() {
+      final dm = DepthMap(w35, h35);
+      for (var y = 0; y < h35; y++) {
+        final d = y < 126
+            ? 0.05
+            : (y < 210 ? 0.45 : 0.85 + 0.15 * (y - 210) / 89);
+        for (var x = 0; x < w35; x++) {
+          dm.set(x, y, d);
+        }
+      }
+      return dm;
+    }
+
+    double centroid35(
+        RgbaImage f, int row, bool Function(int r, int g, int b) hit) {
+      var sum = 0, n = 0;
+      for (var x = 0; x < w35; x++) {
+        final o = (row * w35 + x) * 4;
+        if (hit(f.data[o], f.data[o + 1], f.data[o + 2])) {
+          sum += x;
+          n++;
+        }
+      }
+      return n > 0 ? sum / n : 150.0;
+    }
+
+    bool isRed35(int r, int g, int b) => r > 150 && g < 90 && b < 90;
+    bool isGreen35(int r, int g, int b) => g > 150 && r < 90 && b < 90;
+
+    final img35 = bandBarScene35();
+    final layers35 = LayerSplitter(layerCount: 3).split(img35, bandDepth35());
+
+    test('cycleCount: 整数倍周期原样通过', () {
+      expect(MotionMath.cycleCount(3.0, 3.0), 1);
+      expect(MotionMath.cycleCount(6.0, 3.0), 2);
+      expect(MotionMath.cycleCount(3.0, 1.5), 2);
+    });
+
+    test('cycleCount: 6/3→1→aligned=3.0 (duration 3, period 6)', () {
+      expect(MotionMath.cycleCount(3.0, 6.0), 1);
+      expect(MotionMath.alignedPeriodSec(3.0, 6.0), 3.0);
+    });
+
+    test('cycleCount: 4/3→1→aligned=3.0 (duration 3, period 4)', () {
+      expect(MotionMath.cycleCount(3.0, 4.0), 1);
+      expect(MotionMath.alignedPeriodSec(3.0, 4.0), 3.0);
+    });
+
+    test('cycleCount: 8/3→3→aligned≈2.667 (duration 8, period 3)', () {
+      expect(MotionMath.cycleCount(8.0, 3.0), 3);
+      expect(MotionMath.alignedPeriodSec(8.0, 3.0), closeTo(8.0 / 3, 1e-10));
+    });
+
+    test('cycleCount: degenerate inputs guard to 1, never 0', () {
+      expect(MotionMath.cycleCount(0.0, 3.0), 1);
+      expect(MotionMath.cycleCount(3.0, 0.0), 1);
+      expect(MotionMath.cycleCount(-1.0, 3.0), 1);
+      expect(MotionMath.cycleCount(3.0, -1.0), 1);
+      expect(MotionMath.cycleCount(double.nan, 3.0), 1);
+      expect(MotionMath.cycleCount(3.0, double.nan), 1);
+      expect(MotionMath.cycleCount(double.infinity, 3.0), 1);
+      expect(MotionMath.cycleCount(3.0, double.infinity), 1);
+      // alignedPeriodSec with degenerate always positive
+      expect(MotionMath.alignedPeriodSec(3.0, 0.0), 3.0);
+      expect(MotionMath.alignedPeriodSec(0.0, 6.0), 0.0);
+    });
+
+    test('全遍历判别式：mis-aligned(3/6)配置每层水平位移到达正负两极', () {
+      // duration=3, periodSec=6 → 对齐后 cycles=1, alignedPeriod=3
+      // 在全循环期间水平位移必须到达正、负两个极值（半周期下不触发负极值）。
+      final cfg = EffectConfig(
+        effects: [EffectKind.parallax],
+        fps: 24,
+        durationSec: dur35,
+        parallax: ParallaxParams(amplitude: amp35, periodSec: badPeriod),
+      );
+      final comp = FrameCompositor(layers35, img35, cfg);
+      final baseline = centroid35(comp.renderFrame(0.0), 195, isGreen35);
+
+      // 采样整条 duration，追踪 mid 层位移（相对 t=0）
+      double minShift = 0, maxShift = 0;
+      for (var t = 0.0; t <= dur35; t += dur35 / 24) {
+        final c = centroid35(comp.renderFrame(t), 195, isGreen35);
+        final shift = c - baseline;
+        if (shift < minShift) minShift = shift;
+        if (shift > maxShift) maxShift = shift;
+      }
+
+      // 对齐后到达正负两极：|mid 位移峰值| ≈ amp·w·mult_mid = 0.1*300*0.625 = 18.75
+      // 断言两者符号相反，且幅度各超过满幅的 50%。
+      expect(maxShift, greaterThan(5.0),
+          reason: '对齐后正向极值应明显（期望 ~18px）');
+      expect(minShift, lessThan(-5.0),
+          reason: '对齐后负向极值应明显（期望 ~-18px）');
+    });
+
+    test('视差水平无缝：mis-aligned(3/4) renderFrame(0)==renderFrame(duration)',
+        () {
+      // duration=3, periodSec=4: 3/4=0.75→cycles=1→aligned=3.0.
+      // 未对齐时 t=3 phase=3π/2, sin(3π/2+li·π)≠0 (≠ sin(li·π) at t=0)
+      // 对齐后 t=3 phase=2π, sin(2π+li·π)=sin(li·π)=0 → 无缝。
+      final cfg = EffectConfig(
+        effects: [EffectKind.parallax],
+        fps: 24,
+        durationSec: dur35,
+        parallax: ParallaxParams(amplitude: amp35, periodSec: 4.0),
+      );
+      final comp = FrameCompositor(layers35, img35, cfg);
+      expect(
+        comp.renderFrame(0.0).data,
+        comp.renderFrame(dur35).data,
+        reason: 'R18 对齐后整数周期 ⇒ 首尾帧逐字节一致',
+      );
+    });
+
+    test('视差竖向无缝（R19）：directionDeg=90, mis-aligned(3/6)', () {
+      final cfg = EffectConfig(
+        effects: [EffectKind.parallax],
+        fps: 24,
+        durationSec: dur35,
+        parallax:
+            ParallaxParams(amplitude: amp35, periodSec: badPeriod, directionDeg: 90),
+      );
+      final comp = FrameCompositor(layers35, img35, cfg);
+      expect(
+        comp.renderFrame(0.0).data,
+        comp.renderFrame(dur35).data,
+        reason: 'R19 竖向整周期 ⇒ 首尾帧逐字节一致',
+      );
+    });
+
+    test('呼吸无缝：duration=3/periodSec=4, renderFrame(0)==renderFrame(3)', () {
+      final cfg = EffectConfig(
+        effects: [EffectKind.breathing],
+        fps: 24,
+        durationSec: 3.0,
+        breathing: BreathingParams(amplitude: 0.012, periodSec: 4.0),
+      );
+      final flatImg = RgbaImage(width: 64, height: 64);
+      for (var i = 0; i < 64 * 64; i++) {
+        flatImg.data[i * 4] = 128;
+        flatImg.data[i * 4 + 1] = 128;
+        flatImg.data[i * 4 + 2] = 128;
+        flatImg.data[i * 4 + 3] = 255;
+      }
+      final flatLayers =
+          LayerSplitter(layerCount: 3).split(flatImg, DepthMap(64, 64));
+      final comp = FrameCompositor(flatLayers, flatImg, cfg);
+      expect(
+        comp.renderFrame(0.0).data,
+        comp.renderFrame(3.0).data,
+        reason: 'R18 对齐呼吸周期到 duration 整数分频 ⇒ 首尾无缝',
+      );
     });
   });
 
@@ -4012,7 +4201,8 @@ void main() {
     }
 
     /// 相对无动效底图的平均绝对亮度差 ≈ 位移幅度。
-    final plain = EffectConfig(fps: 8, durationSec: 2, seed: 41);
+    final plain = EffectConfig(
+        fps: 8, durationSec: 2, seed: 41, effects: const []);
     double energy(EffectConfig cfg, double t) {
       final a = draw(cfg, t);
       final b = draw(plain, t);

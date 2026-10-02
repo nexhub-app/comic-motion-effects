@@ -878,7 +878,9 @@ class FrameCompositor {
           config.breathing.amplitude *
               _env.motion *
               MotionMath.wave(tSec,
-                  periodSec: config.breathing.periodSec, phase: 0);
+                  periodSec: MotionMath.alignedPeriodSec(
+                      config.durationSec, config.breathing.periodSec),
+                  phase: 0);
     }
     // v1.1 心跳脉冲：双拍缩放（乘法叠加在呼吸之上）。
     if (config.effects.contains(EffectKind.heartbeat)) {
@@ -928,7 +930,9 @@ class FrameCompositor {
           dy += ampPx * config.parallax.verticalRatio * pOverride.phaseY;
         } else {
           final ampPx = config.parallax.amplitude * _env.motion * w * _mult[li];
-          final phase = 2 * math.pi * tSec / config.parallax.periodSec;
+          final alignedPeriod = MotionMath.alignedPeriodSec(
+              config.durationSec, config.parallax.periodSec);
+          final phase = 2 * math.pi * tSec / alignedPeriod;
           // v1.4 硬张力（规格 §6.1）：相邻深度层反相（相位步进 li·π），
           // 奇数层与偶数层反向摆动，相邻层相对位移翻倍且肉眼可见；
           // 旧 li*0.35 同向微差在摆幅内互相对销，看不出纵深。
@@ -938,9 +942,16 @@ class FrameCompositor {
           final snapDx = _aa
               ? snapWave((phase + li * math.pi) / (2 * math.pi))
               : math.sin(phase + li * math.pi);
+          // R19：竖向基底频率用整数 cycleCount 替代非整 0.8 倍率，
+          // 保证 dyCycles 整周期闭合（directionDeg≠0/180 时竖向不再跳缝）。
+          final cycles = MotionMath.cycleCount(
+              config.durationSec, config.parallax.periodSec);
+          final dyCycles = math.max(1, (cycles * 0.8).round());
+          final dyPhase =
+              2 * math.pi * tSec * dyCycles / config.durationSec;
           final snapDy = _aa
-              ? snapWave((phase * 0.8 + li * math.pi + 0.9) / (2 * math.pi))
-              : math.sin(phase * 0.8 + li * math.pi + 0.9);
+              ? snapWave((dyPhase + li * math.pi + 0.9) / (2 * math.pi))
+              : math.sin(dyPhase + li * math.pi + 0.9);
           dx += snapDx * ampPx * dxDir;
           dy += snapDy * ampPx * config.parallax.verticalRatio * dyDir;
         }

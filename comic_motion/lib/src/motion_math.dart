@@ -44,4 +44,18 @@ class MotionMath {
     final w = 2 * pi * (t / periodSec) + phase;
     return sin(w);
   }
+
+  /// 规格 §6.3：把 periodSec 对齐到 durationSec 的整数分频（就近取整）。
+  /// 返回 duration 内完成的整周期数，恒 >= 1。
+  static int cycleCount(double durationSec, double periodSec) {
+    if (!durationSec.isFinite || !periodSec.isFinite) return 1;
+    if (durationSec <= 0 || periodSec <= 0) return 1;
+    final raw = durationSec / periodSec;
+    final n = raw.round();
+    return n < 1 ? 1 : n;
+  }
+
+  /// 对齐后的周期值：durationSec / cycleCount，保证整数周期无缝。
+  static double alignedPeriodSec(double durationSec, double periodSec) =>
+      durationSec / cycleCount(durationSec, periodSec);
 }
