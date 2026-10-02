@@ -14,23 +14,30 @@ import 'package:comic_motion/comic_motion.dart';
 ///
 /// 运行：dart run tool/generate_showcase.dart            # 全量
 ///       dart run tool/generate_showcase.dart --previews-only
+///       dart run tool/generate_showcase.dart --presets-only
 Future<void> main(List<String> args) async {
   final previewsOnly = args.contains('--previews-only');
+  final presetsOnly = args.contains('--presets-only');
   final positional = args.where((a) => !a.startsWith('--')).toList();
   final outRoot =
       positional.isNotEmpty ? positional[0] : 'DELIVERY/effect_showcase';
   final presetDir = positional.length > 1 ? positional[1] : 'presets';
 
-  await _runShowcase(outRoot, presetDir, previewsOnly);
+  await _runShowcase(outRoot, presetDir, previewsOnly, presetsOnly);
 }
 
 Future<void> _runShowcase(
-    String outRoot, String presetDir, bool previewsOnly) async {
-  final root = Directory(outRoot)..createSync(recursive: true);
-  // 只清「带 anim.gif 的演示目录」：图鉴 HTML 与启动脚本是手工资产，
-  // 生成器无权抹掉（v1.3 之前是整树 delete，重新生成一次就丢一次 HTML）。
-  for (final d in root.listSync().whereType<Directory>()) {
-    if (File('${d.path}/anim.gif').existsSync()) d.deleteSync(recursive: true);
+    String outRoot, String presetDir, bool previewsOnly,
+    [bool presetsOnly = false]) async {
+  if (!presetsOnly) {
+    final root = Directory(outRoot)..createSync(recursive: true);
+    // 只清「带 anim.gif 的演示目录」：图鉴 HTML 与启动脚本是手工资产，
+    // 生成器无权抹掉（v1.3 之前是整树 delete，重新生成一次就丢一次 HTML）。
+    for (final d in root.listSync().whereType<Directory>()) {
+      if (File('${d.path}/anim.gif').existsSync()) {
+        d.deleteSync(recursive: true);
+      }
+    }
   }
   Directory(presetDir).createSync(recursive: true);
 
@@ -111,7 +118,7 @@ Future<void> _runShowcase(
             EffectKind.breathing,
             EffectKind.heartbeat
           ],
-          heartbeat: HeartbeatParams(beats: 3, intensity: 0.011),
+          heartbeat: HeartbeatParams(beats: 3, intensity: 0.022),
           fps: 12,
           durationSec: 3,
           maxDimension: 640,
@@ -154,7 +161,7 @@ Future<void> _runShowcase(
           ],
           speedLines: SpeedLinesParams(count: 60, intensity: 0.6),
           impactFlash: ImpactFlashParams(flashes: 4, intensity: 0.5),
-          heartbeat: HeartbeatParams(beats: 4, intensity: 0.012),
+          heartbeat: HeartbeatParams(beats: 4, intensity: 0.024),
           fps: 12,
           durationSec: 3,
           maxDimension: 640,
@@ -228,7 +235,7 @@ Future<void> _runShowcase(
             EffectKind.breathing,
             EffectKind.slowPush
           ],
-          slowPush: SlowPushParams(pushFrac: 0.03),
+          slowPush: SlowPushParams(pushFrac: 0.051),
           fps: 12,
           durationSec: 3,
           maxDimension: 640,
@@ -292,8 +299,8 @@ Future<void> _runShowcase(
             EffectKind.breathing,
             EffectKind.focusLines
           ],
-          parallax: ParallaxParams(amplitude: 0.012, periodSec: 3),
-          breathing: BreathingParams(amplitude: 0.006, periodSec: 3),
+          parallax: ParallaxParams(amplitude: 0.030, periodSec: 3),
+          breathing: BreathingParams(amplitude: 0.012, periodSec: 3),
           focusLines: FocusLinesParams(
               lines: 34,
               innerFrac: 0.22,
@@ -311,8 +318,8 @@ Future<void> _runShowcase(
             EffectKind.breathing,
             EffectKind.screenTone
           ],
-          parallax: ParallaxParams(amplitude: 0.010, periodSec: 3),
-          breathing: BreathingParams(amplitude: 0.005, periodSec: 3),
+          parallax: ParallaxParams(amplitude: 0.025, periodSec: 3),
+          breathing: BreathingParams(amplitude: 0.010, periodSec: 3),
           screenTone: ScreenToneParams(
               spacingPx: 7,
               density: 0.38,
@@ -331,8 +338,8 @@ Future<void> _runShowcase(
             EffectKind.impactRings,
             EffectKind.impactFlash
           ],
-          parallax: ParallaxParams(amplitude: 0.014, periodSec: 3),
-          breathing: BreathingParams(amplitude: 0.007, periodSec: 3),
+          parallax: ParallaxParams(amplitude: 0.035, periodSec: 3),
+          breathing: BreathingParams(amplitude: 0.014, periodSec: 3),
           impactRings: ImpactRingsParams(
               rings: 4,
               outerFrac: 0.6,
@@ -353,8 +360,8 @@ Future<void> _runShowcase(
             EffectKind.brushStreak
           ],
           parallax:
-              ParallaxParams(amplitude: 0.016, periodSec: 3, directionDeg: 12),
-          breathing: BreathingParams(amplitude: 0.006, periodSec: 3),
+              ParallaxParams(amplitude: 0.040, periodSec: 3, directionDeg: 12),
+          breathing: BreathingParams(amplitude: 0.012, periodSec: 3),
           brushStreak: BrushStreakParams(
               streaks: 14,
               lengthFrac: 0.48,
@@ -374,10 +381,10 @@ Future<void> _runShowcase(
             EffectKind.breathing,
             EffectKind.mangaShake
           ],
-          parallax: ParallaxParams(amplitude: 0.014, periodSec: 3),
-          breathing: BreathingParams(amplitude: 0.007, periodSec: 3),
+          parallax: ParallaxParams(amplitude: 0.035, periodSec: 3),
+          breathing: BreathingParams(amplitude: 0.014, periodSec: 3),
           mangaShake: MangaShakeParams(
-              shakes: 5, amplitude: 0.009, decay: 0.7, rotJitDeg: 0.15),
+              shakes: 5, amplitude: 0.027, decay: 0.7, rotJitDeg: 0.15),
           fps: 12,
           durationSec: 3,
           maxDimension: 512,
@@ -390,9 +397,9 @@ Future<void> _runShowcase(
             EffectKind.breathing,
             EffectKind.flame
           ],
-          parallax: ParallaxParams(amplitude: 0.012, periodSec: 3),
+          parallax: ParallaxParams(amplitude: 0.030, periodSec: 3),
           breathing:
-              BreathingParams(amplitude: 0.006, periodSec: 3, anchor: 'bottom'),
+              BreathingParams(amplitude: 0.012, periodSec: 3, anchor: 'bottom'),
           flame: FlameParams(
               tongues: 16, heightFrac: 0.22, flickerCycles: 6, opacity: 0.78),
           fps: 12,
@@ -406,8 +413,8 @@ Future<void> _runShowcase(
             EffectKind.breathing,
             EffectKind.smoke
           ],
-          parallax: ParallaxParams(amplitude: 0.010, periodSec: 3),
-          breathing: BreathingParams(amplitude: 0.005, periodSec: 3),
+          parallax: ParallaxParams(amplitude: 0.025, periodSec: 3),
+          breathing: BreathingParams(amplitude: 0.010, periodSec: 3),
           smoke: SmokeParams(
               puffs: 14, sizePx: 40, turbulence: 0.4, opacity: 0.16),
           fps: 12,
@@ -422,8 +429,8 @@ Future<void> _runShowcase(
             EffectKind.bubbles
           ],
           parallax: ParallaxParams(
-              amplitude: 0.012, periodSec: 3, verticalRatio: 0.45),
-          breathing: BreathingParams(amplitude: 0.006, periodSec: 3),
+              amplitude: 0.030, periodSec: 3, verticalRatio: 0.45),
+          breathing: BreathingParams(amplitude: 0.012, periodSec: 3),
           bubbles:
               BubblesParams(count: 24, sizePx: 9, wobblePx: 16, opacity: 0.55),
           fps: 12,
@@ -438,8 +445,8 @@ Future<void> _runShowcase(
             EffectKind.leaves
           ],
           parallax:
-              ParallaxParams(amplitude: 0.012, periodSec: 3, directionDeg: 8),
-          breathing: BreathingParams(amplitude: 0.005, periodSec: 3),
+              ParallaxParams(amplitude: 0.030, periodSec: 3, directionDeg: 8),
+          breathing: BreathingParams(amplitude: 0.010, periodSec: 3),
           leaves: LeavesParams(
               count: 26,
               sizePx: 13,
@@ -457,8 +464,8 @@ Future<void> _runShowcase(
             EffectKind.breathing,
             EffectKind.meteors
           ],
-          parallax: ParallaxParams(amplitude: 0.010, periodSec: 3),
-          breathing: BreathingParams(amplitude: 0.005, periodSec: 3),
+          parallax: ParallaxParams(amplitude: 0.025, periodSec: 3),
+          breathing: BreathingParams(amplitude: 0.010, periodSec: 3),
           meteors: MeteorsParams(
               count: 6,
               streakCycles: 2,
@@ -480,8 +487,8 @@ Future<void> _runShowcase(
             EffectKind.focusLines,
             EffectKind.moodScript
           ],
-          parallax: ParallaxParams(amplitude: 0.014, periodSec: 3),
-          breathing: BreathingParams(amplitude: 0.008, periodSec: 3),
+          parallax: ParallaxParams(amplitude: 0.035, periodSec: 3),
+          breathing: BreathingParams(amplitude: 0.016, periodSec: 3),
           speedLines: SpeedLinesParams(
               count: 40, lengthFrac: 0.26, intensity: 0.4, pulses: 2),
           focusLines: FocusLinesParams(
@@ -501,9 +508,9 @@ Future<void> _runShowcase(
             EffectKind.impactFlash,
             EffectKind.moodScript
           ],
-          parallax: ParallaxParams(amplitude: 0.016, periodSec: 3),
-          breathing: BreathingParams(amplitude: 0.010, periodSec: 3),
-          mangaShake: MangaShakeParams(shakes: 4, amplitude: 0.007),
+          parallax: ParallaxParams(amplitude: 0.040, periodSec: 3),
+          breathing: BreathingParams(amplitude: 0.020, periodSec: 3),
+          mangaShake: MangaShakeParams(shakes: 4, amplitude: 0.021),
           impactRings: ImpactRingsParams(
               rings: 3,
               outerFrac: 0.58,
@@ -529,8 +536,8 @@ Future<void> _runShowcase(
             EffectKind.impactFlash,
             EffectKind.moodScript
           ],
-          parallax: ParallaxParams(amplitude: 0.016, periodSec: 3),
-          breathing: BreathingParams(amplitude: 0.010, periodSec: 3),
+          parallax: ParallaxParams(amplitude: 0.040, periodSec: 3),
+          breathing: BreathingParams(amplitude: 0.020, periodSec: 3),
           focusLines: FocusLinesParams(
               lines: 30,
               focalY: 0.5,
@@ -538,7 +545,7 @@ Future<void> _runShowcase(
               opacity: 0.30,
               mode: 'both'),
           mangaShake: MangaShakeParams(
-              shakes: 3, amplitude: 0.008, decay: 0.68, rotJitDeg: 0.16),
+              shakes: 3, amplitude: 0.024, decay: 0.68, rotJitDeg: 0.16),
           impactRings: ImpactRingsParams(
               rings: 3,
               innerFrac: 0.06,
@@ -562,8 +569,8 @@ Future<void> _runShowcase(
             EffectKind.vignette,
             EffectKind.moodScript
           ],
-          parallax: ParallaxParams(amplitude: 0.014, periodSec: 3),
-          breathing: BreathingParams(amplitude: 0.008, periodSec: 3),
+          parallax: ParallaxParams(amplitude: 0.035, periodSec: 3),
+          breathing: BreathingParams(amplitude: 0.016, periodSec: 3),
           speedLines: SpeedLinesParams(count: 48, intensity: 0.42, pulses: 4),
           lightning: LightningParams(strikes: 3, flashIntensity: 0.45),
           embers: EmbersParams(count: 34),
@@ -585,8 +592,8 @@ Future<void> _runShowcase(
             EffectKind.toneShift,
             EffectKind.moodScript
           ],
-          parallax: ParallaxParams(amplitude: 0.012, periodSec: 3),
-          breathing: BreathingParams(amplitude: 0.006, periodSec: 3),
+          parallax: ParallaxParams(amplitude: 0.030, periodSec: 3),
+          breathing: BreathingParams(amplitude: 0.012, periodSec: 3),
           fog: FogParams(blobs: 7, opacity: 0.10, color: 'eaf0e4'),
           leaves: LeavesParams(
               count: 14, sizePx: 12, swayPx: 26, palette: 'summer'),
@@ -678,6 +685,19 @@ Future<void> _runShowcase(
   // presets 重写；presets 内容确定性，重复生成无差异，但没必要跑）。
   if (previewsOnly) {
     _generatePreviews(demos, inputs);
+    return;
+  }
+
+  // --presets-only：只写 classic.json + 每个 demo 的配置 JSON，不渲染
+  // 演示 GIF/PNG、不清理 DELIVERY 目录、不跑 _generatePreviews。
+  if (presetsOnly) {
+    final classic = EffectConfig(fps: 12, durationSec: 3, maxDimension: 640);
+    File('$presetDir/classic.json').writeAsStringSync(classic.toJsonString());
+    for (final entry in demos.entries) {
+      final cfg = entry.value();
+      File('$presetDir/${entry.key}.json').writeAsStringSync(cfg.toJsonString());
+    }
+    stdout.writeln('PRESETS-ONLY: wrote classic + ${demos.length} demo configs');
     return;
   }
 

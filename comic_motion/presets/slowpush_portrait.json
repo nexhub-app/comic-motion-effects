@@ -6,14 +6,14 @@
     "slowPush"
   ],
   "parallax": {
-    "amplitude": 0.012,
+    "amplitude": 0.03,
     "periodSec": 6.0,
     "directionDeg": 0.0,
     "verticalRatio": 0.35
   },
   "breathing": {
     "enabled": true,
-    "amplitude": 0.006,
+    "amplitude": 0.012,
     "periodSec": 4.0,
     "anchor": "center"
   },
@@ -21,11 +21,11 @@
     "enabled": true,
     "particleCount": 40,
     "speed": 12.0,
-    "opacity": 0.16,
+    "opacity": 0.22,
     "mode": "dust"
   },
   "slowPush": {
-    "pushFrac": 0.03,
+    "pushFrac": 0.051,
     "cycles": 1
   },
   "fps": 12,

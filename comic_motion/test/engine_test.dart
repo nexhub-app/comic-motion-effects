@@ -2548,6 +2548,58 @@ void main() {
         reason: 'R18 对齐呼吸周期到 duration 整数分频 ⇒ 首尾无缝',
       );
     });
+
+    test('预设数据同步守卫：无 pinned 值等于 v1.4 前的冻结默认值', () {
+      // 规格 §6.1 抬高的旧默认值（v1.4 前的 Dart 默认），presets/*.json 不得
+      // 再 pin 这些值——否则 Task 3.1 的 louder defaults 被旧值覆盖。
+      const badParallax = 0.012;
+      const badBreathing = 0.006;
+      const badAmbientOpacity = 0.16;
+      const badShake = 0.006;
+      const badHeartbeat = 0.010;
+      const badSlowPush = 0.035;
+
+      final dir = Directory('presets');
+      expect(dir.existsSync(), isTrue, reason: 'presets/ 目录必须存在');
+      final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.json')).toList()..sort((a, b) => a.path.compareTo(b.path));
+      expect(files.length, greaterThanOrEqualTo(38),
+          reason: '至少 38 个预设（含新生成的 stale 修复文件）');
+
+      for (final f in files) {
+        final j = convert.jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+        final name = f.uri.pathSegments.last;
+        final px = j['parallax'];
+        if (px is Map) {
+          expect(px['amplitude'], isNot(equals(badParallax)),
+              reason: '$name: parallax.amplitude pinned to old default');
+        }
+        final br = j['breathing'];
+        if (br is Map) {
+          expect(br['amplitude'], isNot(equals(badBreathing)),
+              reason: '$name: breathing.amplitude pinned to old default');
+        }
+        final amb = j['ambient'];
+        if (amb is Map) {
+          expect(amb['opacity'], isNot(equals(badAmbientOpacity)),
+              reason: '$name: ambient.opacity pinned to old default');
+        }
+        final shake = j['mangaShake'];
+        if (shake is Map) {
+          expect(shake['amplitude'], isNot(equals(badShake)),
+              reason: '$name: mangaShake.amplitude pinned to old default');
+        }
+        final hb = j['heartbeat'];
+        if (hb is Map) {
+          expect(hb['intensity'], isNot(equals(badHeartbeat)),
+              reason: '$name: heartbeat.intensity pinned to old default');
+        }
+        final sp = j['slowPush'];
+        if (sp is Map) {
+          expect(sp['pushFrac'], isNot(equals(badSlowPush)),
+              reason: '$name: slowPush.pushFrac pinned to old default');
+        }
+      }
+    });
   });
 
   group('v1.2 新增动效', () {

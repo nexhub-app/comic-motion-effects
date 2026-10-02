@@ -9,14 +9,14 @@
     "moodScript"
   ],
   "parallax": {
-    "amplitude": 0.016,
+    "amplitude": 0.04,
     "periodSec": 3.0,
     "directionDeg": 0.0,
     "verticalRatio": 0.35
   },
   "breathing": {
     "enabled": true,
-    "amplitude": 0.01,
+    "amplitude": 0.02,
     "periodSec": 3.0,
     "anchor": "center"
   },
@@ -24,7 +24,7 @@
     "enabled": true,
     "particleCount": 40,
     "speed": 12.0,
-    "opacity": 0.16,
+    "opacity": 0.22,
     "mode": "dust"
   },
   "impactFlash": {
@@ -34,7 +34,7 @@
   },
   "mangaShake": {
     "shakes": 4,
-    "amplitude": 0.007,
+    "amplitude": 0.021,
     "decay": 0.72,
     "rotJitDeg": 0.12
   },

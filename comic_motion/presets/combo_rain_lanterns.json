@@ -8,14 +8,14 @@
     "heartbeat"
   ],
   "parallax": {
-    "amplitude": 0.012,
+    "amplitude": 0.03,
     "periodSec": 6.0,
     "directionDeg": 0.0,
     "verticalRatio": 0.35
   },
   "breathing": {
     "enabled": true,
-    "amplitude": 0.006,
+    "amplitude": 0.012,
     "periodSec": 4.0,
     "anchor": "center"
   },
@@ -23,7 +23,7 @@
     "enabled": true,
     "particleCount": 40,
     "speed": 12.0,
-    "opacity": 0.16,
+    "opacity": 0.22,
     "mode": "dust"
   },
   "rain": {
@@ -44,7 +44,7 @@
   },
   "heartbeat": {
     "beats": 3,
-    "intensity": 0.01,
+    "intensity": 0.02,
     "doubleBeat": true
   },
   "fps": 12,

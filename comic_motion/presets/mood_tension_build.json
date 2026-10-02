@@ -9,14 +9,14 @@
     "moodScript"
   ],
   "parallax": {
-    "amplitude": 0.014,
+    "amplitude": 0.035,
     "periodSec": 3.0,
     "directionDeg": 0.0,
     "verticalRatio": 0.35
   },
   "breathing": {
     "enabled": true,
-    "amplitude": 0.008,
+    "amplitude": 0.016,
     "periodSec": 3.0,
     "anchor": "center"
   },
@@ -24,7 +24,7 @@
     "enabled": true,
     "particleCount": 40,
     "speed": 12.0,
-    "opacity": 0.16,
+    "opacity": 0.22,
     "mode": "dust"
   },
   "speedLines": {

@@ -6,14 +6,14 @@
     "bubbles"
   ],
   "parallax": {
-    "amplitude": 0.012,
+    "amplitude": 0.03,
     "periodSec": 3.0,
     "directionDeg": 0.0,
     "verticalRatio": 0.45
   },
   "breathing": {
     "enabled": true,
-    "amplitude": 0.006,
+    "amplitude": 0.012,
     "periodSec": 3.0,
     "anchor": "center"
   },
@@ -21,7 +21,7 @@
     "enabled": true,
     "particleCount": 40,
     "speed": 12.0,
-    "opacity": 0.16,
+    "opacity": 0.22,
     "mode": "dust"
   },
   "bubbles": {
