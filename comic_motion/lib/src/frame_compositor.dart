@@ -579,9 +579,12 @@ class FrameCompositor {
   //    构造期只对 activity 网格做**一次**扫描求 `maxAct`（单个 double，无数组分配）；
   //    逐粒子按 `q <= activity[cell]/maxAct` 接受，密度∝activity。
   //  * R6：仅以 `config.contentAware` 单一门控（不看 tier.atLeastStandard）。
+  //    R36（Task 3.6b）复核维持：落位（WHERE）与渲染档（WHICH pixel algorithm）
+  //    正交，本次只把 contentAware 的**默认值**翻到 true，门控本身一字不动。
   //  * 空白/平坦（maxAct≈0）/ map 为 null / 门控关 → 回落原均匀 draw（等价旧行为）。
   // 位置采样来自每效果**新增的独立流**，绝不触碰该效果的属性流（sizeJit/alphaJit/…）
-  // 与既有 0x51A*/0x52B*/0x53C*/0x54D*/0x54E1 流，故 contentAware=false 逐字节不变。
+  // 与既有 0x51A*/0x52B*/0x53C*/0x54D*/0x54E1 流，故 contentAware=false 逐字节不变
+  // （3.6b 起 false 是显式回滚档而非默认档：该等价陈述只约束 off 路径本身）。
 
   /// 构造期单次扫描 activity 网格得到的最大值（无数组分配）。门控关/无 map 时为 0。
   late final double _activityMax;

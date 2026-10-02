@@ -4975,7 +4975,10 @@ void main() {
             'outputFormat': 'gif',
             'seed': 7,
             'focusLines': {'innerFrac': 0.22, 'lines': 60},
-            if (ca) 'contentAware': true,
+            // 3.6b 前提修复：缺键自 R30/R36 起兜底为 true，「不写 = off」不再
+            // 成立 ⇒ off 臂必须**显式写** false，本条 on!=off 的对照才仍是 on
+            // vs off（断言一字未动）。
+            'contentAware': ca,
           };
       final on = EffectConfig.fromJson(cfgJson(true));
       final off = EffectConfig.fromJson(cfgJson(false));
@@ -5392,6 +5395,108 @@ void main() {
       // 显式 dither:true（= 默认）与不传便捷参数等价 ⇒ 仍整段省略。
       expect(EffectConfig(dither: true).toJson().containsKey('quality'), isFalse);
       expect(EffectConfig(dither: true).configHash, EffectConfig().configHash);
+    });
+  });
+
+  // ---------- Task 3.6b：contentAware 默认 false→true（R30/R36） ----------
+  //
+  // 与 R32 同一习语：「等于默认就不写」只有在
+  //   构造默认 == 缺键兜底 == 省略哨兵
+  // 三者锁步时才是无损序列化。Task 3.6b 把 contentAware 的默认翻到 true，
+  // 三处必须同 commit 同向翻转，否则：
+  //   1. 只翻构造默认 ⇒ 显式 false 的回滚配置命中旧哨兵被省略 ⇒ 重解析成
+  //      true ⇒ 一次 toJson→fromJson 就静默抹掉回滚意图（R32 的事故重演）；
+  //   2. 只翻兜底不翻哨兵 ⇒ 默认 JSON 多写 'contentAware': true ⇒ 默认配置
+  //      的序列化形状/configHash 被改动，旧客户端键集漂移。
+  // R36：不引入任何 tier 门控——落位（WHERE）与渲染档（WHICH pixel algorithm）
+  // 正交（R8 对 panelAware 的同款裁决），SaliencyAnalyzer 内部零 tier 引用。
+  group('v1.4 Task 3.6b：contentAware 哨兵=兜底=构造默认=true（R30/R36，R32 习语）', () {
+    // 锚点：故意写死字面量（与 R32 组同一口径）——这里若与实现漂移，本组的
+    // 门就该红，而不是跟着实现走。
+    const defContentAware = true;
+
+    test('3.6b 默认 true：构造默认 == 省略哨兵 ⇒ 默认 JSON 不写 contentAware 键', () {
+      expect(EffectConfig().contentAware, defContentAware,
+          reason: '构造默认必须等于本组锚点（true）');
+      expect(EffectConfig().contentAware, isTrue,
+          reason: 'R30/R36：默认开启内容感知落位（投诉 #2 的开箱修复）');
+      // 省略条件与锚点锁步：等于 defContentAware 就不写。
+      expect(EffectConfig().toJson().containsKey('contentAware'),
+          EffectConfig().contentAware != defContentAware,
+          reason: '默认命中省略哨兵 ⇒ 默认 JSON 键集与翻转前逐字节相同（旧客户端兼容）');
+      expect(EffectConfig().toJson().containsKey('contentAware'), isFalse,
+          reason: '默认 JSON 必须不写键');
+      expect(
+          EffectConfig.fromJson({'effects': ['rain']}).contentAware, isTrue,
+          reason: '缺键兜底必须等于新默认（三源锁步的第二源）');
+    });
+
+    test('3.6b 显式 false 回滚：写出键、往返保 false、保 configHash', () {
+      final rollback = EffectConfig(contentAware: false);
+      expect(rollback.toJson()['contentAware'], false,
+          reason: 'R32 教训：回滚意图一旦不写，缺键兜底成 true 就静默翻转用户配置');
+      final back =
+          EffectConfig.fromJson(_decodeJson(rollback.toJsonString()));
+      expect(back.contentAware, isFalse, reason: '往返丢失回滚意图');
+      expect(back.configHash, rollback.configHash,
+          reason: '一次 JSON 往返就改 configHash = 同一份 JSON 有两种渲染行为');
+      expect(back.toJson(), rollback.toJson(), reason: '往返后序列化形状必须不动');
+      // 默认与回滚的 JSON/哈希不得撞车（否则回滚不可表达）。
+      expect(rollback.configHash, isNot(EffectConfig().configHash),
+          reason: '回滚与默认同哈希 ⇒ 回滚意图不可表达');
+    });
+
+    test('3.6b 双向形状：{"contentAware": false} 进出无损；显式 true == 新默认', () {
+      // 省略条件逐案例对上锚点：写键 ⟺ 值 != defContentAware。
+      for (final v in [true, false]) {
+        final probe = EffectConfig(contentAware: v);
+        expect(probe.toJson().containsKey('contentAware'),
+            v != defContentAware,
+            reason: '省略哨兵漂移：contentAware=$v');
+      }
+      // 外部字面回滚（服务端 API / 用户手写 JSON 的形状）。
+      final j = EffectConfig.fromJson({'effects': ['rain'], 'contentAware': false});
+      expect(j.contentAware, isFalse);
+      expect(j.toJson()['contentAware'], false, reason: '回滚键必须原样写回');
+      expect(EffectConfig.fromJson(j.toJson()).configHash, j.configHash);
+      // 显式 true 与新默认逐字节等价 ⇒ 不写键、同哈希（既有 contentAware:
+      // true 测试零编辑仍绿的前提）。
+      final on = EffectConfig(contentAware: true);
+      expect(on.toJson().containsKey('contentAware'), isFalse);
+      expect(on.configHash, EffectConfig().configHash);
+      expect(on.toJson(), EffectConfig().toJson());
+      expect(EffectConfig.fromJson(_decodeJson(on.toJsonString())).configHash,
+          on.configHash);
+    });
+
+    test('3.6b 兜底语义：显式 null 键 = 缺键 ⇒ 新默认；false/非 bool 仍落 false', () {
+      expect(EffectConfig.fromJson({'contentAware': null}).contentAware, isTrue,
+          reason: 'null = 「没说过」 ⇒ 落新默认，绝不静默落 false');
+      expect(EffectConfig.fromJson({'contentAware': true}).contentAware, isTrue);
+      expect(EffectConfig.fromJson({'contentAware': false}).contentAware, isFalse);
+      // sanitize 语义与翻转前一致：非 true 的非 bool 值仍按 false 处理。
+      expect(EffectConfig.fromJson({'contentAware': 'yes'}).contentAware, isFalse);
+      expect(EffectConfig.fromJson({'contentAware': 1}).contentAware, isFalse);
+    });
+
+    test('3.6b copy/链式路径保留 contentAware（effect_config.dart:1563 契约）', () {
+      expect(EffectConfig().copy().contentAware, isTrue,
+          reason: 'copy 必须携带新默认');
+      expect(EffectConfig(contentAware: false).copy().contentAware, isFalse,
+          reason: 'copy 不得把显式回滚洗成默认');
+      expect(
+          EffectConfig(contentAware: false)
+              .withEffect(EffectKind.rain)
+              .contentAware,
+          isFalse);
+      expect(EffectConfig().clearEffects().contentAware, isTrue);
+    });
+
+    test('3.6b 默认 JSON 键集不动 ⇒ 默认 configHash 不因本次翻转移动', () {
+      // 本次只翻默认「值」+ 哨兵方向；默认配置序列化的字节形状是逐字节冻结的
+      // （绝对字面量归 3.7 重锚定，这里钉的是「3.6b 自身不移动默认哈希」）。
+      expect(EffectConfig().toJson().containsKey('contentAware'), isFalse);
+      expect(EffectConfig(contentAware: true).toJson(), EffectConfig().toJson());
     });
   });
 }

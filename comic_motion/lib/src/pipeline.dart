@@ -918,7 +918,8 @@ class MotionPipeline {
     return (working, splitter.split(working, depth), _analyzeAnchors(working, null));
   }
 
-  /// contentAware 关闭（默认）→ null，零成本、零行为变化；开启时按 [panels]
+  /// contentAware 关闭 → null，零成本、零行为变化（3.6b/R30 后默认**开启**，
+  /// 此分支仅剩显式 `contentAware: false` 回滚）；开启时按 [panels]
   /// （工作分辨率画布像素格，null = 整页）分析底图。
   AnchorMap? _analyzeAnchors(RgbaImage working, List<PixelRect>? panels) {
     if (!config.contentAware) return null;

@@ -255,10 +255,14 @@ void main() {
 
   // ---- Task 1.5: AnchorMap threaded through the render pipeline ----
   //
-  // Plumb-only contract: NOTHING in the draw path consumes the map yet (that
-  // is Task 2.1). So contentAware must be a pure add-on: default false keeps
-  // serialization + configHash byte-for-byte unchanged, and rendered output is
-  // on == off == baseline. The compositor just accepts + stores the map.
+  // Plumbing contract: the pipeline runs `SaliencyAnalyzer` once per export
+  // when contentAware is on and hands the AnchorMap to the compositor (and
+  // every per-job worker rebuild). Task 3.6b (R30/R36) inverted the DEFAULT to
+  // on — 「placement is live out of the box」 is the whole point — while the
+  // conditional-serialization idiom keeps the DEFAULT JSON byte-frozen: the
+  // default (true) omits the key, an explicit rollback (false) writes it. The
+  // map itself is consumed by Tasks 2.1/2.2 (focal + seeding), so
+  // 「on==off==baseline」 only holds for effects that read neither (parallax).
   group('Task 1.5: AnchorMap plumbing', () {
     test('fromRasters stores the passed AnchorMap (field-equal)', () {
       final img = whitePage(64, 64);
@@ -293,24 +297,40 @@ void main() {
       expect(c.anchors, isNull);
     });
 
-    test('contentAware default false is not serialized; configHash unchanged',
+    // 3.6b 前提改写（非 digest 替换）：本条在 Task 1.5 写的是「默认 false ⇒
+    // 不序列化」。R30/R36 把默认翻到 true ⇒ 前提反转，序列化习语仍是
+    // 「等于默认就不写」：默认 true ⇒ 键省略；显式回滚 false ⇒ 键写出。
+    // 绝对 configHash 断言按硬约束**一字未改**保留：它自 Task 3.x 起就是预期
+    // 红，re-baseline 归 Task 3.7 清单 #1/#10。
+    test('contentAware default true (3.6b): key omitted by default, explicit false is written',
         () {
+      expect(EffectConfig().contentAware, isTrue,
+          reason: 'R30/R36：默认开启内容感知落位');
       expect(EffectConfig().toJson().containsKey('contentAware'), isFalse,
-          reason: '默认 false 不写入 → configHash 与旧版一致');
+          reason: '默认 true == 省略哨兵 ⇒ 默认 JSON 键集不动（旧客户端兼容）');
       expect(EffectConfig().configHash, '-477687d5e8bded5f',
           reason: 'classic default hash must NOT move (Task 3.7 gates it)');
+      final rollback = EffectConfig(contentAware: false);
+      expect(rollback.toJson()['contentAware'], false,
+          reason: '回滚意图必须序列化（R32 习语的写出半）');
+      expect(
+          EffectConfig.fromJson(rollback.toJson()).configHash,
+          rollback.configHash,
+          reason: '回滚配置往返无损');
       expect(
           EffectConfig.fromJson({'effects': ['rain']})
               .toJson()
               .containsKey('contentAware'),
-          isFalse);
+          isFalse,
+          reason: '缺键 ⇒ 新默认 true ⇒ 仍不写键');
       final on = EffectConfig(contentAware: true);
-      expect(on.toJson()['contentAware'], true);
+      expect(on.configHash, EffectConfig().configHash,
+          reason: '显式 true == 新默认 ⇒ 同 JSON 同哈希');
       expect(EffectConfig.fromJson(on.toJson()).configHash, on.configHash,
           reason: 'on-config round-trips through the conditional key');
     });
 
-    test('plumb-only: contentAware on==off==baseline, on is deterministic',
+    test('plumb-only: contentAware on==off==baseline for parallax, on is deterministic',
         () async {
       final page = whitePage(64, 80);
       inkBlob(page, 32, 40, 10);
@@ -322,7 +342,9 @@ void main() {
             'maxDimension': 64,
             'outputFormat': 'gif',
             'seed': 7,
-            if (ca) 'contentAware': true,
+            // 3.6b 前提修复：缺键现在兜底 true ⇒ off 臂必须显式写 false，
+            // on/off 对照才成立（断言一字未动）。
+            'contentAware': ca,
           };
       final off = EffectConfig.fromJson(cfgJson());
       final on = EffectConfig.fromJson(cfgJson(true));

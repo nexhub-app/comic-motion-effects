@@ -191,7 +191,10 @@ void main() {
             'outputFormat': 'gif',
             'seed': 7,
             'snow': {'count': 160},
-            if (ca) 'contentAware': true,
+            // 3.6b 前提修复：缺键现在兜底 true（默认即 on）⇒ off 臂必须
+            // **显式写** false，本条 ON vs OFF 的对照才仍是 ON vs OFF
+            // （断言一字未动）。
+            'contentAware': ca,
           };
       final on = EffectConfig.fromJson(cfgJson(true));
       final off = EffectConfig.fromJson(cfgJson(false));
@@ -202,6 +205,88 @@ void main() {
           reason: 'contentAware ON 双跑（真实 isolate/worker 路径）逐字节确定');
       expect(a, isNot(equals(o)),
           reason: '粒子现消费 activity，ON 应区别于 OFF');
+    });
+  });
+
+  // ---- Task 3.6b（R30/R36）：落位开箱即活——默认配置（不写 contentAware 键、
+  // 不写 quality 键、不钉任何 tier）必须真的驱动 placement ----
+  //
+  // 投诉 #2（「并不能很好的识别出该出现动态效果的地方」）的验收门：仅有配置
+  // 测试不算数，这里从**默认构造/默认 JSON** 出发观察播种行为。
+  // brief 原句 `downscaleAndSplitForExport(...)` 返回 AnchorMap 与受围栏的
+  // pipeline.dart 现状不符（该公开方法返回二元组、第三个值被丢弃），故按等价
+  // 口径观察：同一条公开主干产出的 working 图上跑与 `_analyzeAnchors` 完全
+  // 相同的 `SaliencyAnalyzer().analyze` 得到非 null map，再由默认 config 驱动
+  // 的合成器消费 ⇒ 门控链路与渲染管线一致；端到端另跑真实 processBytes 对照。
+  group('Task 3.6b: placement is live out of the box (default config)', () {
+    /// 右半有暗墨块的白页——与 Task 2.2 worker 测试同款主体。
+    RgbaImage rightBlobPage() {
+      final img = blankPage(64, 64);
+      for (var y = 0; y < 64; y++) {
+        for (var x = 0; x < 64; x++) {
+          final dx = x - 48, dy = y - 32;
+          if (dx * dx + dy * dy <= 12 * 12) img.setPixel(x, y, 15, 15, 15);
+        }
+      }
+      return img;
+    }
+
+    // 默认配置：JSON 里既无 contentAware 键也无 quality 键（tier 不钉）。
+    Map<String, dynamic> defaultCfgJson([bool? ca]) => <String, dynamic>{
+          'effects': ['snow'],
+          'fps': 8,
+          'durationSec': 1.0,
+          'maxDimension': 64,
+          'outputFormat': 'gif',
+          'seed': 7,
+          'snow': {'count': 160},
+          if (ca != null) 'contentAware': ca,
+        };
+
+    test('默认 config：锚点扫描产出非 null AnchorMap 且播种与显式回滚不同', () {
+      final def = EffectConfig.fromJson(defaultCfgJson());
+      expect(def.contentAware, isTrue,
+          reason: 'R30/R36：缺键兜底 == 新默认 true（不写键 = 开启）');
+      final page = rightBlobPage();
+      // 与管线同一条公开前置主干（同一 working 图），随后跑的就是
+      // pipeline `_analyzeAnchors` 在默认路径执行的那次 analyze 调用。
+      final (working, _) = MotionPipeline(def).downscaleAndSplitForExport(page);
+      final map = const SaliencyAnalyzer().analyze(working);
+      expect(map, isNotNull,
+          reason: '默认 config 的 _analyzeAnchors 门控只认 contentAware ⇒ 必产出 map');
+      expect(map.anchors, isNotEmpty, reason: '右半墨块必须给出 anchor');
+
+      // _particleWeightingActive 驱动的播种：默认 config 显著聚向右半主体，
+      // 同 seed 显式 false 回滚仍是均匀分布，两者逐粒子不同。
+      final onSeeds = build(def, anchors: map).debugParticleSeeds(EffectKind.snow);
+      final offCfg = EffectConfig.fromJson(defaultCfgJson(false));
+      final offSeeds =
+          build(offCfg, anchors: map).debugParticleSeeds(EffectKind.snow);
+      expect(onSeeds.length, 160);
+      expect(onSeeds.length, offSeeds.length);
+      expect(onSeeds, isNot(equals(offSeeds)),
+          reason: '开箱默认必须重播种：与 contentAware:false 同 seed 跑逐粒子不同');
+      final onFrac = rightCount(onSeeds) / onSeeds.length;
+      expect(onFrac, greaterThan(0.6),
+          reason: '默认路径应把粒子送进主体侧（实测 $onFrac）');
+      final offFrac = rightCount(offSeeds) / offSeeds.length;
+      expect(offFrac, inInclusiveRange(0.3, 0.7),
+          reason: '回滚臂保持旧均匀分布（实测 $offFrac）');
+    });
+
+    test('默认 config 端到端（真实 worker 路径）≠ 显式 false 回滚，且双跑确定',
+        () async {
+      final page = rightBlobPage();
+      final bytes = Uint8List.fromList(ImageIO.encodePngFrame(page));
+      final def = EffectConfig.fromJson(defaultCfgJson());
+      final off = EffectConfig.fromJson(defaultCfgJson(false));
+      final a = (await MotionPipeline(def).processBytes(input: bytes)).gifBytes!;
+      final b = (await MotionPipeline(def).processBytes(input: bytes)).gifBytes!;
+      final o = (await MotionPipeline(off).processBytes(input: bytes)).gifBytes!;
+      expect(a, equals(b),
+          reason: '默认开启后仍须逐字节确定（重播种自同一 seed 流）');
+      expect(a, isNot(equals(o)),
+          reason: '开箱产物必须已带内容感知落位（投诉 #2 的端到端验收）');
     });
   });
 }

@@ -1267,7 +1267,7 @@ class EffectConfig {
     this.maxFrames = 96,
     this.reducedMotion = false,
     this.panelAware = false,
-    this.contentAware = false,
+    this.contentAware = true,
 
     /// ---- R5 顶层便捷参数（null = 不触碰对应嵌套字段）----
     /// 嵌入方在一处设齐全部渲染参数；非 null 时映射到既有字段，与显式
@@ -1399,12 +1399,15 @@ class EffectConfig {
   /// 条件序列化：默认 false 不写入 → configHash 与旧版完全一致。
   final bool panelAware;
 
-  /// 内容感知布局（v1.4 placement，opt-in）：true 时管线对底图跑一次
+  /// 内容感知布局（v1.4 placement）：true 时管线对底图跑一次
   /// `SaliencyAnalyzer`，把得到的 AnchorMap 贯通进合成器与 worker 作业
-  /// （`FrameCompositor.anchors` / `FrameJobSpec.anchors`），供后续放置任务
-  /// （Task 2.1+）读取。**本任务仅做管道贯通**：没有任何渲染路径消费该
-  /// map，故 contentAware 的产物与关闭时逐字节相同（on==off==基线）。
-  /// 条件序列化：默认 false 不写入 → configHash 与旧版完全一致。
+  /// （`FrameCompositor.anchors` / `FrameJobSpec.anchors`），由落位任务消费
+  /// （Task 2.1 focusLines/impactRings 焦点、2.2 粒子 activity 加权播种、
+  /// 2.3 分格裁剪）。**v1.4 Task 3.6b（R30/R36）起默认 true** ——内容感知
+  /// 落位开箱即活，显式 `contentAware: false` 是回滚开关；R36 裁决落位与
+  /// RenderTier 正交，门控只看本字段。
+  /// 条件序列化（R32 习语）：等于默认 true 不写入 ⇒ 默认 JSON 键集与旧版
+  /// 逐字节相同；显式 false 写出键 ⇒ 回滚意图无损往返。
   final bool contentAware;
 
   int get frameCount =>
@@ -1486,7 +1489,9 @@ class EffectConfig {
         'maxFrames': maxFrames,
         if (reducedMotion) 'reducedMotion': true,
         if (panelAware) 'panelAware': true,
-        if (contentAware) 'contentAware': true,
+        // R32 习语 + 3.6b 翻转：省略条件必须等于「== 构造默认(true)」，
+        // 默认不写键（默认 JSON 键集逐字节不动），显式回滚 false 写出键。
+        if (!contentAware) 'contentAware': false,
       };
 
   String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
@@ -1750,7 +1755,11 @@ class EffectConfig {
       maxFrames: (j['maxFrames'] as num?)?.toInt() ?? 96,
       reducedMotion: j['reducedMotion'] == true,
       panelAware: j['panelAware'] == true,
-      contentAware: j['contentAware'] == true,
+      // 3.6b：缺键与显式 null 都落新默认 true（= 构造默认 = 省略哨兵，三源
+      // 锁步）；显式 false 与非 bool 值仍 sanitize 成 false（兜底方向翻转、
+      // sanitize 语义不变）。
+      contentAware:
+          j['contentAware'] == null ? true : j['contentAware'] == true,
     );
   }
 }
