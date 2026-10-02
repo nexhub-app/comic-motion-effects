@@ -935,14 +935,14 @@ class FrameCompositor {
           // Task 3.4（§6.2/R17）：standard+ 载体换成 snapWave，θ/(2π) 折算
           // 保持 3.2 的 li·π 反相步进（奇数层 u+0.5 → 反瓣）；legacy 分支
           // 冻结为原 sin 表达式。多幅度项（ampPx/dxDir/verticalRatio/dyDir）不动。
-          final snapDx = snapWave((phase + li * math.pi) / (2 * math.pi));
-          final snapDy =
-              snapWave((phase * 0.8 + li * math.pi + 0.9) / (2 * math.pi));
-          dx += (_aa ? snapDx : math.sin(phase + li * math.pi)) * ampPx * dxDir;
-          dy += (_aa ? snapDy : math.sin(phase * 0.8 + li * math.pi + 0.9)) *
-              ampPx *
-              config.parallax.verticalRatio *
-              dyDir;
+          final snapDx = _aa
+              ? snapWave((phase + li * math.pi) / (2 * math.pi))
+              : math.sin(phase + li * math.pi);
+          final snapDy = _aa
+              ? snapWave((phase * 0.8 + li * math.pi + 0.9) / (2 * math.pi))
+              : math.sin(phase * 0.8 + li * math.pi + 0.9);
+          dx += snapDx * ampPx * dxDir;
+          dy += snapDy * ampPx * config.parallax.verticalRatio * dyDir;
         }
       }
       // Scale slightly beyond 1 so shifted layers still cover the canvas.
