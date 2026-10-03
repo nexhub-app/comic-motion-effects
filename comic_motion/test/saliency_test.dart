@@ -300,16 +300,16 @@ void main() {
     // 3.6b 前提改写（非 digest 替换）：本条在 Task 1.5 写的是「默认 false ⇒
     // 不序列化」。R30/R36 把默认翻到 true ⇒ 前提反转，序列化习语仍是
     // 「等于默认就不写」：默认 true ⇒ 键省略；显式回滚 false ⇒ 键写出。
-    // 绝对 configHash 断言按硬约束**一字未改**保留：它自 Task 3.x 起就是预期
-    // 红，re-baseline 归 Task 3.7 清单 #1/#10。
+    // 绝对 configHash 由 Task 3.7 唯一一次 re-baseline 锚到 v1.4.0 默认指纹；
+    // 本条的门仍是「键集/默认值不因 contentAware 移动」，不是那个数字本身。
     test('contentAware default true (3.6b): key omitted by default, explicit false is written',
         () {
       expect(EffectConfig().contentAware, isTrue,
           reason: 'R30/R36：默认开启内容感知落位');
       expect(EffectConfig().toJson().containsKey('contentAware'), isFalse,
           reason: '默认 true == 省略哨兵 ⇒ 默认 JSON 键集不动（旧客户端兼容）');
-      expect(EffectConfig().configHash, '-477687d5e8bded5f',
-          reason: 'classic default hash must NOT move (Task 3.7 gates it)');
+      expect(EffectConfig().configHash, '-2a0679b63611bcad',
+          reason: 'v1.4.0 默认指纹：翻到 true 不写键 ⇒ 与翻转前同哈希（R32 门）');
       final rollback = EffectConfig(contentAware: false);
       expect(rollback.toJson()['contentAware'], false,
           reason: '回滚意图必须序列化（R32 习语的写出半）');

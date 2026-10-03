@@ -534,8 +534,10 @@ class FrameCompositor {
   /// 驱动，而由这里直接指定的归一化偏移决定（水平 `dx = amplitude · phaseX ·
   /// w · 层倍率`，垂直 `dy = amplitude · phaseY · verticalRatio · w · 层倍率`，
   /// phase ∈ [-1, 1]，0 = 无位移）。其余效果全部冻结在 t=0 参考相位——
-  /// 调用方以 `renderFrame(0)` 渲染交互帧。默认 null：时间驱动路径与
-  /// v1.3 逐字节一致（legacy 契约不受影响）。
+  /// 调用方以 `renderFrame(0)` 渲染交互帧。默认 null 时该字段对时间驱动通路零介入
+  /// （v1.3 引入即如此）；但 v1.4 改视差的三项（R16 层反相、R18 整数周期对齐、
+  /// H1 默认幅度）同样落在这条通路上，所以此处**不再**声称「与 v1.3 逐字节一致」——
+  /// 字节承诺只覆盖同版本内同参数 + 同 seed 的运行。
   ParallaxOverride? parallaxOverride;
 
   final int w;
@@ -968,6 +970,14 @@ class FrameCompositor {
           // R19：竖向基底频率用整数 cycleCount 替代非整 0.8 倍率，
           // 保证 dyCycles 整周期闭合（directionDeg≠0/180 时竖向不再跳缝）。
           // cycles 取自循环外的单一真值（见上），此处只做 0.8 倍率取整。
+          // 轨迹怎么读（3.5 评审裁决定下的口径，Task 3.7 补记）：两轴在
+          // cycles=1 时**同频**，靠 `+0.9` 弧度常数与 parity=rank·π 错开相位，
+          // 所以每层画的是真椭圆（半轴 `ampPx·dxDir` × `ampPx·verticalRatio·dyDir`）
+          // 而非直线往返。出厂预设 40/42 取 directionDeg=0 ⇒ dyDir=sin(0)=0，
+          // 竖向半轴恒为 0（纯水平）；另两支（8°/12°）在近层、默认幅度、w=640
+          // 下竖向半轴只有 1.0–1.4px ⇒ 明显的大方向角要用户自己选。
+          // 代价：cycles % 5 ≠ 0 时精确的 0.8 横纵比不再保持——无缝循环优先，
+          // 理由与整引擎用 _loopU 同源。
           final dyCycles = math.max(1, (cycles * 0.8).round());
           final dyPhase =
               2 * math.pi * tSec * dyCycles / config.durationSec;

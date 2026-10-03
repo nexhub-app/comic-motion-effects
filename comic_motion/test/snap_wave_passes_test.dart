@@ -372,7 +372,7 @@ void main() {
       return m;
     }
 
-    test('standard：ph→0 与 ph→1 端点落墨归零（裸 snapWave 替换会在此红），峰前移且快起慢落', () {
+    test('standard：ph→0 与 ph→1 端点落墨归零（裸 snapWave 替换会在此红），峰前移且峰后硬切入静默', () {
       // 端点：裸 snapWave(ph)≥0.3387 ⇒ 端点仍有大 alpha（环永不淡出、环间叠死）
       // ——本断言正是 R17 窗口存在的理由。
       expect(inkAt(RenderTier.standard, 0.0005), 0.0,
@@ -393,13 +393,28 @@ void main() {
       // 端点附近显著弱于峰值（≤15%）。
       expect(inkAt(RenderTier.standard, 0.02), lessThanOrEqualTo(0.15 * peak));
       expect(inkAt(RenderTier.standard, 0.98), lessThanOrEqualTo(0.15 * peak));
-      // 非对称：峰在 ph<0.5（实测窗峰≈0.416；对称 sin(π·ph) 峰在 0.5），
-      // 上升段(0→peakPh)短于下降段(peakPh→1) ⇒ 攻击更陡、余韵更长（快起慢落）。
+      // 非对称：峰在 ph<0.5（实测窗峰=0.4157084；对称 sin(π·ph) 峰在 0.5），
+      // 上升段(0→peakPh)短于 peakPh→1 段 ⇒ 攻击更陡。
+      // **Task 3.7 清单 #2（用户裁决＝「保硬切，只改措辞」）**：peak 之后不是
+      // 慢衰减余韵——snapWave 在 ph≈0.539 进负瓣、`max(0, ·)` 把包络截成精确
+      // 0，后半段（实测 44.3% 时长）**完全无墨**。下面紧跟着的断言把这个硬切
+      // 钉成契约：措辞修好了但没有断言的措辞，下一轮重构照样会糊回去。
       expect(peakPh, greaterThanOrEqualTo(0.30));
       expect(peakPh, lessThan(0.5),
           reason: '峰应前移（snapWave 正瓣偏前），sin 窗对称会在 0.5');
       expect(peakPh, lessThan(1.0 - peakPh),
-          reason: '攻击段应短于回落到端点 0 的段（不对称）');
+          reason: '攻击段应短于峰到 ph=1 的段（不对称；该段大部分是硬切静默）');
+      // 硬切契约（1e4 密扫：env 在 ph=0.5358 跌到 5% 以下、0.5389 跌到 1% 以下，
+      // 之后恒 0）。取 0.60/0.75/0.90 三个点，避开 0.54 的边界网格。
+      for (final ph in [0.60, 0.75, 0.90]) {
+        expect(inkAt(RenderTier.standard, ph), 0.0,
+            reason: 'ph=$ph 必须零墨：standard 环闪是「起—峰—断」的硬切，'
+                '不是快起慢落（改成长尾窗口会让本条红，这是有意的）');
+      }
+      // legacy 对照：sin(π·ph) 在 ph=0.75 仍有一半以上的峰高 ⇒ 硬切只活在
+      // standard+，本文件的 tier 冻结契约没有被这次措辞修正顺手改掉的证据。
+      expect(inkAt(RenderTier.legacy, 0.75), greaterThan(0.5 * peak),
+          reason: 'legacy 后半段仍有墨（冻结为对称 sin 窗）');
 
       // 同网格跑 legacy：峰仍在 0.5±0.01（sin(π·ph) 对称，冻结证据），
       // 且 standard 的峰严格早于 legacy 的峰。
@@ -424,6 +439,104 @@ void main() {
           equals(render(img, rcfg(RenderTier.standard), 0.7).data));
       expect(render(img, rcfg(RenderTier.standard), 0.0).data,
           equals(render(img, rcfg(RenderTier.standard), duration).data));
+    });
+  });
+
+  // ---------- 5) Task 3.7 清单 #3：speedLines 的**同档形状**判别式 ----------
+  //
+  // 本文件此前的 speedLines 断言都是「standard ≠ legacy」的粗判：任何一处差异
+  // （AA、screen 混合、极性…）都能让它绿，所以「把 standard 的载体悄悄改回
+  // sin」不会被抓到。这条**只测 standard 一条臂**，从渲染像素里量出脉冲形状，
+  // 门的是形状本身而不是公式：
+  //   量具 = 与「不画速度线」的同档同 seed 静帧的逐字节绝对差之和（SAD），
+  //   在 u∈[0,1) 上取 800 个均匀采样（分辨率 1/800=0.00125）。
+  //   场景钉 count=1 / pulses=1 ⇒ 整圈只有一个脉冲、一条线，形状不被随机相位
+  //   的多条线卷积糊平（count=48/pulses=4 时 nz 恒为 1.0，判别力归零）。
+  // 实测反例（同一量具、同一场景，legacy 臂 = 冻结的 `sin(2π·(u+phase))` 载体）：
+  //   legacy   nz=0.4125 halfW=0.2100 atk=0.0938 dec=0.1175（atk/dec=0.798）
+  //   standard nz=0.5175 halfW=0.2450 atk=0.0512 dec=0.0725（atk/dec=0.706）
+  // ⇒ 三个特征各自都要在载体回退成 sin 时红：nz 与 halfW 落在 legacy 值之外，
+  // 攻击/回落比也越过 0.78 上界。阈值取「实测值 ± 一个采样格」的松量，不贴边。
+  group('Task 3.7 #3：speedLines standard 脉冲形状（同档判别，防悄悄回退成 sin）', () {
+    int sadSum(RgbaImage a, RgbaImage b) {
+      var n = 0;
+      for (var i = 0; i < a.width * a.height * 4; i++) {
+        n += (a.data[i] - b.data[i]).abs();
+      }
+      return n;
+    }
+
+    const steps = 800;
+
+    /// 返回 (非零占比, 半高宽, 攻击段长, 回落段长)，单位都是「循环比例」。
+    (double, double, double, double) pulseShape(RenderTier tier) {
+      final scene = grad2D();
+      EffectConfig cfg({int count = 1}) => EffectConfig(
+          effects: const [EffectKind.speedLines],
+          fps: 8,
+          durationSec: 2,
+          seed: 41,
+          speedLines: SpeedLinesParams(count: count, pulses: 1),
+          quality: QualityParams(tier: tier));
+      // 基线取同档、同 seed、count=0 的静帧 ⇒ SAD 里不含 AA/极性差，只剩脉冲。
+      final base = render(scene, cfg(count: 0), 0.0);
+      final v = List<int>.generate(
+          steps, (i) => sadSum(render(scene, cfg(), i / steps * 2.0), base));
+      var peak = 0, peakI = 0;
+      for (var i = 0; i < steps; i++) {
+        if (v[i] > peak) {
+          peak = v[i];
+          peakI = i;
+        }
+      }
+      expect(peak, greaterThan(0), reason: '$tier 必须真的画出速度线');
+      final half = peak ~/ 2;
+      var nz = 0, above = 0;
+      for (final x in v) {
+        if (x > 0) nz++;
+        if (x >= half) above++;
+      }
+      // 峰两侧各自走到半高（环形回绕，避开峰贴边时越界）。
+      var left = peakI, right = peakI;
+      while (v[left] >= half) {
+        left = (left - 1 + steps) % steps;
+      }
+      while (v[right] >= half) {
+        right = (right + 1) % steps;
+      }
+      double f(int k) => k / steps;
+      return (
+        f(nz),
+        f(above),
+        f((peakI - left + steps) % steps),
+        f((right - peakI + steps) % steps)
+      );
+    }
+
+    test('单脉冲占空比 ≈ snapWave 正瓣（0.539），远宽于整流 sin 的 0.5', () {
+      final (nz, halfW, atk, dec) = pulseShape(RenderTier.standard);
+      // 整流 sin 的实测是 0.4125（含 pulse<=0.02 的削顶）：下界 0.47 把它挡住。
+      expect(nz, inInclusiveRange(0.47, 0.56),
+          reason: 'standard 非零占比实测 $nz —— snapWave 正瓣占 0.539 个循环，'
+              '回退成 sin 会掉到 0.4125（legacy 实测）');
+      expect(halfW, inInclusiveRange(0.22, 0.27),
+          reason: '半高宽实测 $halfW（legacy 0.2100）');
+      expect(atk, lessThan(dec),
+          reason: '攻击段（$atk）必须短于回落段（$dec）：快起慢收的方向性');
+      expect(atk / dec, lessThanOrEqualTo(0.78),
+          reason: '不对称度实测 ${(atk / dec).toStringAsFixed(3)}，'
+              'legacy 的 sin 载体是 0.798 ⇒ 上界卡在两者之间');
+    });
+
+    test('判别式本身非空洞：同形状的 legacy 臂落在窗口之外', () {
+      // 这条不新增契约，只是把上面那些阈值的**来源**钉住：legacy 臂（冻结的
+      // sin 载体）用同一量具量出来必须被 nz 下界挡在外面。若哪天两条臂量出
+      // 同一个形状，说明 standard 已经悄悄退化成 sin——上面红、这里也红。
+      final (nz, halfW, atk, dec) = pulseShape(RenderTier.legacy);
+      expect(nz, lessThan(0.47),
+          reason: 'legacy 非零占比实测 $nz 必须留在 standard 窗口下方');
+      expect(halfW, lessThan(0.22));
+      expect(atk / dec, greaterThan(0.78));
     });
   });
 }

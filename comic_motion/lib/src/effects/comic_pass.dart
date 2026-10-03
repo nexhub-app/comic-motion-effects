@@ -105,7 +105,13 @@ class _ShakeBurst {
 /// Task 3.4（R17）：standard 档环闪包络用 snapWave 整流后乘 `sin(π·ph)`
 /// 窗——窗不可省：snapWave(u) 恒 ≥0.3387 于 u=0（非零起点），裸替换会让环
 /// 永不淡出（端点弹出/环间叠死）；乘窗保证 ph→0 与 ph→1 两端仍精确归零，
-/// 同时正瓣偏前（峰 ph≈0.416）给出 §6.2 快起慢落的打击感。
+/// 同时正瓣偏前（实测峰 ph=0.4157084 → env=1.0）。
+/// **形状口径（Task 3.7 清单 #2，用户裁决＝「保硬切，只改措辞」）**：ph≈0.539
+/// 处 snapWave 进负瓣，`max(0.0, ·)` 把 env 截成**精确 0**，此后一直到 ph=1
+/// 全段静默（密扫 1e4：env<1% 占脉冲 **44.3%** 时长，5% 阈在 ph=0.5358）。
+/// 所以这是「起—峰—断」的漫画硬切，**不是**快起慢落的余韵；旧措辞在此前
+/// 承诺了一个代码不产出的形状，现在改成实测形态。保留硬切的理由：硬零正是
+/// §6.2「出手猛」的来源，把尾窗拉成长衰减会把它重新糊成 v1.3 的柔光。
 /// C = 该乘积的实测峰值（1e8 密扫 + 黄金分割精化，ph≈0.4157084284868357 处
 /// max = 0.6933307478007389），除归一后 standard 峰值 env≈1.0。const，
 /// 与 `_peak` 同法：不逐调用寻峰。
@@ -135,7 +141,9 @@ void _renderImpactRings(FrameCompositor c, RgbaImage frame, double tSec) {
     final e = 1.0 - math.pow(1.0 - ph, 3); // easeOutCubic：出手快、收尾缓
     final rad = rIn + (rOut - rIn) * e * rg.radJit;
     // Task 3.4（§6.2/R17）：一次性淡入淡出不是周期载体——standard 用
-    // 「整流 snapWave × sin(π·ph) 窗 ÷ 实测峰」做快起慢落闪光；legacy 冻结。
+    // 「整流 snapWave × sin(π·ph) 窗 ÷ 实测峰」：ph∈[0, 0.539) 发光、峰在
+    // 0.4157，ph∈[0.539, 1] **恒为 0**（负瓣被 max 截掉，占脉冲 44.3%）。
+    // 硬切而非衰减，见本文件顶部 `_ringSnapWindowPeak` 的形状口径。legacy 冻结。
     final env = aa
         ? math.max(0.0, snapWave(ph)) * math.sin(math.pi * ph) / _ringSnapWindowPeak
         : math.sin(math.pi * ph);

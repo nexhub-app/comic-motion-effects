@@ -1105,12 +1105,14 @@ class QualityParams {
   /// 传 `dither: true`（或 JSON `"dither": true`）即可开回 sierra/floyd。
   final bool dither;
 
-  /// 抖动核：sierra（v1.4 默认核，更柔和）| floyd（v1.2 行为）。仅在
+  /// 抖动核：sierra（**启用抖动时的**默认核，更柔和）| floyd（v1.2 行为）。仅在
   /// `dither == true` 且 standard+ 档时才是活的（R38 后默认 dither 关闭 ⇒
   /// 本键默认惰性，值保持不变）。
   final String ditherMode;
 
-  /// 渲染档位；v1.4 起默认 standard，legacy 仍供显式选择并逐字节冻结 v1.2。
+  /// 渲染档位；v1.4 起默认 standard。`legacy` 冻结的是 v1.2 的**像素算法**，
+  /// 不再是「输出与 v1.2 逐字节一致」的承诺（H2：R18/R19 改时间基、R16 改相位，
+  /// 三者不受档位门控）。
   final RenderTier tier;
 
   /// 层栅格预建的 mipmap 级数（1..2），供 scale<1 的面积平均取样。
@@ -1391,11 +1393,14 @@ class EffectConfig {
   /// 情绪包络（v1.3）：仅当 `effects` 含 moodScript 时生效并序列化。
   MoodScriptParams moodScript;
 
-  /// 渲染质量（v1.2 引入 GIF 抖动）。v1.4 起默认 ditherMode=sierra +
-  /// tier=standard（R24），但 **dither 默认关闭**（R38：误差扩散把 GIF 字节
-  /// 乘 2.2–2.4×，对 flat-ink + 线稿语料不值；锐度来自 standard 档而非抖动）。
+  /// 渲染质量（v1.2 引入 GIF 抖动）。v1.4 起 tier 默认 standard、
+  /// `ditherMode` 的默认值是 sierra（R24），但 **dither 默认关闭**（R38：误差
+  /// 扩散把 GIF 字节乘 2.2–2.4×，对 flat-ink + 线稿语料不值；锐度来自 standard
+  /// 档而非抖动）⇒ 出厂产物两核都不生效，`ditherMode` 只在显式开抖动时才决定
+  /// 用哪个核。
   /// JSON 缺键兜底与省略哨兵、toJson 逐键省略、param_catalog 声明值同源（R32/R38）；
-  /// 「与 v1.2 逐字节一致」的 legacy 档仍需**显式**选择（`tier: legacy` /
+  /// v1.4 起 `legacy` 的含义是「旧像素算法」而非「与 v1.2 逐字节一致」（H2），
+  /// 但它仍需**显式**选择（`tier: legacy` /
   /// JSON `"tier":"legacy"`），且显式写出后能无损往返。
   QualityParams quality;
 
@@ -1787,7 +1792,7 @@ class EffectConfig {
       maxFrames: (j['maxFrames'] as num?)?.toInt() ?? 96,
       reducedMotion: j['reducedMotion'] == true,
       // R39（三源锁步第三源，写法与下面 contentAware 逐字同构）：缺键与显式
-      // null 都是「没说说过」⇒ 落新默认 true；显式 false 与非 bool 值仍
+      // null 都是「没说过」⇒ 落新默认 true；显式 false 与非 bool 值仍
       // sanitize 成 false——sanitize **方向**与翻转前一致（旧 `== true` 一直把
       // 非 bool 折成 false），本次只翻默认值。写成 `!= false` 会让 'yes' / 1
       // 静默变成「要求开启」，那是把垃圾输入当授权。

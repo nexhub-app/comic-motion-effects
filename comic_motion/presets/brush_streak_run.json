@@ -33,10 +33,6 @@
     "gapFreq": 0.12,
     "opacity": 0.42
   },
-  "quality": {
-    "dither": false,
-    "tier": "standard"
-  },
   "fps": 12,
   "durationSec": 3.0,
   "depthMode": "autoLayers",

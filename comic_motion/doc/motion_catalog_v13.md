@@ -2,7 +2,7 @@
 
 > 载体：comic-motion-backend 纯 Dart 动效引擎。本轮三条主张：**把漫画的分镜语言做成动效**（集中线/网点/波环/笔触/震动）、**把自然现象再补五种**（火/烟/泡/叶/流星）、**把「什么时候该重、什么时候该轻」抽成一条可编排的曲线**（`moodScript`）。质量与性能是这三条主张的前提，不是并列目标。
 >
-> 硬承诺（全部实测，非设计意图）：默认/经典配置的 `configHash` 未变，输出字节与 v1.2 轮冻结的基线逐字节一致（v1.3 复跑 10/10；该基线在 v1.2 轮文档中已记录为与 v1.0.0 输出一致，本轮未对 v1.0.0 产物直接复测）；`moodScript.strength=0` 与不挂该效果逐字节等价；`--parallel n` 只改耗时不改字节。
+> 硬承诺（全部实测，非设计意图）：默认/经典配置的 `configHash` 未变，输出字节与 v1.2 轮冻结的基线逐字节一致（v1.3 复跑 10/10；该基线在 v1.2 轮文档中已记录为与 v1.0.0 输出一致，本轮未对 v1.0.0 产物直接复测）；`moodScript.strength=0` 与不挂该效果逐字节等价；`--parallel n` 只改耗时不改字节。**注（v1.4.0）**：本段的跨版本字节口径是 v1.3 轮的历史记录——v1.4 起 `legacy` 只冻结像素算法（H2），默认值亦就地改动（H1），详见 `CHANGELOG.md` 1.4.0 段与 `comic_motion_server/docs/deploy.md` §二。
 
 ## 一、v1.3 新增动效（11 个，全部整循环无缝 + 独立随机流 + 可个开关）
 
@@ -55,7 +55,7 @@
 | Q6 | 分层质量 | 深度双线性上采样 + `featherPx` 掩码羽化 + 层边缘外扩 `edgeStretchPx` | standard+ | 一次性 +150~250ms | ✅ |
 | Q7 | GIF 量化 | 5-5-5 定长 LUT（32768 项）+ 首/中/末三帧调色板采样 + `sierra` | standard+（LUT） | 负成本 | ✅ |
 | Q8 | IO 批量化 | `Image.fromBytes`/`getBytes`，PNG 编码进 worker | 全档 | 负成本 | ✅ |
-| Q9 | 档位分级 | `RenderTier legacy/standard/rich`，legacy 逐字节复现 v1.2 | — | — | ⚠ **`rich` 当前与 `standard` 等价**：`RenderTier.supersample` 与 `QualityParams.mipLevels` 已定义无消费方 |
+| Q9 | 档位分级 | `RenderTier legacy/standard/rich`，legacy 逐字节复现 v1.2（**本文档口径，v1.4 起废止**：legacy 只冻结像素算法，H2） | — | — | ⚠ **`rich` 当前与 `standard` 等价**：`RenderTier.supersample` 与 `QualityParams.mipLevels` 已定义无消费方 |
 
 ## 四、性能实测（`dart run tool/bench.dart`，2026-09-19，同机 18 核，JIT 预热后二跑）
 
@@ -80,10 +80,10 @@
 | 按个关闭 | effects 列表增删 | `--effects parallax,breathing` | 单个动效 |
 | 只关调制 | 包络强度归零 | `"moodScript": {"strength": 0}` | 编排层（逐字节等价） |
 | 只回画质 | 渲染档位 | `--quality legacy` | 像素通路（保留新动效） |
-| 整体关闭 | 经典预设 | `--config presets/classic.json` | 全部（等价 v1.2 基线的经典行为） |
+| 整体关闭 | 经典预设 | `--config presets/classic.json` | 全部（等价 v1.2 基线的经典行为；**v1.4 起废止**：classic 只钉效果列表与 §6.1 后的新默认值，不写 `quality` 段 ⇒ 跟随 standard。行为级回滚改走 `presets/legacy_v1.0.json`，见 `deploy.md` §二） |
 
-- 序列化：11 个新参数段与 `moodScript` 一律 `if (effects.contains(X))` 条件写入；`quality` 段全默认时整段不写。锁定指纹：`default = -477687d5e8bded5f`、`demo_640 / classic = 2e1a45e07164337e`。
-- 回滚演练（2026-09-19 复跑）：classic 配置跑 10 张样图（`parallel=4`）→ 输出 GIF 的 SHA256 与 `build/rollback_baseline/hashes.txt`（2026-09-14 采集、v1.2 轮冻结）**10/10 逐字节一致**（明细 `build/rollback_v13_drill/hashes.txt`）；帧序列对照 `build/v12_baseline/`（36 帧 + `anim.gif` + `params.json` 共 38 个文件全一致）。同一次演练同时证明并行与串行逐字节一致。
+- 序列化：11 个新参数段与 `moodScript` 一律 `if (effects.contains(X))` 条件写入；`quality` 段全默认时整段不写。锁定指纹（**v1.3 及以前的取值**，v1.4.0 唯一一次 re-baseline 后已改锚，当前值见 `comic_motion_server/docs/deploy.md` §二）：`default = -477687d5e8bded5f`、`demo_640 / classic = 2e1a45e07164337e`。
+- 回滚演练（2026-09-19 复跑，**v1.3 轮的历史结果**）：classic 配置跑 10 张样图（`parallel=4`）→ 输出 GIF 的 SHA256 与 `build/rollback_baseline/hashes.txt`（2026-09-14 采集、v1.2 轮冻结）**10/10 逐字节一致**（明细 `build/rollback_v13_drill/hashes.txt`）；帧序列对照 `build/v12_baseline/`（36 帧 + `anim.gif` + `params.json` 共 38 个文件全一致）。同一次演练同时证明并行与串行逐字节一致。**v1.4 起该演练对 v1.2 基线为 0/10**（H2：`legacy` 只冻结像素算法，而 R16/R18/R19 改的是两条臂共用的时间基与相位常数），逐字节契约改读「同版本内确定性」；并行=串行的一致性仍然成立。
 - 收回**不依赖 git**：本目录确实是 git 仓库（根 = `comic-motion-backend/`，且有 `v1.0.0`~`v1.2.0` 标签），但那三个标签所在的提交线与当前分支 `main` **没有共同祖先**，切标签只会得到 detached HEAD，合不回新分支；v1.3 的改动此前也全部未提交。所以四层收回一律走上面的配置开关，逐字节一致性由 §五的演练证明。
 
 ## 六、时间戳台账

@@ -96,7 +96,8 @@ void _spanSums(Uint8List src, int base, int i0, int i1, double a, double b,
 
 /// 把 [srcData]（sw×sh 的 RGBA 栅格）按 [scale] 与位移 (dx,dy) 逆映射贴进 [dst]。
 ///
-/// [tier] 为 legacy 时逐字节复现 v1.2；standard+ 走 Catmull-Rom。
+/// [tier] 为 legacy 时沿用 v1.2 的重采样算法（双线性/最近邻，取整逐字节不变）；
+/// standard+ 走 Catmull-Rom。
 /// [clip]（画布坐标）：目标像素钳制矩形——只有矩形内的画布像素会被
 /// 写入（分格感知层的格边界裁剪）；null = 全画布，循环范围与旧实现相同
 /// （既有路径逐字节零变化）。

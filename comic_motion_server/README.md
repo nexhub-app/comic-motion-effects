@@ -39,12 +39,12 @@ dependencies:
 | `--seed` | 20260914 | 确定性随机种子（同 seed + 同参数 ⇒ 同输出） |
 | `--max-dimension` | 1600 | 工作分辨率上限（自动降采样） |
 | `--format` | both | `gif` \| `frames` \| `both` |
-| `--amplitude` | 0.012 | 视差幅度（占图宽比例） |
-| `--direction` | 0 | 视差主方向（度，0=水平） |
+| `--amplitude` | 未传 ⇒ 引擎默认 | 视差幅度（占图宽比例）；v1.4 起引擎默认 `0.030`（H1，原 0.012） |
+| `--direction` | 未传 ⇒ 引擎默认 | 视差主方向（度，0=水平） |
 | `--effects` | parallax,breathing,ambient | 动效组合，逗号分隔 |
 | `--config` | — | 复用 `params.json` 或预设 JSON 回放参数 |
-| `--quality` | legacy | 渲染档 `legacy` \| `standard` \| `rich`（定义见引擎 README） |
-| `--dither` / `--no-dither` | 关 | GIF 误差扩散抖动，减轻 256 色色带 |
+| `--quality` | 未传 ⇒ 引擎默认 `standard` | 渲染档 `legacy` \| `standard` \| `rich`（定义见引擎 README；v1.4 起默认 standard，`legacy` 是旧像素算法而非字节承诺） |
+| `--dither` / `--no-dither` | 关 | GIF 误差扩散抖动，减轻 256 色色带；R38 起默认关（GIF 字节 ×2.2–2.4） |
 | `--parallel` | auto | 帧渲染并行 isolate 数（`auto` = min(8, 核数)，`1` = 串行） |
 | `--reduced-motion` | — | 减弱动态：输出单帧静态图 |
 

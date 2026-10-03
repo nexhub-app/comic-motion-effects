@@ -23,7 +23,7 @@ Future<void> main(List<String> args) async {
     ..addOption('config', abbr: 'c', help: '效果参数 JSON 文件路径')
     ..addOption('fps', defaultsTo: '24', help: '帧率')
     ..addOption('duration', defaultsTo: '4.0', help: '时长(秒)')
-    ..addOption('amplitude', help: '视差幅度(占宽度比例, 如 0.012)')
+    ..addOption('amplitude', help: '视差幅度(占宽度比例, 引擎默认 0.030)')
     ..addOption('direction', help: '视差主方向(度)')
     ..addOption('layers', defaultsTo: '3', help: '层数 2-4')
     ..addOption('format', defaultsTo: 'both', help: 'gif|frames|both')
@@ -35,7 +35,7 @@ Future<void> main(List<String> args) async {
         negatable: true,
         defaultsTo: null,
         help: 'GIF 色带抖动（默认关；抖动核走配置 quality.ditherMode）')
-    ..addOption('quality', help: '渲染档 legacy|standard|rich（legacy 逐字节复现 v1.2）')
+    ..addOption('quality', help: '渲染档 legacy|standard|rich（不传则跟随引擎默认 standard；legacy = 旧像素算法，非字节复现承诺）')
     ..addOption('parallel',
         defaultsTo: 'auto',
         help: '帧渲染并行 isolate 数：auto 或正整数（1=串行）。只影响耗时，不影响输出字节')

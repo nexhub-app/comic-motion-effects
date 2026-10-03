@@ -13,7 +13,7 @@ sequences.
   Only runtime dependency: the `image` package.
 - Byte-for-byte reproducible output for the same seed + parameters
   (deterministic random seed + configHash)
-- 32 composable effects + 38 built-in presets
+- 32 composable effects + 42 built-in presets
 - Multi-isolate parallel frame rendering: affects wall time only, never the
   output bytes
 
@@ -419,8 +419,10 @@ The budget model is a deliberately conservative heuristic (working pixels ×
 layer count + safety factor): degrade early rather than OOM. When the budget
 shrinks the working resolution the output pixels change with it — the result
 is not byte-identical to an unbudgeted run, but the same budget + same input
-still reproduces deterministically. Without `memoryBudgetMb` the pixel path
-is untouched and the legacy byte-identity contract holds.
+still reproduces deterministically. Without `memoryBudgetMb` the pixel path is
+untouched and output stays byte-stable for the chosen tier (v1.4 narrowed the
+`legacy` promise to the old *drawing algorithm* — see "Reproduction promise and
+boundaries"; determinism itself is unchanged).
 
 ### GIF playback in Flutter (consumption guide)
 
@@ -514,19 +516,29 @@ Corrupted / disguised files take these error paths:
 
 | Tier | Contents | Purpose |
 |---|---|---|
-| `legacy` (default) | v1.2 draw + encode paths | **Byte-identical** with historical output; the rollback carrier |
-| `standard` | Anti-aliased raster primitives, box-average / Catmull-Rom resampling, screen light blending, smoothed depth upsample + feathered masks, layer edge stretch, GIF quantize LUT (optional sierra dither kernel) | Everyday rendering |
+| `standard` (default since v1.4) | Anti-aliased raster primitives, box-average / Catmull-Rom resampling, screen light blending, smoothed depth upsample + feathered masks, layer edge stretch, GIF quantize LUT (error-diffusion kernel selectable, **off by default** since R38) | Everyday rendering |
+| `legacy` | The **old pixel algorithm**: no AA, bilinear/nearest resampling, plain source-over ink, v1.2 draw path | Rollback carrier for the *look*, not a byte promise — see the reproduction promise below (H2) |
 | `rich` | **Byte-identical to `standard` today** — the reserved `supersample` / `mipLevels` knobs have no consumer yet (known deviation) | Deprecated: pick `standard` instead; `"tier": "rich"` in JSON still resolves to this tier (deprecation ≠ removal) |
 
-Tiers only change the pixel path, never the effect list; `legacy` and
-`presets/classic.json` are two independent rollback switches. The `sierra`
-dither kernel requires `dither: true` + `quality.ditherMode: "sierra"` + a
-non-legacy tier, all three at once.
+Tiers only change the pixel path, never the effect list. `legacy` (the old
+pixel algorithm) and `presets/legacy_v1.0.json` (the v1.0.0 *numbers* with
+`tier: legacy` pinned) are two independent rollback switches — and both are
+behavior-level, since v1.4 narrowed what `legacy` freezes (H2 / R46b). The
+`sierra` dither kernel requires `dither: true` + `quality.ditherMode: "sierra"`
++ a non-legacy tier, all three at once; since R38 the first of those is off by
+default, so out of the box neither kernel runs and `ditherMode` is dormant.
 
 ## Reproduction promise and boundaries
 
-Same seed + same parameters produce **byte-identical** output; the `legacy`
-tier is byte-identical with v1.2 (rollback promise). Boundaries:
+Same seed + same parameters produce **byte-identical** output. What each tier
+promises (v1.4, H2): within a release, any tier is byte-stable; `legacy`
+reproduces the v1.2 *drawing algorithm* but is **no longer byte-identical with
+v1.2 output**, because two loop-closure fixes rewrite the time base on *both*
+arms — the period snap to an integer number of cycles (R18) and the integer
+vertical cycle count (R19) — plus the anti-phase layer stepping (R16). The
+rollback drill on `presets/classic.json` therefore reports 0/10 against the
+2026-09-14 v1.2 baseline, and that is the sanctioned, documented state rather
+than a regression. Boundaries:
 
 - **Dependency versions**: GIF/PNG encoding is delegated to the `image`
   package; byte-level reproducibility holds for the `image` range pinned in
@@ -577,22 +589,37 @@ effect to its preview path for programmatic access.
 
 ## Built-in presets (presets/)
 
-38 ready-made parameter sets, loadable via `EffectConfig.fromJson` (or
+42 ready-made parameter sets, loadable via `EffectConfig.fromJson` (or
 `--config` on the CLI):
 
 | Group | Count | Notes |
 |---|---|---|
-| `classic` | 1 | Core trio + legacy tier + no dither; byte-reproduces v1.2 |
-| v1.1/v1.2 single effects (legacy) | 16 | rain / snow / fog / embers / lightning / fireflies / godRays / starlight / shimmer / heartbeat / impact_duel / sakura / speedlines / slowpush / vignette / toneshift |
+| `classic` | 1 | Core trio only. Carries **no `quality` segment**, so it follows the shipping default tier (standard since v1.4) and the v1.4 amplitudes — it is *not* the v1.2 byte rollback carrier any more |
+| v1.1/v1.2-era single effects | 16 | rain / snow / fog / embers / lightning / fireflies / godRays / starlight / shimmer / heartbeat / impact_duel / sakura / speedlines / slowpush / vignette / toneshift |
 | dither comparison | 1 | `dither_compare_forest` (the only `dither: true` preset) |
-| v1.2 combos (legacy) | 5 | combo_campfire / full_action / rain_lanterns / sakura_light / storm_night |
-| v1.3 single effects (standard) | 10 | focus_lines / screen_tone / manga_shake / impact_burst / brush_streak / flame / smoke / bubbles / leaves / meteors |
+| v1.2-era combos | 5 | combo_campfire / full_action / rain_lanterns / sakura_light / storm_night |
+| v1.3 single effects | 10 | focus_lines / screen_tone / manga_shake / impact_burst / brush_streak / flame / smoke / bubbles / leaves / meteors |
 | v1.3 mood envelopes | 2 | `mood_tension_build`, `mood_burst_impact` |
 | v1.3 combos (standard) | 3 | combo_manga_impact / night_battle / peaceful_evening |
+| showcase bases | 3 | `classic_base` / `dust_motes` / `light_sweep_hall` — the single-source fixtures `tool/generate_showcase.dart` renders previews from; usable as configs too |
+| v1.0.0 rollback anchor | 1 | `legacy_v1.0.json` — v1.0.0 *numbers* (amplitude 0.012 / breathing 0.006 / ambient 0.16, 12fps, 640px, 96 frames) with `tier: legacy` + `dither: false` + both placement gates off, all written explicitly. **Behavior-level** rollback, not byte-level (R40 / R46b): `durationSec` is 6.0 rather than v1.0.0's 3.0, because only 6.0 represents `parallax.periodSec 6.0` exactly under the integer-period rule. Its `configHash` is pinned by a dedicated test |
 
-The 37 showcase presets are generated by `tool/generate_showcase.dart` as the
+"v1.1/v1.2-era" / "v1.3" in the group names above date the **effect list**, not
+the render tier. Only `legacy_v1.0.json` writes a `tier` at all — the other 41
+write no tier and therefore render at the shipping default, which is `standard`
+since v1.4 (H1); the one exception inside that group is
+`dither_compare_forest.json`, which writes `"dither": true` and no tier. The
+showcase presets were re-emitted by `tool/generate_showcase.dart` under the
+"omit a key equal to its default" idiom, so their whole `quality` segment is now
+elided (15 files lost 4 lines each; rendering semantics unchanged). Pin
+`"tier": "legacy"` in the JSON (or load `legacy_v1.0.json`) to keep the old
+algorithm; `contentAware` / `panelAware` are unpinned everywhere except
+`legacy_v1.0.json`, so both placement gates are on out of the box (R30 / R39).
+
+The 40 showcase presets are generated by `tool/generate_showcase.dart` as the
 single source of truth — edit the generator, not the JSON (regeneration
-would overwrite it).
+would overwrite it). `classic.json` and the `legacy_v1.0.json` rollback anchor
+are not part of that demo set.
 
 ## Project layout
 
@@ -627,7 +654,7 @@ lib/
     effects/
       comic_pass.dart      # draw path for manga-dynamics effects
       particle_raster_pass.dart  # unified raster path for particle effects
-presets/                   # 38 built-in presets
+presets/                   # 42 built-in presets
 sample_images/             # 10 placeholder samples
 tool/                      # sample/smoke/showcase/bench/gif-check scripts
 test/engine_test.dart      # engine + config tests
@@ -652,22 +679,63 @@ recorded (ledger is optional for embedders and size-rotating).
 
 ## Performance reference
 
-Measured by `tool/bench.dart` on a 1080p sample (`build/bench/bench_report.json`,
-parallel=8):
+Measured by `tool/bench.dart` on `sample_images/01_portrait.png` (900×1300),
+engine 1.4.0, parallel=8, **median of 3 runs** (2026-10-03; the last run's
+detail is in `build/bench/bench_report.json`). Peak RSS is the process
+high-water mark, so the later rows of a run share one value rather than being
+independent measurements.
 
 | Scenario | Effects | Tier | Time | Peak RSS | Red line |
 |---|---|---|---|---|---|
-| 480p / 12fps / 2s (draft) | 3 | legacy | 233 ms | 377 MB | ≤450 ms ✅ |
-| 1080p / 24fps / 4s (typical) | 3 | legacy | 2.25 s | 534 MB | ≤5 s ✅ |
-| 1600 / 24fps / 4s (preview cap) | 3 | legacy | 3.49 s | 607 MB | ≤7 s ✅ |
-| 1080p standard tier | 3 | standard | 4.26 s | 607 MB | — |
-| 1080p all effects (worst case) | 32 | standard | 5.20 s | 628 MB | ≤9 s ✅ |
+| 480p / 12fps / 2s (draft) | 3 | legacy | 301 ms | 389 MB | ≤450 ms ✅ |
+| 1080p / 24fps / 4s (typical) | 3 | legacy | 2.61 s | 554 MB | ≤5 s ✅ |
+| 1600 / 24fps / 4s (preview cap) | 3 | legacy | 3.73 s | 643 MB | ≤7 s ✅ |
+| 1600 / 24fps / 4s — **shipping default tier** | 3 | standard (engine default) | 5.66 s | 647 MB | ≤7 s ✅ |
+| 1080p / 24fps / 4s standard | 3 | standard | 3.95 s | 647 MB | — |
+| 1080p / 24fps / 4s, 19 effects (v1.2 floor) | 19 | legacy | 3.05 s | 647 MB | — |
+| 1080p / 24fps / 4s, 19 effects, rich | 19 | rich | 4.24 s | 647 MB | — |
+| 1080p all effects (worst case) | 32 | standard | 5.14 s | 647 MB | ≤9 s ✅ |
 
-Parallelism scan (standard tier, 1080p, 96 frames, core trio): `1 → 16.67 s`,
-`2 → 9.45 s`, `4 → 6.08 s`, `8 → 4.77 s`; all four GIFs **byte-identical**;
-`parallel=1` peaks at 628 MB (red line 780 MB). Reproducibility: identical
-SHA256/FNV-1a across runs; legacy tier byte-identical with v1.2
-(`presets/classic.json` drill passed).
+Parallelism scan (standard tier, 1080p, 96 frames, core trio): `1 → 13.66 s`,
+`2 → 8.95 s`, `4 → 5.62 s`, `8 → 4.02 s`; all four GIFs **byte-identical**
+(FNV `-287a4af0a4b1fe73`); `parallel=1` peaks at 647 MB (red line 780 MB).
+Reproducibility: the bench GIF digested to `1d8b6c35a0a57643` in all three
+runs, and changing a parameter still changes the digest (sensitivity gate).
+The legacy-tier rows are measured with `tier: legacy` pinned and are kept as
+the historical floor — v1.4 ships standard, so read the standard rows for
+out-of-box cost (the default-tier row is the one to plan against: **+52%**
+over legacy at the 1600 cap). The v1.2 *byte* reproduction drill is no longer
+green by design (see "Reproduction promise and boundaries": classic drill 0/10
+since H2/R46b); `presets/legacy_v1.0.json` is the behavior-level rollback
+anchor instead.
+
+**Multi-panel input costs more than the corpus placeholder, and breaches two
+red lines.** A real two-panel page (1800×2600, built by nearest-neighbour ×2
+upscale of `sample_images/03_two_panel.png`, staged at
+`build/bench/in_twopanel_1800x2600.png`) run through the same scenarios:
+
+| Scenario | Effects | Tier | Time | Peak RSS | Red line |
+|---|---|---|---|---|---|
+| 1600 / 24fps / 4s — **shipping default tier** | 3 | standard (engine default) | 8.17 s | 1033 MB | ❌ >7 s (2 of 3 runs; 6.57 s passed once) |
+| 1600 / 24fps / 4s, legacy | 3 | legacy | 5.40 s | 1023 MB | ≤7 s ✅ |
+| `parallel=1` serial sweep | 3 | standard | 11.57 s | 1033 MB | ❌ >780 MB (all 3 runs) |
+| 1080p all effects | 32 | standard | 4.47 s | 1033 MB | ≤9 s ✅ |
+
+Per-panel layering (`panelAware`, on by default since R39) keeps a layer raster
+per panel, so peak RSS grows with panel count rather than only with working
+pixels — 1033 MB versus 647 MB on the single-page sample at the same
+`maxDimension`. Thresholds were **not** moved to accommodate this. Practical
+consequences: on comic strips / multi-panel pages at the 1600 cap, pass
+`memoryBudgetMb` (the budget path degrades working resolution before OOM and
+records a warning) or drop `maxDimension` to ≤1080; and treat `parallel=1` on
+such a page as out of spec for the 780 MB serial line (use ≥2 workers, where
+the 1150 MB line holds: `2 → 6.74 s`, `4 → 4.56 s`, `8 → 3.37 s`). Determinism
+is unaffected on this input either: its bench GIF digested to `647695f0b0644120`
+in all three runs and the whole parallel sweep produced one identical byte
+stream (`-65ae766127adf731`), serial included. One further one-off breach on
+that input: the draft row hit 531 ms > 450 ms in one of the three runs (373 ms
+and 390 ms in the other two) — run-to-run jitter, and no threshold was moved
+for it.
 
 ### Mobile reference ranges (rough)
 
@@ -716,6 +784,27 @@ release, then removed in the next major version. Structured exception codes
 (`E_*`) are stable identifiers — new codes may appear, existing codes never
 change meaning. v1.3.0 predates this policy (its breaking change of
 `RgbaImage.data` without a deprecation cycle is the case that motivates it).
+
+**v1.4.0 ships two deliberate breaking changes** (both approved as product
+decisions, not API oversights — see `CHANGELOG.md`):
+
+- **H1 — shipping defaults changed in place**, no new keys and no migration
+  path: `quality.tier` `legacy → standard`, `contentAware` `false → true`,
+  `panelAware` `false → true`, `parallax.amplitude` `0.012 → 0.030` (and the
+  matching amplitude raises), while `dither` went back to `false`. Existing
+  configs that *pin* a value are untouched — only unpinned configs move.
+  Because the default config's serialized shape never changed (equal-to-default
+  keys stay omitted), this moves no JSON schema; it moves the bytes each
+  config renders to, hence the one-off `configHash` re-baseline in this release.
+- **H2 — the meaning of `legacy` narrowed** from "byte-identical with v1.2" to
+  "the v1.2 *pixel algorithm*". Seamless-loop fixes that rewrite the time base
+  apply to both arms (integer period snap R18, integer vertical cycles R19) and
+  the anti-phase layer stepping (R16) is a phase constant, not a pixel
+  algorithm — so `legacy` output no longer replays the 2026-09-14 v1.2
+  baseline (the drill reports 0/10 and that is the documented state).
+  `presets/legacy_v1.0.json` is the rollback file to reach for: v1.0.0 numbers
+  + `tier: legacy` + both placement gates off, behavior-level rather than
+  byte-level (R46b).
 
 ## License
 

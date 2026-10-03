@@ -41,10 +41,6 @@
     "opacity": 0.55,
     "mode": "shock"
   },
-  "quality": {
-    "dither": false,
-    "tier": "standard"
-  },
   "fps": 12,
   "durationSec": 3.0,
   "depthMode": "autoLayers",

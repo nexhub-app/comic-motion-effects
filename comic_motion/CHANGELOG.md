@@ -7,7 +7,159 @@ and `dart run bin/comic_motion.dart --version` share one version constant.
 > The full changelog in Chinese — including all historical entries — lives in
 > [doc/CHANGELOG_zh-CN.md](doc/CHANGELOG_zh-CN.md).
 
+## 1.4.0 (2026-10-03)
+
+Content-aware placement + hard-edged tension. **This release ships two
+deliberate breaking changes, both approved as product decisions before
+implementation (H1 and H2 below).** No JSON schema change, no new required
+keys, no migration step — what moved is the *default values* and the
+*meaning of* `legacy`, so every config that pins a value renders exactly as
+before and only unpinned configs move.
+
+### H1 — shipping defaults changed in place
+
+- `quality.tier`: `legacy` → **`standard`**. Out-of-box output now uses the
+  anti-aliased raster primitives, area-average / Catmull-Rom resampling,
+  screen light blending and the quantization LUT.
+- `parallax.amplitude`: `0.012` → **`0.030`**, with the matching §6.1 raises
+  (`breathing.amplitude` 0.006 → 0.012, `ambient.opacity` 0.16 → 0.22,
+  `mangaShake.amplitude` 0.009 → 0.018, `heartbeat.intensity` 0.012 → 0.020,
+  `slowPush.pushFrac` 0.035 → 0.060). Complaint driving this round: the motion
+  read as "almost no movement".
+- `contentAware` → **`true`**, `panelAware` → **`true`** (see the placement
+  section; each gate rolls back independently).
+- `quality.dither`: back to **`false`** (R38). Error diffusion multiplies GIF
+  bytes by ×2.2–2.4, which does not pay off on flat-ink + line-art source
+  material; sharpness comes from the standard tier, not from dithering.
+  `quality.ditherMode` keeps its `sierra` default but is *dormant* — it only
+  picks a kernel once `dither: true` is set explicitly.
+- Because keys equal to their default stay omitted, the serialized shape of the
+  default config never changed; only the bytes each config renders to moved.
+
+### H2 — `legacy` narrowed to "the old pixel algorithm"
+
+- `tier: legacy` still freezes the *drawing* path (no AA raster, bilinear /
+  nearest resampling, plain source-over ink, v1.2 quantizer) and remains
+  selectable and losslessly round-trippable. It **no longer promises
+  byte-identical output versus the 2026-09-14 v1.2 baseline**, because the
+  seamless-loop work rewrote the shared time base for *both* arms — integer
+  whole-cycle period alignment (R18), integer vertical cycle count (R19) —
+  and the anti-phase layer stepping (R16) is a phase constant, not a pixel
+  algorithm. None of those are tier-gated.
+- Consequently the rollback drill on `presets/classic.json` reports **0/10**
+  against the frozen v1.2 digests. That is the documented, sanctioned state,
+  not a regression; within-version determinism (same seed + same params →
+  identical bytes) is untouched.
+- **One-off `configHash` re-baseline** (the only one in this release): the
+  absolute fingerprints pinned in `test/engine_test.dart`,
+  `test/polarity_test.dart` and `test/saliency_test.dart` (13 literal sites)
+  were re-anchored from printed actuals. New anchors: default config
+  `-2a0679b63611bcad`, `EffectConfig(fps: 12, durationSec: 3.0,
+  maxDimension: 640)` (= `presets/classic.json`) `-55953db41ee98064`,
+  `presets/legacy_v1.0.json` `-57e243b1ecfc30c`. The v1.2 legacy goldens that
+  did *not* move (`-68ddcb969faac38c` et al.) stay as evidence that the legacy
+  pixel path itself was not touched by the 3.6 series.
+- `presets/legacy_v1.0.json` (R40) is now the rollback file to reach for:
+  v1.0.0 *numbers* + explicit `tier: legacy` + `dither: false` + both placement
+  gates written as `false`. It is a **behavior-level** rollback, not a
+  byte-level one (R46b). Its `durationSec` is `6.0` rather than v1.0.0's `3.0`
+  — the single deliberate deviation — because only 6.0 represents
+  `parallax.periodSec 6.0` exactly under the whole-cycle rule.
+
+### Content-aware placement (Phase 1–2)
+
+- New `AnchorMap` (`lib/src/content/`): saliency/activity field, subject box,
+  non-max-suppressed focal anchors, per-panel anchors, computed once per render
+  and threaded through the pipeline, the frame workers and the interaction-frame
+  export (R37).
+- Placement consumers: `focusLines` / `impactRings` anchor on the focal point
+  instead of canvas center; particle seeding is weighted by the activity field
+  instead of uniform-random; panel overlays clip to panel bounds; ink polarity
+  adapts to local luminance.
+- `contentAware` (per-effect anchoring) and `panelAware` (per-panel layering)
+  are two orthogonal gates and roll back independently. Both are conditionally
+  serialized with the omit-if-default idiom, so `"contentAware": false` /
+  `"panelAware": false` persist and round-trip losslessly.
+- JSON sanitize rule for both gates (documented in the catalog and the server
+  API doc): a missing key or explicit `null` means "not said" → default `true`;
+  only a strict boolean `true` enables the gate, and non-bool values (`1`,
+  `"yes"`) are treated as `false` → the rollback arm.
+
+### Tension (Phase 3)
+
+- Anti-phase layer parallax (R16): neighbouring depth layers sweep opposite
+  ways, parity taken from `depthRank` (F2) so it is stable across panels.
+- `snapWave` easing (R3.3/R3.4) now shapes `mangaShake`, `speedLines` and
+  `impactRings` at standard+ — a fast attack to the peak, then a hard cut
+  (起—峰—断): the wave's negative lobe is clamped to zero, so the second half
+  of the pulse is silent instead of a slow decay. For `impactRings` the ink
+  window is exactly 0 for ph ≳ 0.539 (≈44% of the loop). This is deliberately
+  *not* described as "快起慢落" — there is no long tail.
+  The legacy arm keeps `sin` verbatim, and the shape difference is guarded by a
+  rendered-pixel discriminator test (`test/snap_wave_passes_test.dart`) rather
+  than a formula check.
+- `periodSec` auto-aligns to a whole number of cycles over the clip (R18) and
+  the vertical parallax axis to an integer cycle count (R19), so loops are
+  seamless at any duration instead of drifting on the last frame.
+
+### Presets, catalog and docs
+
+- `presets/` is 42 files: the 40 showcase presets (single effects, combos and
+  the three showcase bases) regenerated from the single-source generator, plus
+  `classic.json` and the new `legacy_v1.0.json` anchor. Note that era labels
+  ("v1.1/v1.2-era") describe effect lists, not tiers — after the regeneration
+  only `legacy_v1.0.json` writes a `tier`; 40 presets omit the `quality`
+  segment entirely and `dither_compare_forest.json` writes only
+  `"dither": true` (it is the dither demo). R40's rollback anchor keeps its
+  `"dither": false` written out by hand — that file expresses intent, not a
+  `toJson()` emission.
+- `param_catalog.dart`: `contentAware` and `panelAware` rows added (the catalog
+  is the fifth lockstep source for defaults, guarded against the constructor);
+  the `qualityTier` row corrected for H2; `strictRange` wording now states the
+  actual out-of-range behavior per parameter (raw linear scaling / pass-internal
+  clamp / trigonometric wrap / enum-string fallback) instead of implying a
+  universal clamp.
+- README (EN + zh), `comic_motion_server/docs/api.md`, `docs/deploy.md` and
+  `doc/motion_catalog_v13.md` synced to the new defaults and the narrowed
+  `legacy` wording; the CLI `--quality` help no longer claims v1.2 bytes.
+
+### Record-only corrections and known limitations
+
+- Commit `597aefb` ("presets re-emitted … with aligned periods") **overstated**
+  what it did: the presets deliberately keep `periodSec` at 6.0 / 4.0 and the
+  alignment is applied at render time by R18. History is not amended; the real
+  semantics are stated here.
+- **§6.1 stale-re-emission guard blind spot** (accepted by ruling): the preset
+  guard asserts `value >= new default × 0.8`, and the old `breathing.amplitude`
+  variant `0.010` coincides with a legitimate new value (`0.010` = 0.005 × 2.0),
+  so a single-file stale re-emission of those two breathing presets is not
+  caught. A batch drift still trips the other five keys. The floor was not
+  raised back to the default (that would turn the committed presets red), and no
+  generator data was changed for this.
+- **Discarded saliency scan** (Ruling #14): layer export now pays one saliency
+  scan whose result the renderer discards in that path. Documented as an
+  intended trunk cost (render and export share one analysis entry point); no
+  knob added.
+- **`rich` remains byte-equivalent to `standard`** (reserved `supersample` /
+  `mipLevels` have no consumer yet) — unchanged known deviation.
+- **Multi-panel pages cost more at the 1600 cap, and breach two red lines**
+  (measured, medians of 3 bench runs): a real two-panel page at the shipping
+  default tier takes **8.17 s** against the `≤7 s` preview red line (breached
+  in 2 of 3 runs) and peaks at **1033 MB**, which breaks the 780 MB
+  `parallel=1` serial line (the 1150 MB multi-worker line still holds). Cause:
+  `panelAware` (on by default since R39) keeps a layer raster per panel, so
+  peak RSS scales with panel count, not only with working pixels — 647 MB
+  single-page vs 1033 MB two-page at the same `maxDimension`. **No threshold
+  was moved.** Mitigation for deployment: pass `memoryBudgetMb` (it degrades
+  working resolution before OOM and records a warning), or cap
+  `maxDimension` at 1080, or use ≥2 workers on such pages. Full before/after
+  rows are in both READMEs' performance sections.
+
+Test surface: 393 engine cases + server contract cases, all green, no skips.
+`dart analyze lib tool test` clean.
+
 ## 1.3.2 (2026-09-29)
+
 
 Publishing and documentation polish; no behavior changes. The
 byte-reproducibility contract is untouched (253 core + 6 server tests green).

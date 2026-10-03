@@ -890,10 +890,24 @@ class MotionPipeline {
   /// 独立估算深度与分层（层写回全图坐标并携带格边界裁剪，合成时跨格串色
   /// 根除）；单格/无白带图自动回退整页分层（与 panelAware 关闭逐字节等价）。
   ///
-  /// Task 1.5（plumb-only）：contentAware 为 true 时对底图跑一次
-  /// [SaliencyAnalyzer]（panelAware 检出多格时按格分析），第三个返回值携带
-  /// [AnchorMap]；否则返回 null。分层主干逻辑与返回值不变，仅在 contentAware
-  /// 时**额外**产出一个当前无人消费的 map，故产物逐字节不变。
+  /// Task 1.5（plumb-only）→ 现况（Task 3.7 清单 #12 纠正）：contentAware 为
+  /// true 时对底图跑一次 [SaliencyAnalyzer]（panelAware 检出多格时按格分析），
+  /// 第三个返回值携带 [AnchorMap]；否则返回 null。
+  /// **旧注释「额外产出一个当前无人消费的 map，故产物逐字节不变」自 3.6b/3.6c
+  /// 起是主动失真**：默认配置（不写 contentAware 键 ⇒ true，R30/R36）下渲染
+  /// 路径与两条导出路径都在读这张 map（`frame_compositor` 的落位、
+  /// `interaction.dart:206` 的 R37 接线），产物字节随之改变。map 本身仍然是
+  /// 可选产物（contentAware=false ⇒ null），但它已不是「无人消费」。
+  ///
+  /// 清单 #14（用户裁决＝「文档化为主干成本，不加旋钮」）：第三个返回值有
+  /// 一条**故意丢弃** `.$3` 的臂——[downscaleAndSplitForExport]，其唯一生产
+  /// 消费者是 `layer_export.dart:110`（图层导出不用 anchor）。它因此照常
+  /// 付一次 saliency 扫描的代价。保留这个成本的理由：渲染与导出必须共用
+  /// **同一条**降采样 + 深度 + 分层主干，否则 t=0 静帧、GIF 首帧与导出层图
+  /// 不再同源（这正是本函数文档开头那条契约）；而「只为省一次扫描」新增的
+  /// 开关是一个不改任何画面行为的序列化概念——旋钮成本高于扫描成本。
+  /// 需要 anchor 的导出路径请直接走
+  /// [downscaleSplitAnchorsForExport]（R37），不要经这条丢弃臂。
   (RgbaImage, List<LayerImage>, AnchorMap?) _downscaleAndSplit(
       RgbaImage src, int effectiveMaxDim) {
     final working = config.quality.tier.atLeastStandard

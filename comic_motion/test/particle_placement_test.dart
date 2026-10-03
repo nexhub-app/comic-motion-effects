@@ -6,8 +6,11 @@ import 'package:comic_motion/comic_motion.dart';
 /// Task 2.2 — activity-weighted particle seeding (rejection sampling).
 ///
 /// All randomness stays seeded from `EffectConfig.seed`; these tests pin the
-/// real behavior: seeds bias into high-`activity` regions, the default/legacy
-/// (contentAware=false) render stays byte-for-byte unchanged, exact particle
+/// real behavior: seeds bias into high-`activity` regions, the **helper-pinned**
+/// `contentAware: false` render stays byte-for-byte unchanged (Task 3.7 清单 #13:
+/// 本文件所有 cfg 助手都**显式**传 ca，`EffectConfig` 的默认自 R30/R36 起已是
+/// true —— 旧注释把「助手传 false」说成「默认 false」，是文档失真不是行为差异),
+/// exact particle
 /// `count` is preserved, the ON render is deterministic, and a blank/flat
 /// activity field falls back to the original uniform distribution.
 RgbaImage blankPage(int w, int h) {
@@ -103,7 +106,7 @@ void main() {
       final withMap = build(snowCfg(false), anchors: map).renderFrame(0.5);
       final noMap = build(snowCfg(false)).renderFrame(0.5);
       expect(withMap.data, equals(noMap.data),
-          reason: 'map 未消费时（默认 contentAware=false）产物逐字节不变');
+          reason: 'map 未消费时（本条助手显式传 contentAware: false；配置默认自 R30 起是 true）产物逐字节不变');
 
       final rainWith = build(rainCfg(false), anchors: map).renderFrame(0.5);
       final rainNo = build(rainCfg(false)).renderFrame(0.5);
@@ -213,11 +216,10 @@ void main() {
   //
   // 投诉 #2（「并不能很好的识别出该出现动态效果的地方」）的验收门：仅有配置
   // 测试不算数，这里从**默认构造/默认 JSON** 出发观察播种行为。
-  // brief 原句 `downscaleAndSplitForExport(...)` 返回 AnchorMap 与受围栏的
-  // pipeline.dart 现状不符（该公开方法返回二元组、第三个值被丢弃），故按等价
-  // 口径观察：同一条公开主干产出的 working 图上跑与 `_analyzeAnchors` 完全
-  // 相同的 `SaliencyAnalyzer().analyze` 得到非 null map，再由默认 config 驱动
-  // 的合成器消费 ⇒ 门控链路与渲染管线一致；端到端另跑真实 processBytes 对照。
+  // 清单 #11（Task 3.7）：R37 给这条公开主干补上了带回 AnchorMap 的签名
+  // `downscaleSplitAnchorsForExport` ⇒ 原先那段「brief 点名的方法只返回二元组，
+  // 退一步在 working 图上手跑一次 analyze 做等价口径」的逃生说明已过期，
+  // 本条现在直接断言**主干自己产出的第三返回值**。
   group('Task 3.6b: placement is live out of the box (default config)', () {
     /// 右半有暗墨块的白页——与 Task 2.2 worker 测试同款主体。
     RgbaImage rightBlobPage() {
@@ -248,13 +250,12 @@ void main() {
       expect(def.contentAware, isTrue,
           reason: 'R30/R36：缺键兜底 == 新默认 true（不写键 = 开启）');
       final page = rightBlobPage();
-      // 与管线同一条公开前置主干（同一 working 图），随后跑的就是
-      // pipeline `_analyzeAnchors` 在默认路径执行的那次 analyze 调用。
-      final (working, _) = MotionPipeline(def).downscaleAndSplitForExport(page);
-      final map = const SaliencyAnalyzer().analyze(working);
+      // 主干自己那张 map（不是等价口径）：contentAware 缺键 ⇒ true ⇒ 第三返回值
+      // 必须非 null，且带右半墨块给出的 anchor。
+      final map = MotionPipeline(def).downscaleSplitAnchorsForExport(page).$3;
       expect(map, isNotNull,
-          reason: '默认 config 的 _analyzeAnchors 门控只认 contentAware ⇒ 必产出 map');
-      expect(map.anchors, isNotEmpty, reason: '右半墨块必须给出 anchor');
+          reason: '默认 config 的 _analyzeAnchors 门控只认 contentAware ⇒ 主干必产出 map');
+      expect(map!.anchors, isNotEmpty, reason: '右半墨块必须给出 anchor');
 
       // _particleWeightingActive 驱动的播种：默认 config 显著聚向右半主体，
       // 同 seed 显式 false 回滚仍是均匀分布，两者逐粒子不同。

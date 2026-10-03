@@ -54,6 +54,14 @@ dart run bin/comic_motion.dart serve --port 8787 --data-dir DELIVERY/data
 
 - `inputPath` 绝对路径，与 `inputBase64` 二选一（后者落盘到 `<data-dir>/uploads/up_<ms>_<seq>.bin`）。
 - `config` 全部可选，字段与 `params.json` / `presets/*.json` 同一套 schema（`EffectConfig.fromJson`）。
+- 上面示例里的 `quality` 段是**故意非默认**的：v1.4 出厂默认 `tier: standard` +
+  `dither: false`，等于默认的键一律不序列化（`dither` 只有显式 `true` 才写出，
+  `ditherMode` 只有显式 `floyd` 才写出）。序列化习语是「等于自身默认就不写」，
+  所以示例中出现某键不代表它是默认值。
+- 两个落位开关（`contentAware` / `panelAware`）的布尔口径，嵌入方注意：缺键与显式
+  `null` = 「没说过」⇒ 落新默认 `true`；只有**严格等于 JSON `true`** 才算开启，
+  非 bool 值（如 `1`、`"yes"`）按 `false` 处理 ⇒ 落**回滚臂**（不视为「要求开启」，
+  垃圾输入不当授权）。
 - `parallel`（可选，顶层）覆盖本任务的帧渲染并行度；缺省时按服务并发数分摊。`1` = 串行。
 - 响应 `202`：
 
@@ -92,14 +100,16 @@ dart run bin/comic_motion.dart serve --port 8787 --data-dir DELIVERY/data
 
 失败时 `status=failed`，`error` 是**字符串**（`"E_WORKER_CRASH: …"` 或异常文本），不是对象。
 
-## 配置字段速查（v1.3）
+## 配置字段速查（v1.4）
 
 | 字段 | 取值 | 默认 | 说明 |
 |---|---|---|---|
 | `effects` | `EffectKind` 名数组（32 项） | `[parallax,breathing,ambient]` | 未列出的效果其参数段也不序列化 |
-| `quality.tier` | `legacy`\|`standard`\|`rich` | `legacy` | `legacy` 逐字节复现 v1.2；`rich` 当前与 `standard` 等价 |
-| `quality.dither` | bool | `false` | Floyd–Steinberg / Sierra 误差扩散抖动 |
-| `quality.ditherMode` | `floyd`\|`sierra` | `floyd` | `sierra` 只在 standard+ 有意义 |
+| `quality.tier` | `legacy`\|`standard`\|`rich` | `standard` | **v1.4 默认改 standard**（H1 breaking）；`legacy` 是旧像素算法臂（抗锯齿/面积平均/screen 混合/极性落墨全部关闭），量化 LUT 与 palette 采样仍按 v1.4 实现，故不承诺逐字节复现 v1.2；`rich` 当前与 `standard` 等价 |
+| `quality.dither` | bool | `false` | 误差扩散抖动开关。R38 起**默认关闭**（实测把 GIF 字节乘 2.2–2.4×，对 flat-ink + 线稿语料不值）；出厂产物走最近色映射 |
+| `quality.ditherMode` | `floyd`\|`sierra` | `sierra` | **仅在 `dither: true` 且 standard+ 档时才被选择**——默认关抖动时本键惰性（两核都不生效），它决定的是「开抖后用哪个核」，不是「默认是否抖动」；`floyd` 是 v1.2 核，`sierra` 更柔和 |
+| `contentAware` | bool | `true` | **v1.4 新增，默认开**（R30/R36）：落位改用显著性分析（主体框/焦点/活动度），粒子与 focusLines/impactRings 锚到主体侧。显式 `false` = 回滚到 v1.3 均匀落位。与 `quality.tier` 正交 |
+| `panelAware` | bool | `true` | **v1.4 默认开**（R39）：多格图逐格独立分层，根除跨格串色；单格图自动回退整页。显式 `false` = 回滚 |
 | `quality.edgeStretchPx` | 0-16 | `6` | 层边缘色外扩，消除视差露底双边（standard+） |
 | `quality.mipLevels` | 1-2 | `2` | 预留字段，尚无消费方 |
 | `moodScript.mood` | `tension`\|`calm`\|`eerie`\|`burst` | `tension` | 未知值回落 `calm` 并写 `warnings` |

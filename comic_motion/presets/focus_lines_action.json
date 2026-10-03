@@ -34,10 +34,6 @@
     "opacity": 0.38,
     "mode": "black"
   },
-  "quality": {
-    "dither": false,
-    "tier": "standard"
-  },
   "fps": 12,
   "durationSec": 3.0,
   "depthMode": "autoLayers",

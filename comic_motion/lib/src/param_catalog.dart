@@ -5,9 +5,12 @@
 /// 化层可在任意平台使用。
 ///
 /// 覆盖范围：CLI 通用参数表里的全部渲染参数（fps / duration / maxDimension /
-/// layers / seed / quality / dither / format / amplitude / direction）+ 效果
-/// 列表本身。`parallel` / `memoryBudgetMb` 属于执行期参数（在
-/// [MotionPipeline] 上，不进 configHash），见 pipeline.dart 文档。
+/// layers / maxFrames / seed / quality tier / dither / format / amplitude /
+/// direction）+ 效果列表本身 + v1.4 的两个落位开关（contentAware /
+/// panelAware）+ GIF 帧间差分（diffMode）。**唯一**故意不列的序列化参数是
+/// `encoding.apngDelay`：它只改 APNG 的帧延迟口径（GIF 不受影响），设置面板
+/// 无从表达，语义见 [EncodingParams]。`parallel` / `memoryBudgetMb` 属于执行期
+/// 参数（在 [MotionPipeline] 上，不进 configHash），见 pipeline.dart 文档。
 library;
 
 import 'effect_config.dart';
@@ -43,8 +46,10 @@ class ParamSpec {
   final num? max;
 
   /// true = 越界在 [EffectConfig] 构造时 fail-fast 抛 [ConfigException]
-  /// （code `E_BAD_CONFIG`）；false = 建议范围，越界由渲染通路按既有语义
-  /// 静默 clamp（改值不抛错）。
+  /// （code `E_BAD_CONFIG`）；false = [min]/[max] 仅为建议范围，越界不抛错。
+  /// 越界后的**实际行为逐参数不同**（原样线性放大 / 该 pass 内部自带 clamp /
+  /// 三角函数周期回绕 / 枚举串回退默认），以各条 [description] 为准——
+  /// App 侧不要假设「越界一定被 clamp」。
   final bool strictRange;
 
   /// 默认值（枚举为枚举实例；effectList 为效果名字符串列表）。
@@ -127,7 +132,32 @@ const List<ParamSpec> kRenderParamSpecs = [
     defaultValue: RenderTier.standard,
     mapsTo: 'quality.tier',
     description: '渲染档位：v1.4 起默认 standard（抗锯齿 + 面积平均重采样）；'
-        'legacy 逐字节复现 v1.2，仍供显式选择（回滚载体）；rich 与 standard 等价',
+        'legacy = v1.2 的旧像素算法，仍供显式选择，但不再承诺与 v1.2 输出逐字节'
+        '一致（时间基的无缝修复 R18/R19 与层反相相位 R16 不受档位门控，见 H2）；'
+        'rich 与 standard 等价',
+  ),
+  ParamSpec(
+    name: 'contentAware',
+    type: 'bool',
+    strictRange: false,
+    defaultValue: true,
+    description: '内容感知落位（v1.4，R30/R36）：粒子播种、focusLines/impactRings '
+        '的焦点锚、逐格覆盖裁剪都改用显著性分析的 AnchorMap（主体框 + 焦点 + 活动'
+        '度），把效果送到主体/焦点所在处而不是整页均匀铺开。与渲染档正交（两个门'
+        '互不干预）。**回滚**：显式 false ⇒ 回到 v1.3 的均匀落位。JSON sanitize '
+        '口径（嵌入方注意）：缺键与显式 null = 没说过 ⇒ 落默认 true；只有**严格'
+        '等于布尔 true** 才算开启，非 bool 值（如 `1`、`"yes"`）按 false 处理 ⇒ '
+        '落回滚臂',
+  ),
+  ParamSpec(
+    name: 'panelAware',
+    type: 'bool',
+    strictRange: false,
+    defaultValue: true,
+    description: '分格感知（v1.4，R39）：横向白带检测出多格时逐格独立估深度与分层，'
+        '根除跨格串色（投诉 #2「效果堆叠」的结构性修复），且新默认档下实测更快。'
+        '单格/无白带图自动回退整页分层。与 contentAware、渲染档均正交。JSON '
+        'sanitize 口径同上面 contentAware 条目：非 bool（如 `1`）⇒ false 回滚臂',
   ),
   ParamSpec(
     name: 'diffMode',
@@ -155,7 +185,11 @@ const List<ParamSpec> kRenderParamSpecs = [
     strictRange: false,
     defaultValue: 0.030,
     mapsTo: 'parallax.amplitude',
-    description: '视差最大位移幅度（占图宽比例）；越界由渲染 clamp',
+    description: '视差最大位移幅度（占图宽比例）。渲染通路**原样使用**：位移 = '
+        'amplitude · 图宽 · 层倍率，本参数没有 clamp（通路里唯一自 clamp 的幅度是'
+        ' mangaShake 的 0..0.12），[0, 0.1] 只是建议区间，越界不抛错、位移按线性'
+        '继续放大，画幅由合成端的 cover 系数自适应放大保证覆盖不露边。v1.4 默认 '
+        '0.030 = v1.0 的 0.012 的 2.5 倍（规格 §6.1 硬张力）',
   ),
   ParamSpec(
     name: 'directionDeg',
@@ -165,7 +199,9 @@ const List<ParamSpec> kRenderParamSpecs = [
     strictRange: false,
     defaultValue: 0.0,
     mapsTo: 'parallax.directionDeg',
-    description: '视差主扫方向（度，屏幕坐标系顺时针）；越界由渲染 clamp',
+    description: '视差主扫方向（度，屏幕坐标系顺时针）。值直接喂给 cos/sin ⇒ '
+        '天然周期回绕（370° 与 10° 等价），既无 clamp 也不报错，区间只是建议；'
+        '0/180 为纯横向、90/270 为纯纵向（纵向位移另乘 verticalRatio）',
   ),
   ParamSpec(
     name: 'effects',

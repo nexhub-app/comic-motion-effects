@@ -368,7 +368,7 @@ void main() {
       }
     });
 
-    test('默认档已是 standard：行为门可核验，绝对 digest 归 Task 3.7', () {
+    test('默认档已是 standard：行为门 + 绝对 digest 已锚定 v1.4.0', () {
       // R24/R28（Task 3.6）：不写 quality 段的配置现在解析成 standard，
       // 「默认档也逐字节冻结成 legacy」的前提已经不存在。
       // 行为半（本轮就能绿，且是真的门）：默认档产物必须**等于**显式 standard、
@@ -391,11 +391,11 @@ void main() {
       expect(def.data,
           isNot(equals(render(kinds, RenderTier.legacy, 0.05).data)),
           reason: '默认档不应再等于 legacy 字节');
-      // 绝对半（字面量按硬约束一字不改，红必须是 digest 不匹配）：这条摘要是
-      // 改动前 HEAD 的 **legacy 默认档**字节 ⇒ Task 3.6 后必然对不上，
-      // 由 Task 3.7 用 standard 默认档的新摘要重新锚定（R31）。
+      // 绝对半：锚点原存的是 v1.3.2 的 **legacy 默认档**字节 ⇒ 3.6 把默认档升到
+      // standard 后必然对不上（R31 的授权预期红），Task 3.7 已把它改锚到
+      // standard 默认档自己的摘要。上面三条行为门一字未动，才是本轮的门。
       expect(_fnv(def.data), equals(_BASE_DEFAULT_TIER),
-          reason: '默认档 digest 待 Task 3.7 re-baseline（本轮预期红，且只红在这一行）');
+          reason: '默认档 digest 必须等于 v1.4.0 standard 默认档锚点');
     });
 
     test('standard 档与 legacy 档确实不同（极性生效）', () {
@@ -454,10 +454,21 @@ void main() {
   });
 }
 
-// BASE（改动前 HEAD）同场景同配置的帧摘要：legacy 逐字节冻结契约的锚点。
-const String _BASE_SPEED_LEGACY = '-5c5313f1ec3636db';
-const String _BASE_FLASH_LEGACY = '28d88c3d5762aaa5';
-const String _BASE_SWEEP_LEGACY = '24d747d2009b019f';
-const String _BASE_FOCUS_LEGACY = '3780edbaa990d572';
-const String _BASE_ALL_LEGACY = '15501299d99212a0';
-const String _BASE_DEFAULT_TIER = '13d6ca318b944b0d';
+// 显式 tier:legacy 的帧摘要金标（R10 冻结契约的锚点）+ 默认档绝对摘要。
+//
+// Task 3.7 唯一一次 re-baseline（H2）——六个常量全部改锚到 v1.4.0：
+//   * 移动的根因是**默认值**，不是 legacy 像素算法：3.1 抬高的振幅默认值与
+//     3.5 的整周期对齐/timing snap 都进入 legacy 档的位移量。台账在
+//     3.2/3.4/3.6/3.6b/3.6d/3.6e 每一轮都独立复测过 explicit-legacy actual
+//     未动（speed 那条到 3.6d 仍是 -68ddcb969faac38c）⇒ legacy 算法一字未改。
+//   * H2 正是为此而裁：`tier: legacy` 冻结**像素算法**，不冻结旧默认值。要旧
+//     默认值请走 presets/legacy_v1.0.json（R40），那才是逐字节回滚开关。
+//   * 后四条（flash/sweep/focus/all）在 3.1→3.6 期间从未被打印过：本条测试是
+//     map 上的 fail-fast 循环，第一条红把后面四条全遮住了 ⇒ 各轮「只有 N 个
+//     授权红」的普查数是**下界**；完整 census 见报告 TASK 3.7 节。
+const String _BASE_SPEED_LEGACY = '-68ddcb969faac38c';
+const String _BASE_FLASH_LEGACY = '-121bf1041d4a12bb';
+const String _BASE_SWEEP_LEGACY = '-7a554b5bfb98e3e0';
+const String _BASE_FOCUS_LEGACY = '-899a523d81898c8';
+const String _BASE_ALL_LEGACY = '-53dbb870578e6226';
+const String _BASE_DEFAULT_TIER = '-701dc2404f559e1b';

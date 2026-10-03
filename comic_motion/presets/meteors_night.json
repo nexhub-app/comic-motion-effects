@@ -32,10 +32,6 @@
     "windowFrac": 0.22,
     "opacity": 0.88
   },
-  "quality": {
-    "dither": false,
-    "tier": "standard"
-  },
   "fps": 12,
   "durationSec": 3.0,
   "depthMode": "autoLayers",

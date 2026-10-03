@@ -2,6 +2,54 @@
 
 本项目版本记录。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)，`pubspec.yaml`、`lib/src/version.dart` 与 `dart run bin/comic_motion.dart --version` 使用同一常量。
 
+## 1.4.0（2026-10-03）
+
+内容感知落位 + 硬派张力。**本版带两个刻意的破坏性变更，均在实施前作为产品决策获批**（下面的 H1 与 H2）：JSON schema 未变、没有新增必填键、不需要迁移步骤——移动的是**默认值**与 `legacy` 的**含义**，所以显式钉住取值的配置逐字节照旧，只有未钉值的配置随之改变。
+
+### H1——出厂默认就地改动
+
+- `quality.tier`：`legacy` → **`standard`**。开箱输出走抗锯齿光栅原语、面积平均 / Catmull-Rom 重采样、screen 光照混合与量化 LUT。
+- `parallax.amplitude`：`0.012` → **`0.030`**，并按规格 §6.1 同步抬高配套默认（`breathing.amplitude` 0.006 → 0.012、`ambient.opacity` 0.16 → 0.22、`mangaShake.amplitude` 0.009 → 0.018、`heartbeat.intensity` 0.012 → 0.020、`slowPush.pushFrac` 0.035 → 0.060）。本轮的起因是「动作效果几乎等于没有」。
+- `contentAware` → **`true`**、`panelAware` → **`true`**（见落位小节；两个门各自独立回滚）。
+- `quality.dither`：回到 **`false`**（R38）。误差扩散把 GIF 字节乘 2.2–2.4×，对 flat-ink + 线稿语料不划算；锐度来自 standard 档而不是抖动。`quality.ditherMode` 仍默认 `sierra`，但处于**惰性**状态——只有显式 `dither: true` 时它才决定用哪个核。
+- 由于「等于默认值的键照旧省略」，默认配置的序列化形状一字未动，移动的是每份配置渲染出的字节。
+
+### H2——`legacy` 收窄为「旧像素算法」
+
+- `tier: legacy` 仍然冻结**绘制通路**（不做抗锯齿的光栅、双线性/最近邻重采样、纯 source-over 落墨、v1.2 量化器），仍可显式选择、能无损往返；但它**不再**承诺「与 2026-09-14 的 v1.2 基线逐字节一致」。原因是无缝循环修复重写了**两条臂共用**的时间基——整数循环周期对齐（R18）、竖向整数循环数（R19）——而层反相步进（R16）是相位常数而不是像素算法；这三项都不受档位门控。
+- 因此 `presets/classic.json` 对冻结的 v1.2 摘要的演练结果是 **0/10**。这是被记录并认可的状态，不是回归；同版本内的确定性（同 seed + 同参数 ⇒ 逐字节一致）完全没有变化。
+- **唯一一次 `configHash` re-baseline**（本版只此一次）：`test/engine_test.dart`、`test/polarity_test.dart`、`test/saliency_test.dart` 里钉死的绝对指纹（共 13 处字面量）按测试打印出的 actual 重新锚定。新锚点：默认配置 `-2a0679b63611bcad`、`EffectConfig(fps: 12, durationSec: 3.0, maxDimension: 640)`（即 `presets/classic.json`）`-55953db41ee98064`、`presets/legacy_v1.0.json` `-57e243b1ecfc30c`。未移动的 v1.2 legacy 金色基线（`-68ddcb969faac38c` 等）保留为「3.6 系列没碰 legacy 像素通路」的证据。
+- `presets/legacy_v1.0.json`（R40）成为回滚时应取的文件：v1.0.0 的**数值** + 显式 `tier: legacy` + `dither: false` + 两个落位门显式写 `false`。它是**行为级**回滚而非字节级（R46b）。其 `durationSec` 取 `6.0` 而不是 v1.0.0 的 `3.0`——这是唯一一处故意偏离——因为整周期规则下只有 6.0 能精确表达 `parallax.periodSec 6.0`。
+
+### 内容感知落位（P1–P2）
+
+- 新增 `AnchorMap`（`lib/src/content/`）：显著性/活动度场、主体框、NMS 焦点锚、逐格锚点；每次渲染只算一次，贯穿管线、帧 worker 与交互帧集导出（R37）。
+- 消费方：`focusLines` / `impactRings` 锚在焦点而非画布中心；粒子播点按活动度加权而非均匀随机；分格叠加绘制按格边界裁剪；落墨极性按局部亮度自适应。
+- `contentAware`（逐效果锚定）与 `panelAware`（逐格分层）是两个**正交**的门，各自独立回滚。二者都按「等于默认就省略」的条件序列化习语落地，所以 `"contentAware": false` / `"panelAware": false` 能持久化并无损往返。
+- 两个门的 JSON sanitize 口径（参数目录与服务端 API 文档同步）：缺键或显式 `null` = 没说过 ⇒ 落默认 `true`；只有严格等于布尔 `true` 才算开启，非 bool 值（`1`、`"yes"`）按 `false` 处理 ⇒ 落回滚臂。
+
+### 张力（P3）
+
+- 层反相视差（R16）：相邻景深层反向扫动，奇偶性取自 `depthRank`（F2），因此跨格稳定。
+- `snapWave` 缓动（P3.3/P3.4）在 standard+ 档成形 `mangaShake`、`speedLines`、`impactRings`——「起—峰—断」：快速攻到峰值后是**硬切**，波形的负瓣被 `max(0, ·)` 截成 0，后半段保持静默，**不是**正弦，也不是「快起慢落」的长尾余韵（`impactRings` 的落墨在 ph ≳ 0.539 起恒为 0，约占整循环 44%）；legacy 臂逐字保留 `sin`。两者的形状差异由**渲染像素**的判别用例守护（`test/snap_wave_passes_test.dart`），不是只查公式。
+- `periodSec` 自动对齐到整循环数（R18），竖向视差轴对齐到整数循环数（R19），使任意时长下循环都无缝，而不是尾帧跳一下。
+
+### 预设、参数目录与文档
+
+- `presets/` 共 42 份：40 份演示预设（单效、组合与三个演示底座）由单源生成器重发，外加 `classic.json` 与新增的 `legacy_v1.0.json` 锚点。注意分组名里的「v1.1/v1.2 代」描述的是**效果列表**的世代而不是渲染档——重发后 42 份里**只有 `legacy_v1.0.json` 写了 `tier`**，40 份整段省略 `quality`，`dither_compare_forest.json` 只写 `"dither": true`（它就是抖动演示）。`legacy_v1.0.json` 里那句 `"dither": false` 是生成器**手写**的意图表达，不是 `toJson()` 的产物（默认 false 的键按习语应当省略）；R40 的守卫读的是文件、不是重发结果。
+- `param_catalog.dart`：新增 `contentAware` / `panelAware` 两行（目录是默认值的第五个锁步源，与构造默认互相守卫）；`qualityTier` 行按 H2 纠正；`strictRange` 的说明改为逐参数列出**越界后的真实行为**（原样线性放大 / 该 pass 内部自带 clamp / 三角函数周期回绕 / 枚举串回退默认），不再暗示存在通用 clamp。
+- README（中英）、`comic_motion_server/docs/api.md`、`docs/deploy.md`、`doc/motion_catalog_v13.md` 同步到新默认值与收窄后的 `legacy` 口径；CLI 的 `--quality` 帮助文本不再声称逐字节复现 v1.2。
+
+### 仅记录的更正与已知限制
+
+- 提交 `597aefb`（"presets re-emitted … with aligned periods"）**言过其实**：预设里 `periodSec` 是有意保持 6.0 / 4.0 的，对齐发生在渲染期（R18）。历史不改写，真实语义在此说明。
+- **§6.1 stale 重发守卫的盲区**（经裁决接受）：预设守卫断言 `值 >= 新默认 × 0.8`，而旧的 `breathing.amplitude` 变体 `0.010` 恰好等于一个合法新值（0.005 × 2.0 = 0.010），任何 `>= 下限` 形态都分不开两者 ⇒ 单独回退那 2 个 breathing 预设不会被拦住，整批 stale 重发仍会在其余五个键上转红。**不**把下限抬回默认值（那会让已提交的预设集体转红），也不为此改生成数据。
+- **被丢弃的 saliency 扫描**（裁决 #14）：分层导出现在会付一次 saliency 扫描，而该路径丢弃其结果。作为**主干成本**记录（渲染与导出共用同一分析入口），不加旋钮。
+- `rich` 仍与 `standard` 逐字节等价（预留的 `supersample` / `mipLevels` 尚无消费方）——已知偏差，未变。
+- **多格页在 1600 上限下更贵，并压破两条红线**（实测，3 次 bench 的中位数）：真实两格页在出厂默认档下耗时 **8.17 s**，超 `≤7 s` 的预览红线（3 次里 2 次超）；峰值 **1033 MB**，破 `parallel=1` 的 780 MB 串行红线（≥2 worker 的 1150 MB 线仍成立）。根因是 `panelAware`（R39 起默认开）为每格保留一份层栅格，峰值内存随**格数**而不只随工作像素增长——同 `maxDimension` 下单页 647 MB、两格 1033 MB。**没有为它放宽任何阈值**。部署侧对策：传 `memoryBudgetMb`（OOM 前先降工作分辨率并写入 `warnings`）、或把 `maxDimension` 降到 1080、或多格页至少用 2 个 worker。完整前后数据见中英 README 性能章节。
+
+测试面：393 例引擎用例 + 服务端契约用例，全绿、零 skip；`dart analyze lib tool test` 无告警。
+
 ## 1.3.1（2026-09-28）
 
 发布导向改造（包拆分、跨平台路径、解码安全、错误码体系、fail-fast 校验、内存预算、台账可关闭）+ 运行时生命周期接口（全内存管线、取消/进度/超时、后台 isolate、并发防护、渲染参数/效果选择 API、条漫 strip 模式）。逐字节复现契约全程未破坏（legacy 档像素路径与编码字节零改动，测试护栏扩至 253+6 例）。

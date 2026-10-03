@@ -6,7 +6,7 @@
 
 - 纯 Dart，无原生依赖，UI-free，可嵌入任意 Dart / Flutter 工程；运行时只依赖 `image` 一个包
 - 同参数输出字节级可复现（确定性随机种子 + configHash）
-- 32 种可组合动效 + 38 个内置预设参数
+- 32 种可组合动效 + 42 个内置预设参数
 - 帧渲染多 isolate 并行：只影响耗时，不影响输出字节
 
 CLI（单图 / 批处理）与 HTTP API 服务在姊妹包 **[comic_motion_server](../comic_motion_server)**，二者与本包解耦：只想嵌引擎的 App 不会引入任何 HTTP 服务栈。
@@ -287,7 +287,7 @@ for (final w in result.warnings) {
 }
 ```
 
-预算模型是保守启发式（按实际像素 × 层数 + 安全系数估算）：宁可提前降级也不 OOM。工作分辨率被预算收缩时产物像素随之改变——与无预算运行不逐字节一致，但同预算 + 同输入仍确定性复现；`memoryBudgetMb` 不传时路径零改动，legacy 档逐字节契约不受影响。
+预算模型是保守启发式（按实际像素 × 层数 + 安全系数估算）：宁可提前降级也不 OOM。工作分辨率被预算收缩时产物像素随之改变——与无预算运行不逐字节一致，但同预算 + 同输入仍确定性复现；`memoryBudgetMb` 不传时像素通路零改动，所选档位的输出保持稳定（v1.4 已把 `legacy` 的承诺收窄为「旧绘制算法」，见「复现承诺与边界」；确定性本身不变）。
 
 ### GIF 播放消费指引（Flutter）
 
@@ -361,15 +361,15 @@ params.json                 # 完整参数回放文件
 
 | 档 | 内容 | 用途 |
 |---|---|---|
-| `legacy`（默认） | v1.2 的绘制与编码路径 | 与历史输出**逐字节一致**，回滚承诺的载体 |
-| `standard` | 抗锯齿光栅原语、面积平均 / Catmull-Rom 重采样、screen 光照混合、深度平滑上采样 + 掩码羽化、层边缘外扩、GIF 量化 LUT（抖动核可选 sierra） | 日常出图 |
+| `standard`（v1.4 起默认） | 抗锯齿光栅原语、面积平均 / Catmull-Rom 重采样、screen 光照混合、深度平滑上采样 + 掩码羽化、层边缘外扩、GIF 量化 LUT（误差扩散核可选，**R38 起默认关闭**） | 日常出图 |
+| `legacy` | **旧像素算法**：不做抗锯齿、双线性/最近邻重采样、纯 source-over 落墨、v1.2 绘制路径 | 收回的是「观感」而不是字节承诺——见下方复现承诺（H2） |
 | `rich` | **当前与 `standard` 渲染结果逐字节一致**——预留的 `supersample` / `mipLevels` 尚无消费方（已知偏差） | 已废弃：请用 `standard`；JSON 的 `"tier": "rich"` 仍按本档解析（废弃 ≠ 移除） |
 
-档位只改像素路径，不改动效列表；`legacy` 档与 `presets/classic.json` 是两个独立维度的收回开关。`sierra` 抖动核需要 `dither: true` + `quality.ditherMode: "sierra"` + 非 legacy 档三者同时成立。
+档位只改像素路径，不改动效列表。`legacy`（旧像素算法）与 `presets/legacy_v1.0.json`（v1.0.0 的**数值** + 显式钉住 `tier: legacy`）是两个独立维度的收回开关——但两者都只是**行为级**收回：v1.4 收窄了 `legacy` 冻结的内容（H2 / R46b）。`sierra` 抖动核需要 `dither: true` + `quality.ditherMode: "sierra"` + 非 legacy 档三者同时成立；R38 起第一项默认不成立 ⇒ 出厂产物两个核都不跑，`ditherMode` 处于惰性状态。
 
 ## 复现承诺与边界
 
-同 seed + 同参数输出**逐字节一致**；`legacy` 档与 v1.2 输出逐字节一致（回滚承诺）。该承诺有明确边界：
+同 seed + 同参数输出**逐字节一致**。各档的承诺口径（v1.4，H2）：同一版本内任意档位字节稳定；`legacy` 复现的是 v1.2 的**绘制算法**，**不再**与 v1.2 输出逐字节一致——因为两处无缝循环修复改的是两条臂共用的时间基（周期对齐到整数循环 R18、竖向整数循环数 R19），再加层反相的相位常数（R16）。所以 `presets/classic.json` 对 2026-09-14 v1.2 基线的演练结果是 0/10，这是被记录并认可的状态，不是回归。该承诺有明确边界：
 
 - **依赖版本**：GIF/PNG 编码由 `image` 包承担，字节级复现以 `pubspec.lock` 锁定的 `image` 版本区间为准。下游 `pub upgrade` 若跨入不同编码器实现（调色板/压缩参数变化），输出字节可能改变——对复现敏感的应用请把 `pubspec.lock` 一并纳入版本管理。
 - **configHash 版本化**：configHash 是参数指纹（当前 v1 算法），与 `version` 字段一同写入 `params.json`。未来若 hash 算法或字段序列化变更，将带版本前缀迁移——读取旧 `version` 的回放文件按旧算法口径处理，不静默失效。
@@ -393,19 +393,23 @@ params.json                 # 完整参数回放文件
 
 ## 内置预设（presets/）
 
-38 个现成参数组合（`EffectConfig.fromJson` 直接加载；CLI 场景可 `--config` 使用）：
+42 个现成参数组合（`EffectConfig.fromJson` 直接加载；CLI 场景可 `--config` 使用）：
 
 | 分组 | 份数 | 说明 |
 |---|---|---|
-| `classic` | 1 | 三件套 + legacy 档 + 无抖动，逐字节复现 v1.2 |
-| v1.1/v1.2 单效果（legacy 档） | 16 | rain / snow / fog / embers / lightning / fireflies / godRays / starlight / shimmer / heartbeat / impact_duel / sakura / speedlines / slowpush / vignette / toneshift |
+| `classic` | 1 | 只有三件套。**不带 `quality` 段** ⇒ 跟随出厂默认档（v1.4 起 standard）与 v1.4 幅度，已经不再是 v1.2 的字节回滚载体 |
+| v1.1/v1.2 代单效 | 16 | rain / snow / fog / embers / lightning / fireflies / godRays / starlight / shimmer / heartbeat / impact_duel / sakura / speedlines / slowpush / vignette / toneshift |
 | dither 对比 | 1 | `dither_compare_forest`（唯一 `dither: true` 档） |
-| v1.2 组合（legacy 档） | 5 | combo_campfire / full_action / rain_lanterns / sakura_light / storm_night |
-| v1.3 单效果（standard 档） | 10 | focus_lines / screen_tone / manga_shake / impact_burst（冲击环+闪光）/ brush_streak / flame / smoke / bubbles / leaves / meteors |
+| v1.2 代组合 | 5 | combo_campfire / full_action / rain_lanterns / sakura_light / storm_night |
+| v1.3 单效 | 10 | focus_lines / screen_tone / manga_shake / impact_burst（冲击环+闪光）/ brush_streak / flame / smoke / bubbles / leaves / meteors |
 | v1.3 情绪包络 | 2 | `mood_tension_build`、`mood_burst_impact` |
-| v1.3 组合（standard 档） | 3 | combo_manga_impact / night_battle / peaceful_evening |
+| v1.3 组合 | 3 | combo_manga_impact / night_battle / peaceful_evening |
+| 演示底座 | 3 | `classic_base` / `dust_motes` / `light_sweep_hall`——`tool/generate_showcase.dart` 出预览用的单源底座，同样可当参数集使用 |
+| v1.0.0 回滚锚 | 1 | `legacy_v1.0.json`——v1.0.0 的**数值**（amplitude 0.012 / breathing 0.006 / ambient 0.16，12fps、640px、96 帧）+ 显式 `tier: legacy` + `dither: false` + 两个落位开关显式关闭。**行为级**回滚而非字节级（R40 / R46b）：`durationSec` 取 6.0 而不是 v1.0.0 的 3.0，因为整周期规则下只有 6.0 能精确表达 `parallax.periodSec 6.0`。其 `configHash` 由专门用例钉住 |
 
-这 37 份演示预设与图鉴演示一一对应，由 `tool/generate_showcase.dart` 单源生成（改预设请改生成器，否则会被下次生成覆盖）。
+分组名里的「v1.1/v1.2 代」「v1.3」标注的是**效果列表**的世代，不是渲染档：42 份里只有 `legacy_v1.0.json` 一份写了 `tier`，其余全部跟随出厂默认——v1.4 起默认是 `standard`（H1），而演示预设由 `tool/generate_showcase.dart` 按「等于默认就不写」的习语重发，因此它们的 `quality` 段整段省略（渲染语义一字未变）。要保住旧算法请在 JSON 里显式写 `"tier": "legacy"`（或直接加载 `legacy_v1.0.json`）；`contentAware` / `panelAware` 除 `legacy_v1.0.json` 外没有任何预设写过 ⇒ 两个落位门开箱即开（R30 / R39）。
+
+这 40 份演示预设与图鉴演示一一对应，由 `tool/generate_showcase.dart` 单源生成（改预设请改生成器，否则会被下次生成覆盖）；`classic.json` 与 `legacy_v1.0.json` 不在演示集内。
 
 ## 工程结构
 
@@ -439,7 +443,7 @@ lib/
     effects/
       comic_pass.dart      # 漫画动势类效果的绘制通路
       particle_raster_pass.dart  # 粒子类效果的统一光栅通路
-presets/                   # 38 个内置预设参数
+presets/                   # 42 个内置预设参数
 sample_images/             # 10 张占位样图
 tool/                      # 样图生成 / 冒烟 / 图鉴生成 / 性能基准 / GIF 校验等脚本
 test/engine_test.dart      # 引擎与配置测试
@@ -462,17 +466,31 @@ doc/                       # 动效目录（API/部署文档在 comic_motion_ser
 
 ## 性能参考
 
-以下为 `tool/bench.dart` 在 1080p 样图上的实测（`build/bench/bench_report.json`，parallel=8）：
+`tool/bench.dart` 在 `sample_images/01_portrait.png`（900×1300）上的实测，引擎 1.4.0，parallel=8，**取 3 次运行的中位数**（2026-10-03；末次明细在 `build/bench/bench_report.json`）。峰值 RSS 是进程高水位，因此同一次运行靠后的行共用一个值，不是彼此独立的测量。
 
 | 场景 | 效果数 | 档位 | 耗时 | 峰值内存 | 红线 |
 |---|---|---|---|---|---|
-| 480p / 12fps / 2s（草稿） | 3 | legacy | 233 ms | 377 MB | ≤450 ms ✅ |
-| 1080p / 24fps / 4s（典型） | 3 | legacy | 2.25 s | 534 MB | ≤5 s ✅ |
-| 1600 / 24fps / 4s（预览上限） | 3 | legacy | 3.49 s | 607 MB | ≤7 s ✅ |
-| 1080p 标准档 | 3 | standard | 4.26 s | 607 MB | — |
-| 1080p 全效果（最坏情况） | 32 | standard | 5.20 s | 628 MB | ≤9 s ✅ |
+| 480p / 12fps / 2s（草稿） | 3 | legacy | 301 ms | 389 MB | ≤450 ms ✅ |
+| 1080p / 24fps / 4s（典型） | 3 | legacy | 2.61 s | 554 MB | ≤5 s ✅ |
+| 1600 / 24fps / 4s（预览上限） | 3 | legacy | 3.73 s | 643 MB | ≤7 s ✅ |
+| 1600 / 24fps / 4s——**出厂默认档** | 3 | standard（引擎默认） | 5.66 s | 647 MB | ≤7 s ✅ |
+| 1080p / 24fps / 4s 标准档 | 3 | standard | 3.95 s | 647 MB | — |
+| 1080p / 24fps / 4s 19 效（v1.2 下限） | 19 | legacy | 3.05 s | 647 MB | — |
+| 1080p / 24fps / 4s 19 效 rich | 19 | rich | 4.24 s | 647 MB | — |
+| 1080p 全效果（最坏情况） | 32 | standard | 5.14 s | 647 MB | ≤9 s ✅ |
 
-并行度扫描（standard 档 1080p 96 帧三件套）：`1 → 16.67 s`、`2 → 9.45 s`、`4 → 6.08 s`、`8 → 4.77 s`，四次 GIF **字节一致**，`parallel=1` 峰值 628 MB（红线 780 MB）。可复现性：同参数 SHA256/FNV-1a 逐字节一致；legacy 档与 v1.2 输出逐字节一致（`presets/classic.json` 演练通过）。
+并行度扫描（standard 档 1080p 96 帧三件套）：`1 → 13.66 s`、`2 → 8.95 s`、`4 → 5.62 s`、`8 → 4.02 s`，四次 GIF **字节一致**（FNV `-287a4af0a4b1fe73`），`parallel=1` 峰值 647 MB（红线 780 MB）。可复现性：基准 GIF 三次运行摘要都是 `1d8b6c35a0a57643`，改参数后摘要改变（敏感性门通过）。上表 legacy 行是显式钉住 `tier: legacy` 测出的历史下限；v1.4 出厂即 standard，开箱成本看 standard 行（要按「出厂默认档」那行排产：1600 上限下比 legacy 慢 **+52%**）。v1.2 **逐字节**复现演练已按设计不再全绿（见「复现承诺与边界」：H2/R46b 后 classic 演练 0/10），行为级回滚锚改用 `presets/legacy_v1.0.json`。
+
+**多格输入比样图占位图更贵，并且压破两条红线。** 真实两格页（1800×2600，由 `sample_images/03_two_panel.png` 最近邻 ×2 放大构造，暂存 `build/bench/in_twopanel_1800x2600.png`）跑同一套场景：
+
+| 场景 | 效果数 | 档位 | 耗时 | 峰值内存 | 红线 |
+|---|---|---|---|---|---|
+| 1600 / 24fps / 4s——**出厂默认档** | 3 | standard（引擎默认） | 8.17 s | 1033 MB | ❌ >7 s（3 次里 2 次超，6.57 s 那次通过） |
+| 1600 / 24fps / 4s legacy | 3 | legacy | 5.40 s | 1023 MB | ≤7 s ✅ |
+| `parallel=1` 串行扫描 | 3 | standard | 11.57 s | 1033 MB | ❌ >780 MB（3 次全超） |
+| 1080p 全效果 | 32 | standard | 4.47 s | 1033 MB | ≤9 s ✅ |
+
+逐格分层（`panelAware`，R39 起默认开）为每一格保留一份层栅格，峰值内存随**格数**增长而不只是随工作像素增长——同样 `maxDimension` 下单页样图 647 MB、两格页 1033 MB。红线**没有**为它放宽。实际结论：条漫画 / 多格页在 1600 上限下务必传 `memoryBudgetMb`（预算通路会在 OOM 前先降工作分辨率并把降级写进 `warnings`）或把 `maxDimension` 降到 ≤1080；这种页面的 `parallel=1` 视为超出 780 MB 串行红线（用 ≥2 worker，1150 MB 线成立：`2 → 6.74 s`、`4 → 4.56 s`、`8 → 3.37 s`）。确定性在该输入上同样不受影响：基准 GIF 三次都是 `647695f0b0644120`，整条并行扫描产出同一字节流（`-65ae766127adf731`），串行与并行一致。另有一次草稿档偶发越线（`480p` 531 ms > 450 ms，另两次 373 / 390 ms），量级属运行间抖动，未据此调整任何阈值。
 
 ### 移动端真机参考区间（粗略）
 
@@ -510,6 +528,23 @@ dart run tool/gif_check.dart   # GIF 严格逐帧解码校验
 保留至少一个次版本，下一个主版本再移除。结构化错误码（`E_*`）是稳定标识：
 只增不改义。v1.3.0 早于本政策——当时未经周期直接 breaking 修改
 `RgbaImage.data`，正是本政策要约束的反例。
+
+**v1.4.0 带两个刻意破坏性变更**（均为产品决策、经批准，不是 API 疏漏——详见
+`doc/CHANGELOG_zh-CN.md`）：
+
+- **H1——出厂默认值就地改动**：不新增键、不提供迁移路径。`quality.tier`
+  `legacy → standard`、`contentAware` `false → true`、`panelAware`
+  `false → true`、`parallax.amplitude` `0.012 → 0.030`（配套幅度同步上调），
+  而 `dither` 回到 `false`。**显式钉住**取值的既有配置完全不动，只有未钉住
+  的配置随之移动。默认配置的序列化形状从未改变（等于默认值的键照旧省略），
+  所以 JSON schema 没有变化；变化的是每份配置渲染出的字节，因此本版做
+  **唯一一次** `configHash` re-baseline。
+- **H2——`legacy` 的语义收窄**：从「与 v1.2 逐字节一致」收窄为「v1.2 的
+  *像素算法*」。改写时间基的无缝循环修复对两条臂同时生效（整数周期对齐
+  R18、竖向整数循环数 R19），层反相的步进（R16）是相位常数而非像素算法——
+  所以 `legacy` 输出不再 replay 2026-09-14 的 v1.2 基线（演练 0/10，这是
+  被记录并认可的状态）。回滚时应取 `presets/legacy_v1.0.json`：v1.0.0 数值
+  + `tier: legacy` + 两个落位开关关闭，属**行为级**回滚而非字节级（R46b）。
 
 ## License
 

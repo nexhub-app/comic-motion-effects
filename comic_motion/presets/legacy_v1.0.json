@@ -3,42 +3,39 @@
   "effects": [
     "parallax",
     "breathing",
-    "leaves"
+    "ambient"
   ],
   "parallax": {
-    "amplitude": 0.03,
-    "periodSec": 3.0,
-    "directionDeg": 8.0,
+    "amplitude": 0.012,
+    "periodSec": 6.0,
+    "directionDeg": 0.0,
     "verticalRatio": 0.35
   },
   "breathing": {
     "enabled": true,
-    "amplitude": 0.01,
-    "periodSec": 3.0,
+    "amplitude": 0.006,
+    "periodSec": 4.0,
     "anchor": "center"
   },
   "ambient": {
     "enabled": true,
     "particleCount": 40,
     "speed": 12.0,
-    "opacity": 0.22,
+    "opacity": 0.16,
     "mode": "dust"
   },
-  "leaves": {
-    "count": 26,
-    "fallCycles": 1,
-    "sizePx": 13.0,
-    "flipTurns": 2,
-    "swayPx": 32.0,
-    "opacity": 0.9,
-    "palette": "autumn"
+  "quality": {
+    "tier": "legacy",
+    "dither": false
   },
   "fps": 12,
-  "durationSec": 3.0,
+  "durationSec": 6.0,
   "depthMode": "autoLayers",
   "layerCount": 3,
   "outputFormat": "both",
   "seed": 20260914,
-  "maxDimension": 512,
-  "maxFrames": 96
+  "maxDimension": 640,
+  "maxFrames": 96,
+  "contentAware": false,
+  "panelAware": false
 }

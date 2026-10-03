@@ -1298,8 +1298,8 @@ void main() {
           names,
           containsAll([
             'fps', 'durationSec', 'maxDimension', 'layerCount', 'maxFrames',
-            'seed', 'dither', 'qualityTier', 'outputFormat', 'amplitude',
-            'directionDeg', 'effects',
+            'seed', 'dither', 'qualityTier', 'contentAware', 'panelAware',
+            'outputFormat', 'amplitude', 'directionDeg', 'effects',
           ]));
       final base = EffectConfig();
       Object? specOf(String n) =>
@@ -1312,6 +1312,10 @@ void main() {
       expect(specOf('seed'), base.seed);
       expect(specOf('dither'), base.quality.dither);
       expect(specOf('qualityTier'), base.quality.tier);
+      expect(specOf('contentAware'), base.contentAware,
+          reason: 'R30/R36 默认 true：目录声明值必须与构造默认同源（第五锁步源）');
+      expect(specOf('panelAware'), base.panelAware,
+          reason: 'R39 默认 true：同上');
       expect(specOf('outputFormat'), base.outputFormat);
       expect(specOf('amplitude'), base.parallax.amplitude);
       expect(specOf('directionDeg'), base.parallax.directionDeg);
@@ -2123,11 +2127,16 @@ void main() {
       expect(j.containsKey('impactFlash'), isFalse);
       expect(j.containsKey('heartbeat'), isFalse);
       expect(j.containsKey('reducedMotion'), isFalse);
-      // v1.0.0 指纹锁定（tool/config_fingerprint.dart）
-      expect(EffectConfig().configHash, '-477687d5e8bded5f');
+      // Task 3.7 唯一一次 re-baseline（H2）：锚点由 v1.0.0 指纹换成 v1.4.0
+      // 指纹。移动的唯一根因是 3.1 抬高的默认振幅（会被序列化）；3.6 系列
+      // 四次默认翻转全部走「等于默认就不写」哨兵 ⇒ 默认 JSON 键集一字未动，
+      // 上面那串 containsKey 与本组 3.6b/3.6d/3.6e 的键集门就是证据。
+      // 要 v1.0.0 的旧默认值请用 presets/legacy_v1.0.json（R40）——
+      // tier: legacy 只冻结像素算法，不冻结旧默认值（H2）。
+      expect(EffectConfig().configHash, '-2a0679b63611bcad');
       expect(
           EffectConfig(fps: 12, durationSec: 3.0, maxDimension: 640).configHash,
-          '2e1a45e07164337e');
+          '-55953db41ee98064');
     });
 
     test('新效果参数 JSON 往返还原且哈希一致', () {
@@ -2197,7 +2206,9 @@ void main() {
     // （R39/F2 后奇偶取自 depthRank；本组走整页分层路径 li == rank，
     //  所以下面所有像素级理论值一字未改。）
     const w = 300, h = 300;
-    const amp = 0.1; // 峰值位移满幅 = amp*w = 30px（far 7.5 / mid 15 / near 22.5）
+    const amp = 0.1; // 峰值位移满幅 = amp*w = 30px；_mult=0.25+0.75·rank/maxRank
+    // ⇒ far 7.5 / mid 18.75 / near 30（Task 3.7 清单 #20：旧注释写的 15/22.5 是
+    // panelAware 归一化之前的口径，断言用的是松下界所以一直没红过——文档失真）。
     const period = 3.0;
 
     RgbaImage bandBarScene() {
@@ -2274,7 +2285,7 @@ void main() {
     test('峰值帧相邻层反向摆动：far/mid/near 质心位移反号且相对位移翻倍', () {
       // 本判别式**本质上只在纯正弦成立**：它取 t=0 作「位移恰为 0」的基线帧
       // （sin(0+rank·π)=0），再取 t=period/4 的峰值帧，才有下面那些像素级理论值
-      // （far ~7.5 / mid ~15 / near ~22.5）。Task 3.6 把默认档升到 standard 后
+      // （far ~7.5 / mid ~18.75 / near ~30，见上 `_mult` 口径）。Task 3.6 把默认档升到 standard 后
       // 载体换成 snapWave，而 snapWave(0)=0.3387≠0 ⇒ 基线假设失效。
       // 因此这里显式钉 legacy 档，钉的是「正弦载体的峰值/零位基线」这一半契约；
       // 新默认（standard + snapWave）的同一反相判别由本组末尾
@@ -2298,8 +2309,8 @@ void main() {
 
       // 每层都真实移动（远超质心量化噪声）。
       expect(dFar.abs(), greaterThan(4.0), reason: 'far 层应有 ~7.5px 位移');
-      expect(dMid.abs(), greaterThan(8.0), reason: 'mid 层应有 ~15px 位移');
-      expect(dNear.abs(), greaterThan(14.0), reason: 'near 层应有 ~22.5px 位移');
+      expect(dMid.abs(), greaterThan(8.0), reason: 'mid 层应有 ~18.75px 位移');
+      expect(dNear.abs(), greaterThan(14.0), reason: 'near 层应有 ~30px 位移');
 
       // 判别式：相邻层反相 → 位移反号。旧 li*0.35 相位下峰值帧三层同向
       //（sin(π/2+0.35)=0.939、sin(π/2+0.7)=0.765，与 sin(π/2)=1 同号），
@@ -2491,43 +2502,39 @@ void main() {
     const dur35 = 3.0;  // durationSec=3
     const badPeriod = 6.0; // mis-aligned: 3/6=0.5→cycles=1→aligned=3.0
 
-    RgbaImage bandBarScene35() {
+    // Task 3.7 清单 #8：`bandBarScene35` 与 `bandDepth35` 曾有 ~40 行**逐字**
+    // 重复的条带循环。两者必须同相（色条落在哪一带 = 深度图给哪一带），分开写
+    // 就等于让「分层几何」有两个真值来源——改一个忘另一个时判别式测的就不是
+    // 形状，而是两处常量的巧合。现在合成一个参数化构造器，一次同时产出
+    // (场景, 深度图)，输出栅格与旧两条函数逐像素一致（写入次序不变：先铺底、
+    // 后压条）。
+    (RgbaImage, DepthMap) bandSceneAndDepth35() {
       final img = RgbaImage(width: w35, height: h35);
-      for (var y = 0; y < h35; y++) {
-        final g = y < 126 ? 210 : (y < 210 ? 200 : 190);
-        for (var x = 0; x < w35; x++) {
-          img.setPixel(x, y, g, g, g);
-        }
-      }
-      for (var y = 84; y < 116; y++) {
-        for (var x = 134; x < 166; x++) {
-          img.setPixel(x, y, 235, 25, 35); // far 层红条
-        }
-      }
-      for (var y = 180; y < 210; y++) {
-        for (var x = 134; x < 166; x++) {
-          img.setPixel(x, y, 30, 200, 60); // mid 层绿条
-        }
-      }
-      for (var y = 240; y < 290; y++) {
-        for (var x = 134; x < 166; x++) {
-          img.setPixel(x, y, 40, 70, 235); // near 层蓝条
-        }
-      }
-      return img;
-    }
-
-    DepthMap bandDepth35() {
       final dm = DepthMap(w35, h35);
       for (var y = 0; y < h35; y++) {
+        final g = y < 126 ? 210 : (y < 210 ? 200 : 190);
         final d = y < 126
             ? 0.05
             : (y < 210 ? 0.45 : 0.85 + 0.15 * (y - 210) / 89);
         for (var x = 0; x < w35; x++) {
+          img.setPixel(x, y, g, g, g);
           dm.set(x, y, d);
         }
       }
-      return dm;
+      // (y0, y1, r, g, b)：far 红条 / mid 绿条 / near 蓝条，x 一律 134..166。
+      const bars = <(int, int, int, int, int)>[
+        (84, 116, 235, 25, 35),
+        (180, 210, 30, 200, 60),
+        (240, 290, 40, 70, 235),
+      ];
+      for (final (y0, y1, r, g, b) in bars) {
+        for (var y = y0; y < y1; y++) {
+          for (var x = 134; x < 166; x++) {
+            img.setPixel(x, y, r, g, b);
+          }
+        }
+      }
+      return (img, dm);
     }
 
     double centroid35(
@@ -2549,8 +2556,8 @@ void main() {
     bool isRed35(int r, int g, int b) => r > 150 && g < 90 && b < 90;
     bool isGreen35(int r, int g, int b) => g > 150 && r < 90 && b < 90;
 
-    final img35 = bandBarScene35();
-    final layers35 = LayerSplitter(layerCount: 3).split(img35, bandDepth35());
+    final (img35, depth35) = bandSceneAndDepth35();
+    final layers35 = LayerSplitter(layerCount: 3).split(img35, depth35);
 
     test('cycleCount: 整数倍周期原样通过', () {
       expect(MotionMath.cycleCount(3.0, 3.0), 1);
@@ -2749,11 +2756,14 @@ void main() {
       // 0.16<0.176、mangaShake 0.009<0.0144、heartbeat 0.012<0.016、slowPush
       // 0.035<0.048），因此 stale 重发会红。
       //
-      // 残留盲区（re-review check #1，记账给 3.7）：breathing 旧变体 0.010 恰好
-      // 等于合法新值 0.010（旧 0.005 × 2.0），任何 `>= 下限` 形态的断言都分不开
-      // 两者 ⇒ 单点回退这 2 个 breathing 文件不会被本守卫拦住。整批 stale 重发
-      // 仍会在其余五个键上红。要闭合它只能改生成数据（本轮禁止），或按 3.7 的
-      // 重钉决策把六个键统一为新默认值。
+      // 残留盲区（re-review check #1 → **3.7 裁决 R43-adjacent／清单 #7**，用户
+      // 裁决＝「接受盲区并写进 CHANGELOG」）：breathing 旧变体 0.010 恰好等于
+      // 合法新值 0.010（旧 0.005 × 2.0），任何 `>= 下限` 形态的断言都分不开两者
+      // ⇒ 单点回退这 2 个 breathing 文件不会被本守卫拦住，整批 stale 重发仍会在
+      // 其余五个键上红。**不**把下限抬回默认值（那会对已提交的 presets 集体转红），
+      // 也**不**为此改生成数据；这个盲区作为已知限制写进中英文 CHANGELOG 的
+      // 1.4.0 段。下面紧邻的 `legacy_v1.0.json` 守卫用「精确 pin + 绝对哈希」
+      // 覆盖了本文件里唯一一处**故意**低于下限的预设，防止它被顺手当成 stale。
       const floors = <String, double>{
         'parallax.amplitude': 0.024, // 0.030 × 0.8
         'breathing.amplitude': 0.0096, // 0.012 × 0.8
@@ -2780,6 +2790,11 @@ void main() {
       for (final f in files) {
         final j = convert.jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
         final name = f.uri.pathSegments.last;
+        // R40：`legacy_v1.0.json` 的**全部意义**就是把 §6.1 之前的旧数值钉死，
+        // 它必须豁免于「不低于新默认 80%」这条 floor。豁免不是放过：它由紧邻的
+        // 下一条测试用「精确 pin 值 + 显式门键 + 绝对 configHash」反向看管，
+        // 比 floor 强得多（floor 只拦下漂，那条拦任何方向的漂移）。
+        if (name == 'legacy_v1.0.json') continue;
         for (final e in floors.entries) {
           final v = pinned(j, e.key);
           if (v == null) continue;
@@ -2788,6 +2803,85 @@ void main() {
                   '（stale 重发把值退回 v1.4 前的旧默认了吗？）');
         }
       }
+    });
+
+    test('legacy_v1.0.json 守卫：钉死 v1.0.0 数值 + 三门显式关闭 + 绝对哈希', () {
+      // R40（用户裁决）：「回到 v1.0 行为」必须是一个文件，而不是一次考古。
+      // 本条是上一条 floor 守卫对这个名字豁免的**对偶**：floor 只拦「往下漂」，
+      // 这里用逐键精确值 + 必须显式存在的门键 + 绝对 configHash 拦**任何方向**
+      // 的漂移——包括「用今天的构造器重新生成」这种看似无害的覆盖。
+      final f = File('presets/legacy_v1.0.json');
+      expect(f.existsSync(), isTrue,
+          reason: 'presets/legacy_v1.0.json 必须存在（R40 的回滚预设）');
+      final j = convert.jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+
+      // 1) 三个 §6.1 抬过的叶子必须**精确**停在 v1.0.0 回执里的值。
+      //    非空洞性：若有人把生成器改回今天的默认再重发，这里得到
+      //    0.030/0.012/0.22 ⇒ 三条 expect 同时红。
+      final v100 = <String, double>{
+        'parallax.amplitude': 0.012,
+        'breathing.amplitude': 0.006,
+        'ambient.opacity': 0.16,
+      };
+      double? pinAt(Map<String, dynamic> j, String dottedKey) {
+        final dot = dottedKey.indexOf('.');
+        final seg = j[dottedKey.substring(0, dot)];
+        expect(seg, isA<Map<String, dynamic>>(),
+            reason: '$dottedKey 的父段必须显式存在（回滚预设不靠继承表达意图）');
+        final v = (seg as Map<String, dynamic>)[dottedKey.substring(dot + 1)];
+        expect(v, isA<num>(), reason: '$dottedKey 必须显式写出数值');
+        return (v as num).toDouble();
+      }
+
+      for (final e in v100.entries) {
+        expect(pinAt(j, e.key), e.value,
+            reason: '${e.key} 必须精确等于 v1.0.0 的 ${e.value}'
+                '（本文件不是引擎默认快照，classic.json 才是）');
+      }
+
+      // 2) 三扇门必须**显式写出**，不能靠「省略键 = 继承默认」表达。
+      //    R30/R36/R38/R39 把 contentAware/panelAware/dither 的默认翻到了
+      //    开／standard ⇒ 省略哨兵会随未来默认漂移，回滚意图就会静默反转。
+      expect(j.containsKey('contentAware') && j['contentAware'], isFalse,
+          reason: 'contentAware 必须显式写 false（省略 = 继承未来默认，不可靠）');
+      expect(j.containsKey('panelAware') && j['panelAware'], isFalse,
+          reason: 'panelAware 必须显式写 false（同上）');
+      final q = j['quality'];
+      expect(q, isA<Map<String, dynamic>>(), reason: 'quality 段必须显式存在');
+      expect(q['tier'], 'legacy');
+      expect(q.containsKey('dither') && q['dither'], isFalse,
+          reason: 'dither 必须显式写 false（R38：默认关，但预设不依赖默认）');
+
+      // 3) 解析后的语义 == 文件写下的意图（序列化哨兵与 ctor 默认的另一半）。
+      final cfg = EffectConfig.fromJson(j);
+      expect(cfg.quality.tier, RenderTier.legacy);
+      expect(cfg.quality.dither, isFalse);
+      expect(cfg.contentAware, isFalse);
+      expect(cfg.panelAware, isFalse);
+      expect(cfg.durationSec, 6.0,
+          reason: 'R46b：循环长度是**唯一一处故意偏离** v1.0.0 回执的叶子'
+          '（3.0 → 6.0），让 parallax.periodSec 6.0 在整数周期规则下精确'
+          '可表示 ⇒ 视差角速度与 v1.0 一致；见生成器与 CHANGELOG 的 1.4.0 段');
+      expect(cfg.parallax.periodSec, 6.0);
+      expect(cfg.breathing.periodSec, 4.0);
+      expect(cfg.effects,
+          containsAll([EffectKind.parallax, EffectKind.breathing, EffectKind.ambient]));
+
+      // 4) 绝对锚点：本预设一旦被改动（哪怕是无害的「顺手补个键」），意图就变了。
+      //    本轮（Task 3.7 · H2 唯一一次 re-baseline）由生成器打印后粘入。
+      expect(cfg.configHash, '-57e243b1ecfc30c',
+          reason: 'legacy_v1.0 的指纹是这份文件的存在理由；改它 = 改回滚语义，'
+              '必须显式重新生成并重新锚定，不许静默漂移');
+
+      // 5) 与 classic.json 分工（I3 的纠正：两者不得混为一谈）。
+      final classic = EffectConfig.fromJson(convert.jsonDecode(
+              File('presets/classic.json').readAsStringSync())
+          as Map<String, dynamic>);
+      expect(classic.configHash, isNot(cfg.configHash),
+          reason: 'classic = 引擎默认快照，legacy_v1.0 = 旧数值回滚预设，'
+              '两者混淆即失去 R40 的意义');
+      expect(classic.quality.tier, isNot(RenderTier.legacy),
+          reason: 'classic 必须跟随 v1.4 默认档（standard，R24）');
     });
   });
 
@@ -4993,7 +5087,7 @@ void main() {
     test('contentAware off 与无 anchor 逐字节一致（回归基线）', () {
       const t = 0.5;
       final withMap =
-          drawFl(flCfg(focus: flProbe), t, anchors: map); // off（默认 contentAware=false）
+          drawFl(flCfg(focus: flProbe), t, anchors: map); // off（flCfg 助手显式传 false；配置默认自 R30 起是 true）
       final classic = drawFl(flCfg(focus: flProbe), t); // 完全不传 anchors
       expect(withMap.data, equals(classic.data),
           reason: '焦点未消费时 map 传入与否必须逐字节相同');
@@ -5035,8 +5129,9 @@ void main() {
     });
 
     test('未新增 focalAuto 字段：默认 configHash 锁定、序列化无该键', () {
-      expect(EffectConfig().configHash, '-477687d5e8bded5f',
-          reason: '默认指纹不得移动（Task 3.7 门禁）');
+      expect(EffectConfig().configHash, '-2a0679b63611bcad',
+          reason: 'v1.4.0 默认指纹（Task 3.7 re-baseline 后为锚）：'
+              '本条的门是「不新增 focalAuto 键 ⇒ 默认指纹不因该字段移动」');
       final jsonFl = convert.jsonEncode(flCfg(focus: const FocusLinesParams(),
           contentAware: true).toJson());
       final jsonRc = convert.jsonEncode(rcCfg(rings: const ImpactRingsParams(),
@@ -5811,8 +5906,10 @@ void main() {
   //
   // 三源锁步（构造默认 == 缺键兜底 == 省略哨兵）与 R32 / 3.6b / 3.6e 同习语：
   // 少翻一处就重演「一次 toJson→fromJson 静默改写用户配置」。与 3.6e 不同的
-  // 是：param_catalog **没有** panelAware 行（已 grep 核实），所以本次锁步
-  // 只有三处，目录是 3.6e 特有的第五处。
+  // 是：做 3.6d 时 param_catalog **没有** panelAware 行（已 grep 核实），所以
+  // 那次锁步只有三处。Task 3.7 #5 给两个落位开关补上目录行后，「目录声明值」
+  // 成为第四个同步点，由本文件「参数目录：完整、去重、默认值与真实配置一致」
+  // 那条守卫锁住；目录不参与序列化 ⇒ 不进 configHash，补行对哈希零影响。
   group('v1.4 Task 3.6d：panelAware 哨兵=兜底=构造默认=true（R39，R32 习语）', () {
     // 锚点：故意写死字面量（与 3.6b / 3.6e 组同一口径）——实现若与本组锚点
     // 漂移，这里的门就该红，而不是跟着实现走。
