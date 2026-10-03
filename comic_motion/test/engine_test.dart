@@ -5800,6 +5800,284 @@ void main() {
       }
     });
   });
+
+  // ---------- Task 3.6d：panelAware 默认 false→true（R39，用户裁决） ----------
+  //
+  // R34 实测：panelAware 在新默认档下反而**更快**（每格层集覆盖面积更小 ⇒
+  // 合成成本 −21%/−23%），且它正是投诉 #2「效果几乎是堆叠」的结构性修复
+  // （逐格分层根除跨格串色）。但 0/41 预设显式设置它 ⇒ 默认关 = 出厂不可达。
+  //
+  // 三源锁步（构造默认 == 缺键兜底 == 省略哨兵）与 R32 / 3.6b / 3.6e 同习语：
+  // 少翻一处就重演「一次 toJson→fromJson 静默改写用户配置」。与 3.6e 不同的
+  // 是：param_catalog **没有** panelAware 行（已 grep 核实），所以本次锁步
+  // 只有三处，目录是 3.6e 特有的第五处。
+  group('v1.4 Task 3.6d：panelAware 哨兵=兜底=构造默认=true（R39，R32 习语）', () {
+    // 锚点：故意写死字面量（与 3.6b / 3.6e 组同一口径）——实现若与本组锚点
+    // 漂移，这里的门就该红，而不是跟着实现走。
+    const defPanelAware = true;
+
+    test('3.6d 默认 true：构造默认 == 省略哨兵 ⇒ 默认 JSON 不写 panelAware 键', () {
+      expect(EffectConfig().panelAware, defPanelAware,
+          reason: '构造默认必须等于本组锚点（true）');
+      expect(EffectConfig().panelAware, isTrue,
+          reason: 'R39：默认开启分格感知（投诉 #2 的开箱修复）');
+      // 省略条件与锚点锁步：等于 defPanelAware 就不写。
+      expect(EffectConfig().toJson().containsKey('panelAware'),
+          EffectConfig().panelAware != defPanelAware,
+          reason: '默认命中省略哨兵 ⇒ 默认 JSON 键集与翻转前逐字节相同（旧客户端兼容）');
+      expect(EffectConfig().toJson().containsKey('panelAware'), isFalse,
+          reason: '默认 JSON 必须不写键');
+      expect(EffectConfig.fromJson({'effects': ['rain']}).panelAware, isTrue,
+          reason: '缺键兜底必须等于新默认（三源锁步的第二源）');
+    });
+
+    test('3.6d 显式 false 回滚：写出键、往返保 false、保 configHash', () {
+      final rollback = EffectConfig(panelAware: false);
+      expect(rollback.toJson()['panelAware'], false,
+          reason: 'R32 教训：回滚意图一旦不写，缺键兜底成 true 就静默翻转用户配置');
+      final back =
+          EffectConfig.fromJson(_decodeJson(rollback.toJsonString()));
+      expect(back.panelAware, isFalse, reason: '往返丢失回滚意图');
+      expect(back.configHash, rollback.configHash,
+          reason: '一次 JSON 往返就改 configHash = 同一份 JSON 有两种渲染行为');
+      expect(back.toJson(), rollback.toJson(),
+          reason: '往返后序列化形状必须不动');
+      expect(rollback.configHash, isNot(EffectConfig().configHash),
+          reason: '回滚与默认同哈希 ⇒ 回滚意图不可表达');
+    });
+
+    test('3.6d 双向形状：{"panelAware": false} 进出无损；显式 true == 新默认', () {
+      // 省略条件逐案例对上锚点：写键 ⟺ 值 != defPanelAware。
+      for (final v in [true, false]) {
+        final probe = EffectConfig(panelAware: v);
+        expect(probe.toJson().containsKey('panelAware'), v != defPanelAware,
+            reason: '省略哨兵漂移：panelAware=$v');
+      }
+      // 外部字面回滚（服务端 API / 用户手写 JSON 的形状）。
+      final j =
+          EffectConfig.fromJson({'effects': ['rain'], 'panelAware': false});
+      expect(j.panelAware, isFalse);
+      expect(j.toJson()['panelAware'], false, reason: '回滚键必须原样写回');
+      expect(EffectConfig.fromJson(j.toJson()).configHash, j.configHash);
+      // 显式 true 与新默认逐字节等价 ⇒ 不写键、同哈希。
+      final on = EffectConfig(panelAware: true);
+      expect(on.toJson().containsKey('panelAware'), isFalse);
+      expect(on.configHash, EffectConfig().configHash);
+      expect(on.toJson(), EffectConfig().toJson());
+      expect(EffectConfig.fromJson(_decodeJson(on.toJsonString())).configHash,
+          on.configHash);
+    });
+
+    test('3.6d 兜底语义：显式 null 键 = 缺键 ⇒ 新默认；false/非 bool 仍落 false', () {
+      expect(EffectConfig.fromJson({'panelAware': null}).panelAware, isTrue,
+          reason: 'null = 「没说过」 ⇒ 落新默认，绝不静默落 false');
+      expect(EffectConfig.fromJson({'panelAware': true}).panelAware, isTrue);
+      expect(EffectConfig.fromJson({'panelAware': false}).panelAware, isFalse);
+      // sanitize **方向**与翻转前一致：旧写法 `== true` 一直把非 bool 折成
+      // false，本次只翻默认值、不改这条。理由：垃圾值是「没说清楚」而不是
+      // 「要求开启」，且它与 3.6b 的 contentAware 同规则 ⇒ 嵌入方对两个布尔
+      // 旗标只需记一条约定。（若翻成 `!= false`，'yes' 会静默变成开启。）
+      expect(EffectConfig.fromJson({'panelAware': 'yes'}).panelAware, isFalse);
+      expect(EffectConfig.fromJson({'panelAware': 1}).panelAware, isFalse);
+    });
+
+    test('3.6d copy/链式路径保留 panelAware', () {
+      expect(EffectConfig().copy().panelAware, isTrue,
+          reason: 'copy 必须携带新默认');
+      expect(EffectConfig(panelAware: false).copy().panelAware, isFalse,
+          reason: 'copy 不得把显式回滚洗成默认');
+      expect(
+          EffectConfig(panelAware: false)
+              .withEffect(EffectKind.rain)
+              .panelAware,
+          isFalse);
+      expect(EffectConfig().clearEffects().panelAware, isTrue);
+    });
+
+    test('3.6d 默认 JSON 键集不动 ⇒ 默认 configHash 不因本次翻转移动', () {
+      // 本次只翻默认「值」+ 哨兵方向；默认配置序列化的字节形状逐字节冻结
+      // （绝对字面量归 3.7 重锚定，这里钉的是「3.6d 自身不移动默认哈希」）。
+      expect(EffectConfig().toJson().containsKey('panelAware'), isFalse);
+      expect(EffectConfig(panelAware: true).toJson(), EffectConfig().toJson());
+    });
+  });
+
+  // ---------- Task 3.6d / F2：反相步进改由 depthRank 供给（跨格一致） ----------
+  //
+  //  parked finding F2：`frame_compositor.dart` 的四条视差项用 `li * math.pi`
+  //  供给奇偶，`li` 是**全部层的扁平循环下标**。panelAware 关闭时只有一个层集、
+  //  层按 far→near 顺序生成 ⇒ `li == depthRank`，F2 不可见；panelAware 开启时
+  //  层按「格序 × 格内 rank 序」分块排布（pipeline.dart:_splitPerPanel），
+  //  2 格 × 3 层 ⇒ li = 0..5 对上 depthRank = 0,1,2,0,1,2。于是**同一深度 rank
+  //  在两个格里反号摆动**——页面读起来像两格互相滑开，正是投诉 #2 的形态。
+  //
+  //  修法：奇偶取 `layers[li].depthRank`。这有既有先例——同文件的 `_mult`
+  //  （视差幅度倍率）早就是 rank 归一的（「同 rank 同幅度，跨格一致」），
+  //  li 奇偶让它两打架。幅度用 rank、相位用 li = 半个修复。
+  group('v1.4 Task 3.6d / F2：跨格同 rank 同向、格内相邻 rank 反号', () {
+    const w = 300, h = 620;
+    const amp = 0.1; // 满幅 amp*w = 30px（far 7.5 / mid 15 / near 22.5）
+    const period = 3.0;
+    const pivot = 150.0; // 条中心 = 缩放枢轴 ⇒ 质心位移即 dx 本身
+
+    // 两格内容**纵向形状相同**（B 相对 A 平移 offB）：同 rank 的条在两格里的
+    // 静止列都是 pivot ⇒ 任何一格的质心偏离另一格同 rank 条，就是跨格不同向
+    // 的证据。
+    //
+    // 条的纵向位置刻意全部靠近画布中心（缩放枢轴 h/2）：`_drawLayer` 的
+    // cover=1+2(|dx|+|dy|)/min(w,h) 是**整层绕画布中心**放大（resampler.dart
+    // 的 cy=sh*anchorY / h*anchorY），离中心越远挪得越多，贴着格边的条会被
+    // 推出本格 clip 而整体消失（首版就死在这里：n=0）。横向不受影响——条中心
+    // 恰在 x 枢轴 w/2 上，缩放只作用于两侧对称位置，质心位移即该层 dx 本身。
+    final panelA = PixelRect(0, 0, w, 290);
+    final panelB = PixelRect(0, 330, w, 290);
+    const rankRowsA = [120, 160, 200]; // 每 rank 一条 32px 高的横条
+    const offB = 220; // 格 B 的条 = 340 / 380 / 420，同样贴着中心
+
+    bool isRed(int r, int g, int b) => r > 150 && g < 110 && b < 110;
+    bool isGreen(int r, int g, int b) => r < 110 && g > 150 && b < 110;
+    bool isBlue(int r, int g, int b) => r < 110 && g < 110 && b > 150;
+    final rankHit = [isRed, isGreen, isBlue];
+
+    // 层内容：只有本 rank 在本格内的那根条，其余全透明。renderFrame 从空画布
+    // 起画（frame_compositor.dart:866 不铺底图），故质心只可能来自位移后的条。
+    LayerImage barLayer(int rank, PixelRect panel, int topY) {
+      final im = RgbaImage(width: w, height: h);
+      for (var y = topY; y < topY + 32; y++) {
+        for (var x = 134; x < 166; x++) {
+          final o = (y * w + x) * 4;
+          final rgb = [
+            [235, 25, 35],
+            [30, 200, 60],
+            [40, 70, 235]
+          ][rank];
+          im.data[o] = rgb[0];
+          im.data[o + 1] = rgb[1];
+          im.data[o + 2] = rgb[2];
+          im.data[o + 3] = 255;
+        }
+      }
+      return LayerImage(im, rank, clip: panel);
+    }
+
+    // 层序 = 格序 × 格内 rank 序，与 _splitPerPanel 的产出逐字同构。
+    List<LayerImage> twoPanelLayers() => [
+          for (final r in [0, 1, 2]) barLayer(r, panelA, rankRowsA[r]),
+          for (final r in [0, 1, 2]) barLayer(r, panelB, rankRowsA[r] + offB),
+        ];
+
+    RgbaImage blankBase() => RgbaImage(width: w, height: h);
+
+    // 在该格的纵向区间内扫描命中色的列质心。区间按**整格**取（不是按条取），
+    // 因为竖向位移 + 绕画布中心缩放会把条挪出固定窄带；一格内有三个不同色的
+    // 条，靠颜色谓词区分 rank，靠 y 区间区分格（两格各占一半画布高度）。
+    double centroidX(
+        RgbaImage f, int yFrom, int yTo, bool Function(int, int, int) hit) {
+      var sumX = 0, n = 0;
+      for (var y = yFrom; y < yTo; y++) {
+        for (var x = 0; x < w; x++) {
+          final o = (y * w + x) * 4;
+          if (f.data[o + 3] > 64 &&
+              hit(f.data[o], f.data[o + 1], f.data[o + 2])) {
+            sumX += x;
+            n++;
+          }
+        }
+      }
+      expect(n, greaterThan(0), reason: '条必须可见（y $yFrom..$yTo）');
+      return sumX / n;
+    }
+
+    // 格 A / 格 B 各自的扫描纵向区间（以格间缝隙 290..330 为界）。
+    const scanA0 = 0, scanA1 = 300;
+    const scanB0 = 320, scanB1 = 620;
+
+    void runCrossPanelArm(RenderTier tier, String arm) {
+      final layers = twoPanelLayers();
+      final cfg = EffectConfig(
+        effects: const [EffectKind.parallax],
+        fps: 8,
+        durationSec: period,
+        panelAware: true,
+        parallax: ParallaxParams(amplitude: amp, periodSec: period),
+        quality: QualityParams(tier: tier),
+      );
+      final comp = FrameCompositor(layers, blankBase(), cfg);
+      // 峰值帧：sin(π/2 + rank·π) = ±1 交替；standard 走 snapWave 同奇偶。
+      final f = comp.renderFrame(period / 4);
+
+      final dA = <double>[], dB = <double>[];
+      for (var r = 0; r < 3; r++) {
+        dA.add(centroidX(f, scanA0, scanA1, rankHit[r]) - pivot);
+        dB.add(centroidX(f, scanB0, scanB1, rankHit[r]) - pivot);
+      }
+
+      // (a) 跨格同向：同 rank 在两格里的位移必须一致。F2 未修时 panel B 的
+      // rank0 落在 li=3（奇）⇒ 与 panel A rank0（li=0 偶）反号，本断言必红。
+      for (var r = 0; r < 3; r++) {
+        expect(dA[r], closeTo(dB[r], 1.5),
+            reason: '$arm rank$r 两格同向被破坏：A=${dA[r].toStringAsFixed(2)} '
+                'B=${dB[r].toStringAsFixed(2)}（差 ${r == 0 ? 'li 奇偶跨格翻转' : 'F2 复发'}）');
+      }
+      // 非空判：条确实动了（否则上面三条同向是真空成立）。
+      for (var r = 0; r < 3; r++) {
+        expect(dA[r].abs(), greaterThan(3.0),
+            reason: '$arm rank$r 应有可测位移（far 7.5 / mid 15 / near 22.5）');
+      }
+      // (b) 格内相邻 rank 反号：3.2 的张力性质在 panelAware 下必须原样保持。
+      expect(dA[0].sign, -dA[1].sign, reason: '$arm 格 A far/mid 应反向');
+      expect(dA[1].sign, -dA[2].sign, reason: '$arm 格 A mid/near 应反向');
+      expect(dB[0].sign, -dB[1].sign, reason: '$arm 格 B far/mid 应反向');
+      expect(dB[1].sign, -dB[2].sign, reason: '$arm 格 B mid/near 应反向');
+    }
+
+    test('F2 legacy 臂：跨格同 rank 同向 + 格内相邻 rank 反号', () {
+      runCrossPanelArm(RenderTier.legacy, 'legacy');
+    });
+
+    test('F2 standard 臂（新默认 snapWave）：跨格同 rank 同向 + 格内反号', () {
+      runCrossPanelArm(RenderTier.standard, 'standard');
+    });
+
+    test('F2 无副作用前提：panelAware 关闭路径上 depthRank == 层下标', () {
+      // F2 改的是奇偶的**取值来源**。本门钉住它的前提：单层集路径（整页分层）
+      // 由 LayerSplitter 按 li 顺序生成 rank（depth_splitter.dart 的
+      // `layers.add(LayerImage(layer, li))`），故 `li == depthRank` ⇒ 改法对
+      // 关闭路径逐字节是恒等式。谁日后把 rank 顺序打乱，这里先红。
+      RgbaImage raster() {
+        final im = RgbaImage(width: 120, height: 120);
+        for (var y = 0; y < 120; y++) {
+          for (var x = 0; x < 120; x++) {
+            final o = (y * 120 + x) * 4;
+            final v = y < 50 ? 12 : (y < 90 ? 115 : 235);
+            im.data[o] = v;
+            im.data[o + 1] = v;
+            im.data[o + 2] = v;
+            im.data[o + 3] = 255;
+          }
+        }
+        return im;
+      }
+
+      final src = raster();
+      final dm = DepthMap(120, 120);
+      for (var y = 0; y < 120; y++) {
+        for (var x = 0; x < 120; x++) {
+          dm.set(x, y, y < 50 ? 0.05 : (y < 90 ? 0.45 : 0.95));
+        }
+      }
+      final layers = LayerSplitter(layerCount: 3)
+          .split(src, dm)
+          .asMap()
+          .entries
+          .toList();
+      expect(layers, hasLength(3));
+      for (final e in layers) {
+        expect(e.value.depthRank, e.key,
+            reason: '关闭路径必须 li == depthRank（F2 恒等前提）');
+      }
+    });
+  });
 }
 
 // ---------- helpers ----------

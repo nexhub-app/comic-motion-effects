@@ -347,29 +347,33 @@ content (measure with your own material); the decoded result is
 pixel-identical to `none` — locked by tests using a spec-compliant
 compositor.
 
-### Panel-aware layering (opt-in, W5)
+### Panel-aware layering (on by default since v1.4, W5)
 
 Heuristic depth across panel borders is the main quality culprit for
 multi-panel comic pages: panels slide against each other and content
-bleeds across gutters. `panelAware: true` detects panel bands first
+bleeds across gutters. `panelAware` detects panel bands first
 (horizontal white-gutter scan; sensitivity: near-white row ≥ 90% pixels
 at luminance ≥ 245, gutter ≥ 0.5% page height, panel ≥ 6% page height,
 fewer than 2 panels falls back to whole-page layering), then estimates
 depth and splits layers **per panel**. Layers carry their panel bounds
 (`LayerImage.clip`) and the compositor clips drawing to the panel —
 cross-panel bleed is eliminated, and per-panel parallax amplitude is
-normalized by in-panel depth rank so all panels move consistently.
+normalized by in-panel depth rank so all panels move consistently. The
+anti-phase step between adjacent depths keys on that same depth rank
+(not on the flat layer index), so equal-depth layers in different panels
+swing the same way.
 
 ```dart
 final config = EffectConfig(
   fps: 24, durationSec: 2, maxDimension: 1080,
   effects: [EffectKind.parallax],
-  panelAware: true, // off by default; configHash unchanged when absent
+  panelAware: true, // default since v1.4; omitted from JSON when default
 );
 ```
 
-Single-panel / no-gutter images fall back to whole-page layering
-byte-identical to `panelAware: false`. Orthogonal with strip mode (each
+Passing `panelAware: false` is the rollback; it is the only case that
+writes the key. Single-panel / no-gutter images fall back to whole-page
+layering byte-identical to `panelAware: false`. Orthogonal with strip mode (each
 slice runs the standard pipeline, panel detection applies within the
 slice). Nested vertical sub-panels are future work.
 

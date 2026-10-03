@@ -1281,7 +1281,11 @@ class EffectConfig {
     this.maxDimension = 1600,
     this.maxFrames = 96,
     this.reducedMotion = false,
-    this.panelAware = false,
+    // v1.4 R39（用户裁决）：分格感知默认**开启**。0/41 预设显式设置它 ⇒
+    // 默认关等于出厂不可达；R34 实测它反而更快（每格层集覆盖面积更小，
+    // 合成 −21%/−23%），且它是投诉 #2「效果几乎是堆叠」的结构性修复。
+    // 三源锁步之一（另两处：toJson 省略哨兵 / fromJson 缺键兜底）。
+    this.panelAware = true,
     this.contentAware = true,
 
     /// ---- R5 顶层便捷参数（null = 不触碰对应嵌套字段）----
@@ -1507,7 +1511,12 @@ class EffectConfig {
         'maxDimension': maxDimension,
         'maxFrames': maxFrames,
         if (reducedMotion) 'reducedMotion': true,
-        if (panelAware) 'panelAware': true,
+        // R39 翻转（习语同 R32 / 3.6b / 3.6e）：省略条件必须等于
+        // 「== 构造默认(true)」——默认不写键（默认 JSON 键集逐字节不动、
+        // configHash 不移动），显式回滚 false 才写出键。旧写法
+        // `if (panelAware) 'panelAware': true` 在新默认下会把回滚意图省略掉，
+        // 缺键兜底成 true ⇒ 一次 toJson→fromJson 静默改写用户配置（哈希即身份）。
+        if (!panelAware) 'panelAware': false,
         // R32 习语 + 3.6b 翻转：省略条件必须等于「== 构造默认(true)」，
         // 默认不写键（默认 JSON 键集逐字节不动），显式回滚 false 写出键。
         if (!contentAware) 'contentAware': false,
@@ -1773,7 +1782,12 @@ class EffectConfig {
       maxDimension: (j['maxDimension'] as num?)?.toInt() ?? 1600,
       maxFrames: (j['maxFrames'] as num?)?.toInt() ?? 96,
       reducedMotion: j['reducedMotion'] == true,
-      panelAware: j['panelAware'] == true,
+      // R39（三源锁步第三源，写法与下面 contentAware 逐字同构）：缺键与显式
+      // null 都是「没说说过」⇒ 落新默认 true；显式 false 与非 bool 值仍
+      // sanitize 成 false——sanitize **方向**与翻转前一致（旧 `== true` 一直把
+      // 非 bool 折成 false），本次只翻默认值。写成 `!= false` 会让 'yes' / 1
+      // 静默变成「要求开启」，那是把垃圾输入当授权。
+      panelAware: j['panelAware'] == null ? true : j['panelAware'] == true,
       // 3.6b：缺键与显式 null 都落新默认 true（= 构造默认 = 省略哨兵，三源
       // 锁步）；显式 false 与非 bool 值仍 sanitize 成 false（兜底方向翻转、
       // sanitize 语义不变）。

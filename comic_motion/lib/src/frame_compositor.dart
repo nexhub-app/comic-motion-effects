@@ -941,15 +941,30 @@ class FrameCompositor {
         } else {
           final ampPx = config.parallax.amplitude * _env.motion * w * _mult[li];
           final phase = 2 * math.pi * tSec / alignedPeriod;
-          // v1.4 硬张力（规格 §6.1）：相邻深度层反相（相位步进 li·π），
+          // v1.4 硬张力（规格 §6.1）：相邻深度层反相（相位步进 rank·π），
           // 奇数层与偶数层反向摆动，相邻层相对位移翻倍且肉眼可见；
           // 旧 li*0.35 同向微差在摆幅内互相对销，看不出纵深。
           // Task 3.4（§6.2/R17）：standard+ 载体换成 snapWave，θ/(2π) 折算
-          // 保持 3.2 的 li·π 反相步进（奇数层 u+0.5 → 反瓣）；legacy 分支
+          // 保持 3.2 的 rank·π 反相步进（奇数层 u+0.5 → 反瓣）；legacy 分支
           // 冻结为原 sin 表达式。多幅度项（ampPx/dxDir/verticalRatio/dyDir）不动。
+          // Task 3.6d（F2 / R39）：奇偶的**来源**从扁平层下标 `li` 改为
+          // `depthRank`。tier 契约冻结的是**波形**（legacy=sin、standard=
+          // snapWave），不是「由哪个下标供给奇偶」——若两条 arm 各用一种下标，
+          // 选档就会连带改变空间行为，与本轮一路在拆的 tier×几何耦合（R6/R36：
+          // 落位门 ⊥ 渲染档门）相违，故四Occurrences 一并改。
+          // 为什么必须改：panelAware 开启时层按「格序 × 格内 rank 序」排布
+          // （pipeline.dart `_splitPerPanel`），2 格 × 3 层 ⇒ li=0..5 对上
+          // depthRank=0,1,2,0,1,2，格 B 的 rank0 落在 li=3（奇）⇒ 与格 A 的
+          // rank0（偶）**反号摆动**，两格同深度层互相滑开 = 投诉 #2 的形态。
+          // 幅度倍率 `_mult`（构造器）早已按 rank 归一（「同 rank 同幅度，跨格
+          // 一致」），相位与幅度必须同源，否则半个修复。
+          // 代价：panelAware 关闭路径 li == depthRank（整页分层按 rank 顺序生成
+          // ——depth_splitter.dart `layers.add(LayerImage(layer, li))`），本改动
+          // 在该路径上是恒等式 ⇒ 旧默认产物逐字节不动。
+          final parity = layers[li].depthRank * math.pi;
           final snapDx = _aa
-              ? snapWave((phase + li * math.pi) / (2 * math.pi))
-              : math.sin(phase + li * math.pi);
+              ? snapWave((phase + parity) / (2 * math.pi))
+              : math.sin(phase + parity);
           // R19：竖向基底频率用整数 cycleCount 替代非整 0.8 倍率，
           // 保证 dyCycles 整周期闭合（directionDeg≠0/180 时竖向不再跳缝）。
           // cycles 取自循环外的单一真值（见上），此处只做 0.8 倍率取整。
@@ -957,8 +972,8 @@ class FrameCompositor {
           final dyPhase =
               2 * math.pi * tSec * dyCycles / config.durationSec;
           final snapDy = _aa
-              ? snapWave((dyPhase + li * math.pi + 0.9) / (2 * math.pi))
-              : math.sin(dyPhase + li * math.pi + 0.9);
+              ? snapWave((dyPhase + parity + 0.9) / (2 * math.pi))
+              : math.sin(dyPhase + parity + 0.9);
           dx += snapDx * ampPx * dxDir;
           dy += snapDy * ampPx * config.parallax.verticalRatio * dyDir;
         }

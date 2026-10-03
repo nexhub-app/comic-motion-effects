@@ -7,9 +7,11 @@ import 'package:comic_motion/comic_motion.dart';
 
 /// W5：分格感知分层 —— 横向白带检测、逐格独立分层、格边界裁剪。
 ///
-/// 红线锚点：panelAware 默认 false 不写入序列化（configHash 不变）；单格/
-/// 无白带图 on/off 逐字节等价（自动回退）；多格图白带行不串色（格边界
-/// 裁剪）；并行（worker 携带 ranks/clips）与串行产物一致；确定性。
+/// 红线锚点：v1.4 R39 起 panelAware **默认开启**——默认命中省略哨兵故仍不写
+/// 序列化键（默认 configHash 键集不动），显式 `false` 才写键；单格/无白带图
+/// on/off 逐字节等价（自动回退，这条是 R39 用户裁决时要求保留的保护）；多格图
+/// 白带行不串色（格边界裁剪）；并行（worker 携带 ranks/clips）与串行产物一致；
+/// 确定性。反相奇偶取自 depthRank 而非扁平层下标（F2，见 engine_test 3.6d 组）。
 void main() {
   /// 两格竖排图：上格红块（30..120）、白带（140..160）、下格蓝块（180..280）。
   RgbaImage twoPanelRaster() {
@@ -63,7 +65,10 @@ void main() {
         'maxDimension': 300,
         'outputFormat': 'gif',
         'seed': 7,
-        if (panel) 'panelAware': true,
+        // R39：默认已翻成 true ⇒ 「关」必须**显式写 false** 才达。沿用旧的
+        // `if (panel) 'panelAware': true` 会让 panel:false 落进缺键分支、
+        // 被兜底成 true —— 本文件的 on/off 对照用例当场变成 on≡on 的空门。
+        if (!panel) 'panelAware': false,
       };
 
   group('PanelSplitter：横向白带检测', () {
@@ -89,16 +94,59 @@ void main() {
     });
   });
 
-  group('configHash 稳定性', () {
-    test('panelAware 默认不写入；true 条件写入', () {
+  group('序列化形状 + 新默认真的进管线（R39）', () {
+    // 出厂默认配置（一个 panelAware 键都不传）——本组一切以它为准。
+    Map<String, dynamic> defaultCfgJson() => <String, dynamic>{
+          'effects': ['parallax'],
+          'fps': 24,
+          'durationSec': 2.0,
+          'maxDimension': 300,
+          'outputFormat': 'gif',
+          'seed': 7,
+        };
+
+    test('默认 true 命中省略哨兵 ⇒ 默认 JSON 不写键；false 才写', () {
+      final def = EffectConfig.fromJson({'effects': ['rain']});
+      expect(def.panelAware, isTrue, reason: 'R39：出厂默认开启分格感知');
+      expect(def.toJson().containsKey('panelAware'), isFalse,
+          reason: '默认 == 省略哨兵 ⇒ 默认 JSON 键集与翻转前逐字节相同'
+              '（旧客户端不受影响，configHash 不因此移动）');
+      expect(EffectConfig(panelAware: true).toJson().containsKey('panelAware'),
+          isFalse, reason: '显式 true 与新默认同形（不写键）');
+      expect(EffectConfig(panelAware: false).toJson()['panelAware'], false,
+          reason: '回滚意图必须序列化（否则缺键兜底成 true 静默改写用户配置）');
+    });
+
+    test('行为门：不传 panelAware 的多格页真的逐格分层（默认不是摆设）', () {
+      // 形状门只证明「JSON 里没写这个键」；本门证明新默认**走到了管线**。
+      // 少了它，翻一个默认值可以形状全对而渲染路径一动不动——正是
+      // 投诉 #2 里「默认等于没开」的那个失效模式。
+      final cfg = EffectConfig.fromJson(defaultCfgJson());
+      expect(cfg.panelAware, isTrue);
+      expect(cfg.configHash,
+          EffectConfig.fromJson({...defaultCfgJson(), 'panelAware': true})
+              .configHash,
+          reason: '显式 true == 不传（R5 便捷参数契约）');
+      final (w, layers) =
+          MotionPipeline(cfg).downscaleAndSplitForExport(twoPanelRaster());
+      expect(layers.length, 2 * cfg.layerCount,
+          reason: '两格页必须格数 × layerCount 层（panelAware 生效）');
+      expect(layers.every((l) => l.clip != null), isTrue,
+          reason: '每层携带格边界 clip');
+      expect(FrameCompositor(layers, w, cfg).debugPanelRects().length, 2,
+          reason: '合成器派生出 2 格，而不是整页回退');
+    });
+
+    test('回退门在新默认下仍成立：无白带图自动整页分层（≤1 格）', () {
+      // 这是用户裁决 R39 时明确要求保留的保护：单格 / 大留白页不得被误分格。
+      final cfg = EffectConfig.fromJson(defaultCfgJson());
+      final (w, layers) =
+          MotionPipeline(cfg).downscaleAndSplitForExport(noGutterRaster());
+      expect(layers.length, cfg.layerCount, reason: '检不出 ≥2 格 ⇒ 整页分层');
       expect(
-          EffectConfig.fromJson({'effects': ['rain']})
-              .toJson()
-              .containsKey('panelAware'),
-          isFalse,
-          reason: '默认 false 不写入 → configHash 与旧版一致');
-      expect(EffectConfig.fromJson({'panelAware': true}).toJson()['panelAware'],
-          true);
+          FrameCompositor(layers, w, cfg).debugPanelRects().length,
+          lessThanOrEqualTo(1),
+          reason: '逐格路径未启用 ⇒ 与 panelAware:false 逐字节等价（R9）');
     });
   });
 
@@ -197,7 +245,8 @@ void main() {
           'maxDimension': 300,
           'outputFormat': 'gif',
           'seed': 11,
-          if (panel) 'panelAware': true,
+          // R39：同 cfgJson——「关」要显式写 false，缺键现在是「开」。
+          if (!panel) 'panelAware': false,
           if (tier != null) 'quality': {'tier': tier},
           'rain': {'count': 400, 'opacity': 1.0, 'color': 'ff0000', 'lengthPx': 48.0},
         };
@@ -209,7 +258,8 @@ void main() {
           'maxDimension': 300,
           'outputFormat': 'gif',
           'seed': 11,
-          if (panel) 'panelAware': true,
+          // R39：同 cfgJson——「关」要显式写 false，缺键现在是「开」。
+          if (!panel) 'panelAware': false,
           'snow': {'count': 80},
         };
 
