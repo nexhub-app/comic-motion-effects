@@ -1327,7 +1327,7 @@ void main() {
       // strictRange 参数与构造器 fail-fast 一致
       expect(kRenderParamSpecs.firstWhere((s) => s.name == 'fps').strictRange,
           isTrue);
-      // 效果目录 32 种且与枚举一致
+      // 效果目录 33 种且与枚举一致
       expect(kEffectNames.length, EffectKind.values.length);
       expect(kEffectNames, EffectKind.values.map((e) => e.name).toList());
     });

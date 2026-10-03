@@ -6,7 +6,9 @@ import 'depth_splitter.dart';
 import 'effect_config.dart';
 import 'image_model.dart';
 import 'motion_math.dart';
+import 'part_motion.dart';
 import 'render/envelope.dart';
+import 'render/mesh_warper.dart';
 import 'render/quality.dart';
 import 'render/raster.dart';
 import 'render/resampler.dart';
@@ -22,7 +24,8 @@ part 'effects/particle_raster_pass.dart';
 /// Determinism: all randomness flows from [EffectConfig.seed] through
 /// [DeterministicRandom], so identical input + config => identical frames.
 class FrameCompositor {
-  FrameCompositor(this.layers, this.base, this.config, {AnchorMap? anchors})
+  FrameCompositor(this.layers, this.base, this.config,
+      {AnchorMap? anchors, List<PartMotion>? parts})
       : w = base.width,
         h = base.height,
         _anchors = anchors,
@@ -54,6 +57,9 @@ class FrameCompositor {
     _basePixels = base.data;
     _layerPixels = layers.map((l) => l.image.data).toList();
     _layerClips = layers.map((l) => l.clip).toList();
+    // Plan B Task 5：部件形变表。放在 _initParticles 之前/之后都不消费 _rng，
+    // 因此旧配置的粒子序列逐字节不变。
+    _initPartWarps(parts);
     // Task 2.3：从各层 clip 的**去重非空值**派生本格矩形集（§5 line 75 权威），
     // ≤1 格（单格/无白带/非 panelAware）时逐格路径不启用 → 播种与绘制走原逐字
     // 节路径（R9：panelAware on ≡ off）。构造期一次性静态空间数据，无时钟、
@@ -78,6 +84,7 @@ class FrameCompositor {
     List<int>? ranks,
     List<PixelRect?>? clips,
     AnchorMap? anchors,
+    List<PartMotion>? parts,
   }) {
     final ls = [
       for (var i = 0; i < layers.length; i++)
@@ -87,7 +94,7 @@ class FrameCompositor {
     ];
     return FrameCompositor(
         ls, RgbaImage.fromBytes(width: w, height: h, data: base), config,
-        anchors: anchors);
+        anchors: anchors, parts: parts);
   }
 
   // ---- v1.1 新动效状态（各自独立随机流，不扰动经典路径的 _rng 序列）----
@@ -113,6 +120,56 @@ class FrameCompositor {
   late List<_Bubble> _bubbles;
   late List<_Leaf> _leaves;
   late List<_Meteor> _meteors;
+  // ---- v1.4 Plan B 部位动作状态（构造期建表，逐帧只查表）----
+  late List<WarpPlan> _warpPlans;
+
+  static const MeshWarper _meshWarper = MeshWarper();
+
+  /// 部件形变表：只在「效果开启 + 给了 parts」时构建，其余一律空表 ⇒ 渲染
+  /// 路径零成本。只实现 [PartKind.isImplemented] 的 kind（当前只有 hand），
+  /// 其余 kind 解析通过、渲染跳过；退化多边形（空 plan）也在这一步滤掉。
+  /// 表下标即 [debugHandAngleDeg] 的 index：**过滤后**的序号，所以「头+手」
+  /// 混合契约里那只手的相位仍然是 0 号，不会因前面的 head 而整体错相。
+  void _initPartWarps(List<PartMotion>? parts) {
+    if (parts == null || parts.isEmpty ||
+        !config.effects.contains(EffectKind.handMotion)) {
+      _warpPlans = const [];
+      return;
+    }
+    final plans = <WarpPlan>[];
+    for (final p in parts) {
+      if (!p.kind.isImplemented) continue;
+      final plan = _meshWarper.buildPlan(
+          base,
+          PartShape(
+              polygon: p.polygon,
+              rootX: p.anchorX,
+              rootY: p.anchorY,
+              tipX: p.tipPoint.x,
+              tipY: p.tipPoint.y));
+      if (!plan.isEmpty) plans.add(plan);
+    }
+    _warpPlans = plans;
+  }
+
+  /// 部件 i 在 t 秒的摆角（度，指尖处最大，沿根→尖线性衰减到 0）。
+  ///
+  /// 相位载体刻意用 [MotionMath.wave]（纯正弦）而不是 §6.2 的 `snapWave`：
+  /// `snapWave(0) = 0.42/1.24 ≈ 0.3387` 并非 0，用它当形变通道会把「原画姿态」
+  /// 预旋三分之一幅度——首帧就不是作者画的那只手。张力来自 taper 空间分布
+  /// （掌根不动、指尖走满弧）与幅度本身，不来自波形尖度。
+  /// 周期按 §6.3 对齐到 duration 的整分频 ⇒ 无缝；`i * π/4` 的逐部件错相是
+  /// 确定性的（无时钟无随机），避免多只手同频同相的机械感。
+  double _handAngle(int i, double tSec) => config.handMotion.ampDeg *
+      MotionMath.wave(
+          tSec,
+          periodSec: MotionMath.alignedPeriodSec(
+              config.durationSec, config.handMotion.periodSec),
+          phase: i * math.pi / 4);
+
+  /// 测试/调参钩子：部件 i 在 t 秒的摆角。index 越界即调用方建表数搞错。
+  double debugHandAngleDeg(int index, double tSec) =>
+      _handAngle(index, tSec);
 
   void _initNewEffects() {
     final fx = config.effects;
@@ -994,6 +1051,28 @@ class FrameCompositor {
       _drawLayer(frame, _layerPixels[li], layers[li].image.width,
           layers[li].image.height, dx, dy, zoom * cover, _anchorY(), tier,
           clip: _layerClips[li]);
+    }
+
+    // ---- v1.4 Plan B：部位动作（手腕锚点的衰减旋转摆动）----
+    // 位置在层合成之后、叠加层之前：形变的输入必须是「已经合成好的手」，
+    // 而雨/雪/光晕等叠加层不该被跟着扭（它们是氛围，贴在相机前而非纸面上）。
+    // legacy 档整体跳过（`_aa`）——v1.2 的逐字节回滚承诺覆盖这条新通道。
+    // 快照**整帧一次、所有部件共用**：apply 只读 src、只写 dst，所以部件之间
+    // 不叠加彼此的形变。逐部件 bbox 局部快照不可行——旋转会把采样点推出 bbox
+    // 之外最多 |θ|·轴长，读到的就是自己缓冲区外的内存。
+    // 已知耦合：parallax 开启时层带 ±数像素位移，而部件多边形来自静止坐标，
+    // 形变带会略微偏离手；羽化吸收这点误差，幅度由三期语料验收判。
+    final warpPlans = _warpPlans;
+    if (warpPlans.isNotEmpty && _aa) {
+      RgbaImage? snapshot;
+      for (var i = 0; i < warpPlans.length; i++) {
+        final angle = _handAngle(i, tSec);
+        // 精确 0 ⇒ 恒等旋转，采样-取整后必然回到原值，省一次全 bbox 采样。
+        // 0 号部件在 t=0 走到这里，因此「首帧 == 原画」是结构保证而非巧合。
+        if (angle == 0) continue;
+        snapshot ??= frame.clone();
+        _meshWarper.apply(frame, snapshot, warpPlans[i], angle);
+      }
     }
 
     if (config.effects.contains(EffectKind.ambient) && config.ambient.enabled) {

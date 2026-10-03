@@ -46,6 +46,11 @@ enum EffectKind {
   bubbles,
   leaves,
   meteors,
+
+  /// 部位动作（v1.4 Plan B）：手腕锚点的衰减旋转摆动。部件**只**来自
+  /// `part_motion.json`（AI 侧车，三期）；没有该文件时一个像素都不动。
+  /// opt-in：不进出厂默认效果集。
+  handMotion,
   moodScript,
 }
 
@@ -1062,6 +1067,37 @@ class MeteorsParams {
       );
 }
 
+/// 部位动作（v1.4 Plan B，用户裁决：先做手）。整段只在
+/// `effects` 含 [EffectKind.handMotion] 时序列化 ⇒ 出厂 configHash 不受影响。
+///
+/// 部件来源只有 `part_motion.json`（AI 侧车，三期）：没有该文件时本效果一个
+/// 像素都不动。内置启发式定位器（`hand_locator.dart`）**未接入管线**——它在
+/// 真实语料上召回≈0：漫画的手的白区与背景连通，不是「被墨线封住的封闭分量」
+/// （实测两张带手图 99–100% 非墨像素属于同一个触边连通分量）。因此这里不放
+/// 置信度阈值之类的旋钮：没有消费者的参数不进契约。
+class HandMotionParams {
+  const HandMotionParams({
+    this.ampDeg = 8.0,
+    this.periodSec = 2.0,
+  });
+
+  /// 指尖摆幅（度）。旋转按「距锚点远近」线性衰减，手腕锚点处为 0 ⇒ 关节不撕裂。
+  final double ampDeg;
+
+  /// 摆动周期（秒）。渲染前按整循环对齐（`alignedPeriodSec`），保证首尾帧一致。
+  final double periodSec;
+
+  Map<String, dynamic> toJson() => {
+        'ampDeg': ampDeg,
+        'periodSec': periodSec,
+      };
+
+  static HandMotionParams fromJson(Map<String, dynamic> j) => HandMotionParams(
+        ampDeg: (j['ampDeg'] as num?)?.toDouble() ?? 8.0,
+        periodSec: (j['periodSec'] as num?)?.toDouble() ?? 2.0,
+      );
+}
+
 /// moodScript 情绪包络：自身不绘制任何东西，只按整循环曲线缩放已有动效的
 /// 振幅/浓度/曝光，并给 toneShift 与 vignette 叠加增量（见 render/envelope.dart）。
 class MoodScriptParams {
@@ -1271,6 +1307,7 @@ class EffectConfig {
     BubblesParams? bubbles,
     LeavesParams? leaves,
     MeteorsParams? meteors,
+    HandMotionParams? handMotion,
     MoodScriptParams? moodScript,
     QualityParams? quality,
     EncodingParams? encoding,
@@ -1330,6 +1367,7 @@ class EffectConfig {
         bubbles = bubbles ?? BubblesParams(),
         leaves = leaves ?? LeavesParams(),
         meteors = meteors ?? MeteorsParams(),
+        handMotion = handMotion ?? HandMotionParams(),
         moodScript = moodScript ?? MoodScriptParams(),
         quality = (quality ?? QualityParams())
             .copyWith(dither: dither, tier: qualityTier),
@@ -1389,6 +1427,9 @@ class EffectConfig {
   BubblesParams bubbles;
   LeavesParams leaves;
   MeteorsParams meteors;
+
+  /// 部位动作（v1.4 Plan B）：仅当 `effects` 含 handMotion 时生效并序列化。
+  HandMotionParams handMotion;
 
   /// 情绪包络（v1.3）：仅当 `effects` 含 moodScript 时生效并序列化。
   MoodScriptParams moodScript;
@@ -1504,6 +1545,9 @@ class EffectConfig {
         if (effects.contains(EffectKind.bubbles)) 'bubbles': bubbles.toJson(),
         if (effects.contains(EffectKind.leaves)) 'leaves': leaves.toJson(),
         if (effects.contains(EffectKind.meteors)) 'meteors': meteors.toJson(),
+        // v1.4 Plan B：同样只在启用时序列化 ⇒ 出厂基线哈希一字不动。
+        if (effects.contains(EffectKind.handMotion))
+          'handMotion': handMotion.toJson(),
         if (effects.contains(EffectKind.moodScript))
           'moodScript': moodScript.toJson(),
         // v1.4 R32/R38：quality 段等于**当前默认**（standard/sierra/false/2/6）时
@@ -1590,6 +1634,7 @@ class EffectConfig {
         bubbles: bubbles,
         leaves: leaves,
         meteors: meteors,
+        handMotion: handMotion,
         moodScript: moodScript,
         quality: quality,
         fps: fps,
@@ -1770,6 +1815,10 @@ class EffectConfig {
           ? null
           : MeteorsParams.fromJson(
               (j['meteors'] as Map).cast<String, dynamic>()),
+      handMotion: j['handMotion'] == null
+          ? null
+          : HandMotionParams.fromJson(
+              (j['handMotion'] as Map).cast<String, dynamic>()),
       moodScript: j['moodScript'] == null
           ? null
           : MoodScriptParams.fromJson(

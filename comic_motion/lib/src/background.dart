@@ -6,8 +6,8 @@
 ///
 /// 传递语义（Isolate.spawn + 控制通道，非 Isolate.run——run 无法向后台发
 /// 消息）：
-/// - `config` / `parallel` / `memoryBudgetMb` / `timeout`：纯数据，随启动
-///   消息一次性下发（深拷贝语义）。
+/// - `config` / `parallel` / `memoryBudgetMb` / `timeout` / `partMotion`：纯数据，
+///   随启动消息一次性下发（深拷贝语义）。侧车是**原文**字符串，解析在后台侧进行。
 /// - progress：后台 isolate 的 onProgress 经 SendPort 回传主 isolate，主侧
 ///   回调在事件循环中异步触发（不阻塞渲染）。
 /// - frames（T4）：后台管线侧的 onFrame 把逐帧 PNG 字节经 SendPort 回传，
@@ -46,6 +46,7 @@ Future<PipelineResult> processFileInBackground(
   Duration? timeout,
   bool keepPartial = false,
   bool includeFirstFrame = false,
+  String? partMotion,
 }) async {
   final r = await _runInBackground(
     boot: _BackgroundBoot(
@@ -59,6 +60,7 @@ Future<PipelineResult> processFileInBackground(
       keepPartial: keepPartial,
       includeFirstFrame: includeFirstFrame,
       wantFrameEvents: onFrame != null,
+      partMotion: partMotion,
     ),
     cancelToken: cancelToken,
     forwardProgress: onProgress,
@@ -80,6 +82,7 @@ Future<MemoryPipelineResult> processBytesInBackground({
   Duration? timeout,
   bool keepPartial = false,
   bool includeFirstFrame = false,
+  String? partMotion,
 }) async {
   final r = await _runInBackground(
     boot: _BackgroundBoot(
@@ -92,6 +95,7 @@ Future<MemoryPipelineResult> processBytesInBackground({
       keepPartial: keepPartial,
       includeFirstFrame: includeFirstFrame,
       wantFrameEvents: onFrame != null,
+      partMotion: partMotion,
     ),
     cancelToken: cancelToken,
     forwardProgress: onProgress,
@@ -114,6 +118,7 @@ class _BackgroundBoot {
     this.keepPartial = false,
     this.includeFirstFrame = false,
     this.wantFrameEvents = false,
+    this.partMotion,
   });
 
   late final SendPort ack;
@@ -134,6 +139,11 @@ class _BackgroundBoot {
 
   /// 请求侧是否要帧流事件（决定后台管线是否开启逐帧 PNG 编码回传）。
   final bool wantFrameEvents;
+
+  /// `part_motion.json` 侧车原文（null = 不做部位形变）。纯文本，随启动消息
+  /// 一次性下发；解析在后台 isolate 构造管线时进行，因此坏侧车的告警也在那里
+  /// 产生，随 [PipelineResult.warnings] 回到调用方。
+  final String? partMotion;
 }
 
 /// 后台 isolate 入口：本地 token 承接控制通道的取消命令，progress 回传，
@@ -155,6 +165,7 @@ Future<void> _backgroundEntry(_BackgroundBoot boot) async {
     onFrame: boot.wantFrameEvents
         ? (index, png) => boot.frames.send(<Object>[index, png])
         : null,
+    partMotion: boot.partMotion,
   );
   try {
     final result = boot.fileMode

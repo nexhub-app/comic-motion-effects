@@ -213,7 +213,7 @@ const List<ParamSpec> kRenderParamSpecs = [
     type: 'effectList',
     strictRange: false,
     defaultValue: ['parallax', 'breathing', 'ambient'],
-    description: '启用的动效列表，取值为 EffectKind.values 的 name（32 种），'
+    description: '启用的动效列表，取值为 EffectKind.values 的 name（33 种），'
         '可任意开闭组合；全空 = 静帧',
   ),
 ];

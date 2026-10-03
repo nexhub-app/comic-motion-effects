@@ -12,6 +12,7 @@ import 'gif_writer.dart';
 import 'depth_splitter.dart';
 import 'image_io.dart';
 import 'image_model.dart';
+import 'part_motion.dart';
 import 'render/resampler.dart';
 import 'saliency_anchors.dart';
 import 'worker_pool.dart';
@@ -41,6 +42,7 @@ class PipelineResult {
     this.parallelFallback = false,
     this.warnings = const [],
     this.outputApng = '',
+    this.partMotionDigest,
   });
 
   final String inputPath;
@@ -75,6 +77,12 @@ class PipelineResult {
   /// 配置回落提示（如未知 mood）。执行期属性，不参与 configHash。
   final List<String> warnings;
 
+  /// 侧车 `part_motion.json` 的文本指纹（Plan B Task 6）。null = 本次未给部件。
+  /// 与 [contentHash] 同类的**运行期**指纹：它改变像素但不进 configHash，
+  /// 所以台账/产物目录必须单独记它一笔，否则「同图同配置、只换侧车」的两次
+  /// 渲染会被当成同一缓存。执行期属性，不参与 configHash。
+  final String? partMotionDigest;
+
   /// `includeFirstFrame: true` 时的首帧 PNG（Uint8List），未请求为 null。
   /// 与 GIF 首帧同源（同一渲染帧：GIF 里的副本经调色板量化），字节与
   /// `frames/frame_0000.png` 完全一致。执行期产物，不进 [toJson]。
@@ -97,6 +105,7 @@ class PipelineResult {
         'parallelFallback': parallelFallback,
         if (warnings.isNotEmpty) 'warnings': warnings,
         if (outputApng.isNotEmpty) 'outputApng': outputApng,
+        if (partMotionDigest != null) 'partMotionDigest': partMotionDigest,
       };
 }
 
@@ -121,6 +130,7 @@ class MemoryPipelineResult {
     this.parallelFallback = false,
     this.warnings = const [],
     this.apngBytes,
+    this.partMotionDigest,
   });
 
   /// Encoded GIF bytes. Null when the config requests frames-only output
@@ -153,6 +163,9 @@ class MemoryPipelineResult {
 
   /// 配置回落提示（如未知 mood）。执行期属性，不参与 configHash。
   final List<String> warnings;
+
+  /// 侧车 `part_motion.json` 文本指纹（语义同 [PipelineResult.partMotionDigest]）。
+  final String? partMotionDigest;
 
   /// `includeFirstFrame: true` 时的首帧 PNG，未请求为 null（语义同
   /// [PipelineResult.firstFramePng]）。
@@ -216,10 +229,15 @@ class MotionPipeline {
     this.timeout,
     this.keepPartial = false,
     DepthEstimator? depthEstimator,
+    String? partMotion,
   }) : _parallel = parallel ??
             math.min(
                 kDefaultParallel, math.max(1, io.Platform.numberOfProcessors)),
-        _depthEstimator = depthEstimator;
+        _depthEstimator = depthEstimator,
+        partMotion = partMotion,
+        _partParse = partMotion == null
+            ? const PartMotionParse(null, [])
+            : PartMotionParser.parse(partMotion);
 
   /// 深度估算器注入（W6）：null = 内置启发式（[HeuristicDepthEstimator]，
   /// 与接口化前像素输出逐字节一致）。执行期依赖，不参与 configHash。
@@ -228,6 +246,41 @@ class MotionPipeline {
   /// 当前生效的估算器（注入优先，缺省启发式）。
   DepthEstimator get effectiveDepthEstimator =>
       _depthEstimator ?? const HeuristicDepthEstimator();
+
+  /// 三期 AI 侧车的 `part_motion.json` **原文**（Plan B Task 6）。运行期输入，
+  /// 与 [depthEstimator] 同级：它改变像素，但**不进** [EffectConfig]、不参与
+  /// configHash（否则每次换侧车都打破哈希基线）。null = 不启用，既有路径逐
+  /// 字节零变化。
+  ///
+  /// 不在 EffectConfig 里表达「部件来自哪里」，是因为部件与**这一张图**绑定
+  /// （多边形是归一化坐标，换图就没意义），而配置是可跨图复用的。
+  ///
+  /// 构造期即解析（[PartMotionParser] 永不抛：坏 JSON ⇒ 空部件 + warning）。
+  /// 注意：`processStrip`（条漫切片）与 [BatchRunner] 不携带本参数——切片后
+  /// 归一化坐标指向的是切片而非整页，套用会错位；批处理里一份侧车也不可能
+  /// 对应整目录的图。两者都不接这条通道。
+  final String? partMotion;
+  final PartMotionParse _partParse;
+
+  /// 本次生效的部件（未实现的 kind 由渲染侧再过滤；空表 = 一个像素都不动）。
+  List<PartMotion> get effectiveParts => _partParse.spec?.parts ?? const [];
+
+  /// 侧车解析告警。冒泡路径：[PipelineResult.warnings] → 台账 → HTTP 回显 → CLI。
+  List<String> get partWarnings => _partParse.warnings;
+
+  /// 侧车文本指纹（8 位十六进制，与 [ImageIO.contentHash8] 同算法、同口径）。
+  ///
+  /// 必须单独存在：部件是运行期输入（不进 configHash），但它改变像素——
+  /// 「同图、同配置、只换 part_motion.json」的两次渲染若共用产物目录名，
+  /// 嵌入方的「目录存在即跳过」缓存就会命中旧画面。[processFile] /
+  /// [processImage] 在非空时把它追加到目录名末尾正是为此。
+  String? get partMotionDigest => partMotion == null
+      ? null
+      : ImageIO.contentHash8(convert.utf8.encode(partMotion!));
+
+  /// 产物目录后缀：未给侧车时是空串（既有命名逐字节不变），给了就是
+  /// `_<digest>`。见 [partMotionDigest] 的缓存撞名论证。
+  String get partsDirTag => partMotionDigest == null ? '' : '_$partMotionDigest';
 
   final EffectConfig config;
 
@@ -321,7 +374,8 @@ class MotionPipeline {
     final baseName = dot > 0 ? stem.substring(0, dot) : stem;
     final contentHash = ImageIO.contentHash8(bytes);
     final jobDir = '$outputDir/'
-        '${baseName}_${contentHash}_${config.configHash.substring(0, 8)}';
+        '${baseName}_${contentHash}_${config.configHash.substring(0, 8)}'
+        '${partsDirTag}';
 
     final core = await _runCore(src,
         jobDir: jobDir, includeFirstFrame: includeFirstFrame);
@@ -345,6 +399,7 @@ class MotionPipeline {
       parallelFallback: core.parallelFallback,
       warnings: core.warnings,
       outputApng: core.apngPath,
+      partMotionDigest: partMotionDigest,
     );
   }
 
@@ -367,7 +422,8 @@ class MotionPipeline {
     final sw = Stopwatch()..start();
     final contentHash = ImageIO.contentHash8(source.data);
     final jobDir = '$outputDir/'
-        '${baseName}_${contentHash}_${config.configHash.substring(0, 8)}';
+        '${baseName}_${contentHash}_${config.configHash.substring(0, 8)}'
+        '${partsDirTag}';
     final core = await _runCore(source,
         jobDir: jobDir, includeFirstFrame: includeFirstFrame);
     sw.stop();
@@ -390,6 +446,7 @@ class MotionPipeline {
       parallelFallback: core.parallelFallback,
       warnings: core.warnings,
       outputApng: core.apngPath,
+      partMotionDigest: partMotionDigest,
     );
   }
 
@@ -433,6 +490,7 @@ class MotionPipeline {
       parallel: core.parallel,
       parallelFallback: core.parallelFallback,
       warnings: core.warnings,
+      partMotionDigest: partMotionDigest,
     );
   }
 
@@ -463,7 +521,8 @@ class MotionPipeline {
     final (working, layers, anchors) =
         _downscaleAndSplit(src, config.maxDimension);
     _checkStillCancel(deadline, 'before render');
-    final frame = FrameCompositor(layers, working, config, anchors: anchors)
+    final frame = FrameCompositor(layers, working, config,
+            anchors: anchors, parts: effectiveParts)
         .renderFrame(math.max(0.0, t));
     return Uint8List.fromList(ImageIO.encodePngFrame(frame));
   }
@@ -585,7 +644,8 @@ class MotionPipeline {
     final (working, layers, anchors) = _downscaleAndSplit(src, effectiveMaxDim);
 
     // Frames: stream-render -> quantize -> LZW -> discard (O(one frame) RAM).
-    final compositor = FrameCompositor(layers, working, config, anchors: anchors);
+    final compositor = FrameCompositor(layers, working, config,
+        anchors: anchors, parts: effectiveParts);
 
     var gifPath = '';
     var frameDir = '';
@@ -689,6 +749,7 @@ class MotionPipeline {
       rectMode: rectMode,
       wantRgba: apngRect,
       anchors: anchors,
+      parts: effectiveParts,
     );
     final allIndices = [for (var i = 0; i < n; i++) i];
     final pendingCount = n - presolved.length;
@@ -850,7 +911,7 @@ class MotionPipeline {
       frameCount: n,
       parallel: parallel,
       parallelFallback: fallback || budgetCappedParallel,
-      warnings: [...config.warnings, ...budgetWarnings],
+      warnings: [...config.warnings, ...partWarnings, ...budgetWarnings],
     );
   }
 

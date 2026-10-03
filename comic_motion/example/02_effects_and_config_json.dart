@@ -10,7 +10,7 @@ import 'package:comic_motion/comic_motion.dart';
 /// dart run example/02_effects_and_config_json.dart
 /// ```
 Future<void> main() async {
-  // 32 种动效可任意组合；seed 决定粒子/闪电等随机效果的确定性
+  // 33 种动效可任意组合；seed 决定粒子/闪电等随机效果的确定性
   var config = EffectConfig(
     effects: [
       EffectKind.parallax,

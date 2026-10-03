@@ -207,6 +207,10 @@ Future<InteractionExportResult> _runInteractionExport(
     // R37：交互帧集与静帧/GIF 路径共用同一条主干派生的 AnchorMap，否则
     // contentAware 默认开启后同一 config 在两条路径落位不一致，
     // phase=0 ≡ t=0 静帧的红线（interaction_test.dart）即断裂。
+    // v1.4 Plan B 的部件形变**故意不接**到这里：交互导出走的是「运行时按输入
+    // 位移重算图层」的实时通路，而部位动作是预渲染通路的性质（只预渲染裁定）。
+    // 形变计划绑定的是静态多边形坐标，实时拖拽下没有意义，接上只会让两条通路
+    // 对同一张图给出不同画面。
     final compositor =
         FrameCompositor(layers, working, cfg, anchors: anchors);
 

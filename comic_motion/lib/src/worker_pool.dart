@@ -12,6 +12,7 @@ import 'frame_compositor.dart';
 import 'gif_writer.dart';
 import 'image_io.dart';
 import 'image_model.dart';
+import 'part_motion.dart';
 import 'saliency_anchors.dart';
 
 /// 单帧 GIF 编码器的可发送描述（= [GifFrameEncoder] 的构造参数）。
@@ -73,6 +74,7 @@ class FrameJobSpec {
     this.layerRanks,
     this.layerClips,
     this.anchors,
+    this.parts,
   });
 
   factory FrameJobSpec.fromLayers({
@@ -85,6 +87,7 @@ class FrameJobSpec {
     bool rectMode = false,
     bool wantRgba = false,
     AnchorMap? anchors,
+    List<PartMotion>? parts,
   }) =>
       FrameJobSpec(
         width: base.width,
@@ -105,6 +108,7 @@ class FrameJobSpec {
         // 与 ranks/clips 同机制（普通字段，worker 侧重建合成器）。null =
         // 未启用（既有路径零变化，产物逐字节不变）。
         anchors: anchors,
+        parts: parts,
       );
 
   final int width;
@@ -140,6 +144,11 @@ class FrameJobSpec {
   /// [FrameCompositor.fromRasters] 重建的合成器携带它；渲染路径在 Task 2.1+
   /// 之前不消费，产物逐字节不变。
   final AnchorMap? anchors;
+
+  /// v1.4 Plan B：部位动作部件表（null / 空 = 不形变，既有路径逐字节不变）。
+  /// 与 [anchors] 同机制随 spec 跨 isolate 下发，worker 侧在合成器构造期建
+  /// 形变计划表；数据全部来自 `part_motion.json` 解析结果，纯不可变值。
+  final List<PartMotion>? parts;
 
   /// 每个 worker 常驻的栅格字节数（底图 + 各层 + 在途帧 + 索引帧）。
   int get rasterBytesPerWorker => width * height * 4 * (layerPixels.length + 3);
@@ -200,6 +209,7 @@ class FrameJob {
           ranks: s.layerRanks,
           clips: s.layerClips,
           anchors: s.anchors,
+          parts: s.parts,
         ),
         pngDir: s.pngDir,
         encoder: s.gif?.build(),
