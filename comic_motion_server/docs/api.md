@@ -1,6 +1,6 @@
 # comic-motion-backend HTTP API 文档
 
-版本 1.3.0 · 纯 Dart (shelf) 实现 · 全部接口返回 JSON（UTF-8）
+版本 1.4.0 · 纯 Dart (shelf) 实现 · 全部接口返回 JSON（UTF-8）
 
 ## 启动
 
@@ -13,9 +13,11 @@ dart run bin/comic_motion.dart serve --port 8787 --data-dir DELIVERY/data
 健康检查：
 
 ```json
-{"status":"ok","service":"comic-motion-backend","version":"1.3.0",
+{"status":"ok","service":"comic-motion-backend","version":"1.4.0",
  "queueDepth":0,"active":0,"jobsTracked":0}
 ```
+
+`version` 取引擎常量 `comicMotionVersion`，与本包 `pubspec.yaml` 的版本号**无关**（两者按设计可以不同步，口径见 `deploy.md` §4）。
 
 ## 接口一览
 
@@ -108,7 +110,7 @@ dart run bin/comic_motion.dart serve --port 8787 --data-dir DELIVERY/data
 | `quality.tier` | `legacy`\|`standard`\|`rich` | `standard` | **v1.4 默认改 standard**（H1 breaking）；`legacy` 是旧像素算法臂（抗锯齿/面积平均/screen 混合/极性落墨全部关闭），量化 LUT 与 palette 采样仍按 v1.4 实现，故不承诺逐字节复现 v1.2；`rich` 当前与 `standard` 等价 |
 | `quality.dither` | bool | `false` | 误差扩散抖动开关。R38 起**默认关闭**（实测把 GIF 字节乘 2.2–2.4×，对 flat-ink + 线稿语料不值）；出厂产物走最近色映射 |
 | `quality.ditherMode` | `floyd`\|`sierra` | `sierra` | **仅在 `dither: true` 且 standard+ 档时才被选择**——默认关抖动时本键惰性（两核都不生效），它决定的是「开抖后用哪个核」，不是「默认是否抖动」；`floyd` 是 v1.2 核，`sierra` 更柔和 |
-| `contentAware` | bool | `true` | **v1.4 新增，默认开**（R30/R36）：落位改用显著性分析（主体框/焦点/活动度），粒子与 focusLines/impactRings 锚到主体侧。显式 `false` = 回滚到 v1.3 均匀落位。与 `quality.tier` 正交 |
+| `contentAware` | bool | `true` | **v1.4 新增，默认开**（R30/R36）：落位改用显著性分析（主体框/焦点/活动度），粒子与 focusLines/impactRings 锚到主体侧。多格页口径：逐格粒子**数量**按格面积均衡（R8/R9），活动度只在每格内部偏置**位置**——「锚到主体侧」对单格页是字面成立，对多格页是位置偏置。显式 `false` = 回滚到 v1.3 均匀落位。与 `quality.tier` 正交 |
 | `panelAware` | bool | `true` | **v1.4 默认开**（R39）：多格图逐格独立分层，根除跨格串色；单格图自动回退整页。显式 `false` = 回滚 |
 | `quality.edgeStretchPx` | 0-16 | `6` | 层边缘色外扩，消除视差露底双边（standard+） |
 | `quality.mipLevels` | 1-2 | `2` | 预留字段，尚无消费方 |

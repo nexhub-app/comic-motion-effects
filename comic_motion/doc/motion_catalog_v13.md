@@ -97,6 +97,8 @@ dart run bin/comic_motion.dart job all --data-dir build/mood_data   # 演练用�
 
 图鉴 37 组演示由 `tool/generate_showcase.dart` 直出（不走 CLI，故不落 ledger），逐条可审计的存档是每目录的 `params.json`（完整回放参数）+ `presets/<key>.json`（同源预设）。v1.3 新增 15 条：
 
+> **下表与下方口径行都是 v1.3 轮的历史存档**：`configHash` 与 `anim.gif` 体积（含「整目录 87 MB / 单卡 2.5-5.1 MB」）是当时幅度取值下的产物。v1.4 抬升了逐条演示幅度（`presets/focus_lines_action.json` 视差 `0.012→0.030`、`presets/manga_shake_impact.json` 的 `mangaShake` `0.009→0.027` 等），且 `quality.tier` 的 `standard` 成为默认后整段省略 ⇒ 每一行的指纹与 GIF 字节数都已改锚。这 15 个哈希在仓库当前的任何代码/文档里都不再被复现，仅作存档；要当前值请重跑 `tool/generate_showcase.dart`，**不要手改本表**。帧数 36 未变（`fps 12 × durationSec 3`，周期与时长没动）。
+
 | key | configHash | 帧数 | anim.gif |
 |---|---|---|---|
 | focus_lines_action | `-6dc297c0b3cb0127` | 36 | 4 307 KB |

@@ -85,7 +85,11 @@ before and only unpinned configs move.
 - Placement consumers: `focusLines` / `impactRings` anchor on the focal point
   instead of canvas center; particle seeding is weighted by the activity field
   instead of uniform-random; panel overlays clip to panel bounds; ink polarity
-  adapts to local luminance.
+  adapts to local luminance. On multi-panel pages read the wording precisely:
+  per-panel particle *counts* are split by panel area (R8/R9 — activity does not
+  allocate counts), while activity biases *position* inside each panel. "Send
+  the effect to the subject" is literal for a single-panel page and a positional
+  bias for a multi-panel page.
 - `contentAware` (per-effect anchoring) and `panelAware` (per-panel layering)
   are two orthogonal gates and roll back independently. Both are conditionally
   serialized with the omit-if-default idiom, so `"contentAware": false` /

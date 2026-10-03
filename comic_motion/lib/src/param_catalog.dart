@@ -7,9 +7,11 @@
 /// 覆盖范围：CLI 通用参数表里的全部渲染参数（fps / duration / maxDimension /
 /// layers / maxFrames / seed / quality tier / dither / format / amplitude /
 /// direction）+ 效果列表本身 + v1.4 的两个落位开关（contentAware /
-/// panelAware）+ GIF 帧间差分（diffMode）。**唯一**故意不列的序列化参数是
-/// `encoding.apngDelay`：它只改 APNG 的帧延迟口径（GIF 不受影响），设置面板
-/// 无从表达，语义见 [EncodingParams]。`parallel` / `memoryBudgetMb` 属于执行期
+/// panelAware）+ GIF 帧间差分（diffMode）。故意不列的序列化参数有两个：
+/// `encoding.apngDelay`（只改 APNG 的帧延迟口径，GIF 不受影响，设置面板无从
+/// 表达，语义见 [EncodingParams]）与 `quality.ditherMode`（默认 sierra，非默认
+/// 才序列化，语义见 [QualityParams]；面板能表达，本目录尚未为它建行）。
+/// `parallel` / `memoryBudgetMb` 属于执行期
 /// 参数（在 [MotionPipeline] 上，不进 configHash），见 pipeline.dart 文档。
 library;
 
@@ -143,7 +145,10 @@ const List<ParamSpec> kRenderParamSpecs = [
     defaultValue: true,
     description: '内容感知落位（v1.4，R30/R36）：粒子播种、focusLines/impactRings '
         '的焦点锚、逐格覆盖裁剪都改用显著性分析的 AnchorMap（主体框 + 焦点 + 活动'
-        '度），把效果送到主体/焦点所在处而不是整页均匀铺开。与渲染档正交（两个门'
+        '度），把效果送到主体/焦点所在处而不是整页均匀铺开。多格页注意口径：逐格'
+        '粒子**数量**按格面积均衡（R8/R9，活动度不参与配数），活动度只在每格内部'
+        '偏置**位置**——「送到主体所在处」对单格页是字面成立，对多格页是位置偏置。'
+        '与渲染档正交（两个门'
         '互不干预）。**回滚**：显式 false ⇒ 回到 v1.3 的均匀落位。JSON sanitize '
         '口径（嵌入方注意）：缺键与显式 null = 没说过 ⇒ 落默认 true；只有**严格'
         '等于布尔 true** 才算开启，非 bool 值（如 `1`、`"yes"`）按 false 处理 ⇒ '
