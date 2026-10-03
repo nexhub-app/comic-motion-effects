@@ -52,13 +52,23 @@ before and only unpinned configs move.
   identical bytes) is untouched.
 - **One-off `configHash` re-baseline** (the only one in this release): the
   absolute fingerprints pinned in `test/engine_test.dart`,
-  `test/polarity_test.dart` and `test/saliency_test.dart` (13 literal sites)
-  were re-anchored from printed actuals. New anchors: default config
-  `-2a0679b63611bcad`, `EffectConfig(fps: 12, durationSec: 3.0,
+  `test/polarity_test.dart` and `test/saliency_test.dart` — 11 literal sites
+  in total (4 / 6 / 1), the only hash literals anywhere in the repo (nothing in
+  `lib/`, `tool/` or the server package) — were re-anchored from printed
+  actuals: 10 moved, 1 added for the new rollback preset. New anchors: default
+  config `-2a0679b63611bcad`, `EffectConfig(fps: 12, durationSec: 3.0,
   maxDimension: 640)` (= `presets/classic.json`) `-55953db41ee98064`,
-  `presets/legacy_v1.0.json` `-57e243b1ecfc30c`. The v1.2 legacy goldens that
-  did *not* move (`-68ddcb969faac38c` et al.) stay as evidence that the legacy
-  pixel path itself was not touched by the 3.6 series.
+  `presets/legacy_v1.0.json` `-57e243b1ecfc30c`.
+  The speed-lines legacy golden is the instructive case: its *rendered* digest
+  was `-68ddcb969faac38c` in every 3.2→3.6d round, re-measured independently
+  each time — that stability is the evidence that the legacy drawing path was
+  never touched by the 3.6 series. The literal nevertheless moved onto that
+  value because it had been stale since before 3.1 (`-5c5313f1ec3636db`), when
+  the amplitude default still applied. The other four legacy digests
+  (flash/sweep/focus/all) had not been re-printed since 3.1 at all: the digest
+  map is a fail-fast loop, so the first red hid the rest and every per-round
+  census was a lower bound. Their movement is the shared time base
+  (R16/R18/R19), not the pixel path — exactly the distinction H2 draws.
 - `presets/legacy_v1.0.json` (R40) is now the rollback file to reach for:
   v1.0.0 *numbers* + explicit `tier: legacy` + `dither: false` + both placement
   gates written as `false`. It is a **behavior-level** rollback, not a
