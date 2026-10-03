@@ -72,7 +72,9 @@ Practical notes:
 3. **Isolates**: run inference on a background isolate and inject a
    synchronous `estimate` that reads a pre-computed map, or compute the
    map before entering the pipeline. The estimator is called once per
-   pipeline run (twice with `panelAware` — once per panel).
+   panel; since v1.4 `panelAware` is on by default, a multi-panel page
+   calls it once per panel (single-panel / no-gutter pages and
+   `panelAware: false` call it once for the whole page).
 4. **Determinism**: the engine is byte-reproducible for the same input +
    config + depth map. Your model must be deterministic for the same
    input (quantized tflite models are; enable fixed thread counts).

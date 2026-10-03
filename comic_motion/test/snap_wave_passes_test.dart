@@ -299,7 +299,7 @@ void main() {
           seed: 41,
           quality: QualityParams(tier: tier));
 
-      // legacy：sin(li·π)≈1e-16 → t=0 与「无 parallax」逐字节一致（3.2 记录 7a）。
+      // legacy：sin(rank·π)≈1e-16 → t=0 与「无 parallax」逐字节一致（3.2 记录 7a）。
       expect(
           FrameCompositor(layers, img, cfg(RenderTier.legacy))
               .renderFrame(0.0).data,

@@ -2191,9 +2191,11 @@ void main() {
     // FrameCompositor.renderFrame。三个深度带（远/中/近）各有一根同列同宽、
     // 异色的竖条，条中心恰在缩放枢轴（w/2）上——cover 放大只作用在枢轴两侧
     // 对称位置，质心位移即该层的水平视差位移本身。
-    // 判别逻辑：峰值帧 t=period/4（sin(π/2+li·π) = +1/−1/+1）下相邻层必须
+    // 判别逻辑：峰值帧 t=period/4（sin(π/2+rank·π) = +1/−1/+1）下相邻层必须
     // 反向摆动；旧相位 li*0.35（sin(π/2+{0,0.35,0.7}) = 1/0.939/0.765 同号）
     // 三层同向，本组的反号断言在旧代码下必红，这正是判别式。
+    // （R39/F2 后奇偶取自 depthRank；本组走整页分层路径 li == rank，
+    //  所以下面所有像素级理论值一字未改。）
     const w = 300, h = 300;
     const amp = 0.1; // 峰值位移满幅 = amp*w = 30px（far 7.5 / mid 15 / near 22.5）
     const period = 3.0;
@@ -2271,7 +2273,7 @@ void main() {
 
     test('峰值帧相邻层反向摆动：far/mid/near 质心位移反号且相对位移翻倍', () {
       // 本判别式**本质上只在纯正弦成立**：它取 t=0 作「位移恰为 0」的基线帧
-      // （sin(0+li·π)=0），再取 t=period/4 的峰值帧，才有下面那些像素级理论值
+      // （sin(0+rank·π)=0），再取 t=period/4 的峰值帧，才有下面那些像素级理论值
       // （far ~7.5 / mid ~15 / near ~22.5）。Task 3.6 把默认档升到 standard 后
       // 载体换成 snapWave，而 snapWave(0)=0.3387≠0 ⇒ 基线假设失效。
       // 因此这里显式钉 legacy 档，钉的是「正弦载体的峰值/零位基线」这一半契约；
@@ -2330,7 +2332,7 @@ void main() {
       expect(
         comp.renderFrame(0.0).data,
         comp.renderFrame(period).data,
-        reason: 'li·π 是常数相位偏置，整周期后 sin 相位回到起点',
+        reason: 'rank·π 是常数相位偏置，整周期后 sin 相位回到起点',
       );
     });
 
@@ -2374,7 +2376,7 @@ void main() {
       //    0.783/1.567 的核验算术只对这一对成立）。
       //  · standard（Task 3.6 起为新默认）载体是 snapWave：t=0 恰落在波形平台区，
       //    far 层差分只剩 3.0px（正好等于阈值）⇒ 重挑时刻 t=period/6 ↔
-      //    period/6+period/2（仍相差半周期，u 恰 +0.5 ⇒ li·π 反相步进保证相邻层
+      //    period/6+period/2（仍相差半周期，u 恰 +0.5 ⇒ rank·π 反相步进保证相邻层
       //    反号），实测 {4.0, −4.5, 15.0}。断言与阈值一字未放宽。
       for (final arm in [
         (tier: RenderTier.legacy, tLo: 0.0),
@@ -2390,8 +2392,8 @@ void main() {
         );
         final compV = FrameCompositor(layers, img, cfgV);
         // R19 竖向基底 = dyCycles/duration·2π（cycles=1 时 dyCycles=1），
-        // 取相差半周期（π 相位推进）的一对帧：li·π 反相步进保证
-        // sin(dyPhase+li·π+0.9) 在相邻层反号，差分后位移方向亦反号。
+        // 取相差半周期（π 相位推进）的一对帧：rank·π 反相步进保证
+        // sin(dyPhase+rank·π+0.9) 在相邻层反号，差分后位移方向亦反号。
         // t=0 竖向位移非零（sin(0.9)≠0），故不做「零位移基线」假设——只测差分。
         final a = compV.renderFrame(arm.tLo);
         final b = compV.renderFrame(arm.tLo + period / 2);
@@ -2410,8 +2412,8 @@ void main() {
         // 判别式（算术可核验，sin 以弧度计）：R19 后竖向基底
         // dyPhase(t) = 2π·t·dyCycles/duration，本配置 cycles=1 → dyCycles=1、
         // duration=period=3，故 dyPhase(0)=0、dyPhase(period/2)=π。
-        //   t=0:        sin(li·π+0.9) ≈ {+0.783, −0.783, +0.783}
-        //   t=period/2: sin(π+li·π+0.9) = −sin(li·π+0.9) ≈ {−0.783, +0.783, −0.783}
+        //   t=0:        sin(rank·π+0.9) ≈ {+0.783, −0.783, +0.783}
+        //   t=period/2: sin(π+rank·π+0.9) = −sin(rank·π+0.9) ≈ {−0.783, +0.783, −0.783}
         // → 三层差分 ≈ {−1.567, +1.567, −1.567}：相邻层竖向摆动方向相反
         //（far/mid 反、mid/near 反）。
         // standard 臂上同样的反号来自 snapWave 的 1、3 次奇谐波（半周期反瓣），
@@ -2639,8 +2641,8 @@ void main() {
     test('视差水平无缝：mis-aligned(3/4) renderFrame(0)==renderFrame(duration)',
         () {
       // duration=3, periodSec=4: 3/4=0.75→cycles=1→aligned=3.0.
-      // 未对齐时 t=3 phase=3π/2, sin(3π/2+li·π)≠0 (≠ sin(li·π) at t=0)
-      // 对齐后 t=3 phase=2π, sin(2π+li·π)=sin(li·π)=0 → 无缝。
+      // 未对齐时 t=3 phase=3π/2, sin(3π/2+rank·π)≠0 (≠ sin(rank·π) at t=0)
+      // 对齐后 t=3 phase=2π, sin(2π+rank·π)=sin(rank·π)=0 → 无缝。
       final cfg = EffectConfig(
         effects: [EffectKind.parallax],
         fps: 24,
@@ -5916,7 +5918,7 @@ void main() {
   //  li 奇偶让它两打架。幅度用 rank、相位用 li = 半个修复。
   group('v1.4 Task 3.6d / F2：跨格同 rank 同向、格内相邻 rank 反号', () {
     const w = 300, h = 620;
-    const amp = 0.1; // 满幅 amp*w = 30px（far 7.5 / mid 15 / near 22.5）
+    const amp = 0.1; // 满幅 amp*w = 30px；panelAware 按 rank 归一 ⇒ 7.5/18.75/30
     const period = 3.0;
     const pivot = 150.0; // 条中心 = 缩放枢轴 ⇒ 质心位移即 dx 本身
 
@@ -6003,8 +6005,12 @@ void main() {
         quality: QualityParams(tier: tier),
       );
       final comp = FrameCompositor(layers, blankBase(), cfg);
-      // 峰值帧：sin(π/2 + rank·π) = ±1 交替；standard 走 snapWave 同奇偶。
-      final f = comp.renderFrame(period / 4);
+      // 取 3/4 周期帧，不是 1/4：两条臂的波形不同（legacy sin vs standard
+      // snapWave），1/4 帧 legacy 在峰但 standard 正在半坡上——实测 far rank
+      // 只有 −4.0/−3.0，落在整数取整边界，跨格 1px 抖动会把「同幅度」读数糊掉。
+      // 3/4 帧两条臂都在峰（far rank = 满幅 0.25·amp·w = 7.5px），且实测两格
+      // 读数差 ≤0.23px ⇒ 同向断言与非空判都干净。
+      final f = comp.renderFrame(period * 3 / 4);
 
       final dA = <double>[], dB = <double>[];
       for (var r = 0; r < 3; r++) {
@@ -6019,10 +6025,14 @@ void main() {
             reason: '$arm rank$r 两格同向被破坏：A=${dA[r].toStringAsFixed(2)} '
                 'B=${dB[r].toStringAsFixed(2)}（差 ${r == 0 ? 'li 奇偶跨格翻转' : 'F2 复发'}）');
       }
-      // 非空判：条确实动了（否则上面三条同向是真空成立）。
+      // 非空判：条确实动了（否则上面三条同向是真空成立）。两格各自判，
+      // 只判 A 会让「B 整体被裁掉 ⇒ dB 全 0 且与 dA 巧合相等」溜过去。
+      // 阈值 3.0 远低于 3/4 帧的实测值（far 7.5，其余 ≥7.0，near 35.5）。
       for (var r = 0; r < 3; r++) {
         expect(dA[r].abs(), greaterThan(3.0),
-            reason: '$arm rank$r 应有可测位移（far 7.5 / mid 15 / near 22.5）');
+            reason: '$arm 格 A rank$r 应有可测位移');
+        expect(dB[r].abs(), greaterThan(3.0),
+            reason: '$arm 格 B rank$r 应有可测位移');
       }
       // (b) 格内相邻 rank 反号：3.2 的张力性质在 panelAware 下必须原样保持。
       expect(dA[0].sign, -dA[1].sign, reason: '$arm 格 A far/mid 应反向');

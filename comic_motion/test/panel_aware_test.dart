@@ -135,6 +135,19 @@ void main() {
           reason: '每层携带格边界 clip');
       expect(FrameCompositor(layers, w, cfg).debugPanelRects().length, 2,
           reason: '合成器派生出 2 格，而不是整页回退');
+
+      // 同一扇门走**构造默认**（不经 JSON）。上面的形状门钉 toJson、本门钉
+      // ctor 那一侧：三处锁步（ctor / 省略哨兵 / 缺键兜底）任一处漂移，
+      // 这里立刻与 JSON 门意见不一致而红。
+      final bare =
+          EffectConfig(effects: const [EffectKind.parallax], maxDimension: 300);
+      expect(bare.panelAware, isTrue, reason: 'ctor 默认必须与缺键兜底同值');
+      final (bw, blayers) =
+          MotionPipeline(bare).downscaleAndSplitForExport(twoPanelRaster());
+      expect(blayers.length, 2 * bare.layerCount,
+          reason: '不经 JSON 的默认同样逐格分层（R39 开箱生效）');
+      expect(FrameCompositor(blayers, bw, bare).debugPanelRects().length, 2,
+          reason: '构造默认路径同样派生 2 格');
     });
 
     test('回退门在新默认下仍成立：无白带图自动整页分层（≤1 格）', () {

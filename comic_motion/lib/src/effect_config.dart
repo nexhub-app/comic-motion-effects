@@ -1415,10 +1415,14 @@ class EffectConfig {
   /// 减弱动态降级：true 时输出单帧静态图（关闭全部动效，内容完整）。
   bool reducedMotion;
 
-  /// 分格感知分层（W5，opt-in）：true 时先做横向白带分格检测，多格图
+  /// 分格感知分层（W5）：true 时先做横向白带分格检测，多格图
   /// 逐格独立估算深度与分层、层以格边界裁剪（根除启发式深度跨格错位
   /// 与串色）；单格/无白带图自动回退整页分层（结果与 false 等价）。
-  /// 条件序列化：默认 false 不写入 → configHash 与旧版完全一致。
+  /// **v1.4 Task 3.6d（R39）起默认 true** ——分格感知开箱即活，显式
+  /// `panelAware: false` 是回滚开关；与 RenderTier 正交（R6/R36 习语，
+  /// 门控只看本字段）。
+  /// 条件序列化（R32 习语）：等于默认 true 不写入 ⇒ 默认 JSON 键集与旧版
+  /// 逐字节相同、configHash 不变；显式 false 写出键 ⇒ 回滚意图无损往返。
   final bool panelAware;
 
   /// 内容感知布局（v1.4 placement）：true 时管线对底图跑一次
