@@ -65,6 +65,11 @@ dart run bin/comic_motion.dart serve --port 8787 --data-dir DELIVERY/data
   非 bool 值（如 `1`、`"yes"`）按 `false` 处理 ⇒ 落**回滚臂**（不视为「要求开启」，
   垃圾输入不当授权）。
 - `parallel`（可选，顶层）覆盖本任务的帧渲染并行度；缺省时按服务并发数分摊。`1` = 串行。
+- `partMotionBase64`（可选，顶层，v1.4 Plan B）= `part_motion.json` **原文**的 Base64
+  （UTF-8）。部件多边形是**这一张图**的归一化坐标，所以它跟 `inputBase64` 一样是运行期
+  输入而不是配置：改变像素，但**不进** `config`、不参与 `configHash`。缺省 = 部位一个像素
+  都不动（产物与 v1.3 逐字节一致）。坏 JSON 不报错——降级为「没有部件」并写进
+  `result.warnings`；只有 Base64 本身非法才是 `400 E_BAD_INPUT`。
 - 响应 `202`：
 
 ```json
@@ -98,7 +103,8 @@ dart run bin/comic_motion.dart serve --port 8787 --data-dir DELIVERY/data
 |---|---|---|
 | `parallel` | 总是 | 实际使用的 worker 数（不是请求值） |
 | `parallelFallback: true` | 起 isolate 池失败时 | 已回落串行执行，输出字节与并行一致，只是慢 |
-| `warnings: [...]` | 有配置回落时 | 目前只有 `moodScript` 未知 `mood` → `calm`；不影响出图，只提示配置没按字面生效 |
+| `partMotionDigest` | 请求带了 `partMotionBase64` 时 | 侧车**原文**的 8 位十六进制指纹（FNV-1a-64 前 8 位，与 `configHash` 同风格）。同一 `configHash` 下它变了，画面就变了——查「同配置不同产物」时先看它 |
+| `warnings: [...]` | 有回落/有告警时 | 配置回落（`moodScript` 未知 `mood` → `calm`）与**侧车降级**（坏 JSON / 版本不支持 / 表外 kind ⇒ 该部件不渲染）都写这里；不影响出图，只提示没按字面生效 |
 
 失败时 `status=failed`，`error` 是**字符串**（`"E_WORKER_CRASH: …"` 或异常文本），不是对象。
 
@@ -106,12 +112,14 @@ dart run bin/comic_motion.dart serve --port 8787 --data-dir DELIVERY/data
 
 | 字段 | 取值 | 默认 | 说明 |
 |---|---|---|---|
-| `effects` | `EffectKind` 名数组（32 项） | `[parallax,breathing,ambient]` | 未列出的效果其参数段也不序列化 |
+| `effects` | `EffectKind` 名数组（33 项） | `[parallax,breathing,ambient]` | 未列出的效果其参数段也不序列化。`handMotion`（v1.4 Plan B）**不在默认列表**，且必须配 `partMotionBase64` 才会动——没有侧车它就是一项空效果 |
 | `quality.tier` | `legacy`\|`standard`\|`rich` | `standard` | **v1.4 默认改 standard**（H1 breaking）；`legacy` 是旧像素算法臂（抗锯齿/面积平均/screen 混合/极性落墨全部关闭），量化 LUT 与 palette 采样仍按 v1.4 实现，故不承诺逐字节复现 v1.2；`rich` 当前与 `standard` 等价 |
 | `quality.dither` | bool | `false` | 误差扩散抖动开关。R38 起**默认关闭**（实测把 GIF 字节乘 2.2–2.4×，对 flat-ink + 线稿语料不值）；出厂产物走最近色映射 |
 | `quality.ditherMode` | `floyd`\|`sierra` | `sierra` | **仅在 `dither: true` 且 standard+ 档时才被选择**——默认关抖动时本键惰性（两核都不生效），它决定的是「开抖后用哪个核」，不是「默认是否抖动」；`floyd` 是 v1.2 核，`sierra` 更柔和 |
 | `contentAware` | bool | `true` | **v1.4 新增，默认开**（R30/R36）：落位改用显著性分析（主体框/焦点/活动度），粒子与 focusLines/impactRings 锚到主体侧。多格页口径：逐格粒子**数量**按格面积均衡（R8/R9），活动度只在每格内部偏置**位置**——「锚到主体侧」对单格页是字面成立，对多格页是位置偏置。显式 `false` = 回滚到 v1.3 均匀落位。与 `quality.tier` 正交 |
 | `panelAware` | bool | `true` | **v1.4 默认开**（R39）：多格图逐格独立分层，根除跨格串色；单格图自动回退整页。显式 `false` = 回滚 |
+| `handMotion.ampDeg` | 任意数（无通用 clamp） | `8.0` | **v1.4 Plan B**：指尖摆幅（度），按「离锚点远近」线性衰减到腕根处的 0。**只在 standard+ 档生效**，且必须同时把 `handMotion` 放进 `effects` 并给出 `partMotionBase64`——缺一就一个像素都不动。越界按原值线性放大（负值 = 反方向摆），`0` 逐字节等价于不挂该效果 |
+| `handMotion.periodSec` | 秒 | `2.0` | 摆动周期，渲染前对齐到时长 `durationSec` 的整分频以保证无缝；非有限值或 ≤0 由护栏回落成 `1.0` s。多部件时第 i 个偏移 `i·π/4`，因此只有 0 号部件在 t=0 处于静置 |
 | `quality.edgeStretchPx` | 0-16 | `6` | 层边缘色外扩，消除视差露底双边（standard+） |
 | `quality.mipLevels` | 1-2 | `2` | 预留字段，尚无消费方 |
 | `moodScript.mood` | `tension`\|`calm`\|`eerie`\|`burst` | `tension` | 未知值回落 `calm` 并写 `warnings` |
@@ -127,7 +135,7 @@ HTTP 层错误响应格式：`{"error":"E_…","message":"…"}`（`error` 是�
 |---|---|---|
 | 400 | `E_INVALID_JSON` | 请求体不是合法 JSON |
 | 400 | `E_BAD_CONFIG` | `config` 字段类型或取值非法（`ConfigException`） |
-| 400 | `E_BAD_INPUT` | `inputBase64` 不是合法 Base64 |
+| 400 | `E_BAD_INPUT` | `inputBase64` / `partMotionBase64` 不是合法 Base64（侧车**内容**坏不算，见 `result.warnings`） |
 | 400 | `E_NO_INPUT` | 缺少 `inputPath`/`inputBase64`，或文件不存在 |
 | 400 | `E_BAD_PATH` | `/files/` 路径含 `..` |
 | 404 | `E_NO_JOB` | jobId 不存在 |
@@ -161,7 +169,7 @@ curl -o out.gif "http://127.0.0.1:8787/files/<jobdir>/anim.gif"
 ```
 jobId, ts, input, configHash, status, outputGif, frameDir, paramsFile,
 width, height, layerCount, frameCount, elapsedMs, parallel,
-parallelFallback?, warnings?, error?
+parallelFallback?, partMotionDigest?, warnings?, error?
 ```
 
 `parallelFallback` 与 `warnings` 只在非空/为真时写入（v1.2 之前的行没有这些字段，读取时需容错）。查询：`GET /api/v1/ledger?status=failed&jobId=…` 或 CLI `dart run bin/comic_motion.dart job <id>|all`。

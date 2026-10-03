@@ -6,7 +6,7 @@
 
 - 纯 Dart，无原生依赖，UI-free，可嵌入任意 Dart / Flutter 工程；运行时只依赖 `image` 一个包
 - 同参数输出字节级可复现（确定性随机种子 + configHash）
-- 32 种可组合动效 + 42 个内置预设参数
+- 33 种可组合动效 + 42 个内置预设参数
 - 帧渲染多 isolate 并行：只影响耗时，不影响输出字节
 
 CLI（单图 / 批处理）与 HTTP API 服务在姊妹包 **[comic_motion_server](../comic_motion_server)**，二者与本包解耦：只想嵌引擎的 App 不会引入任何 HTTP 服务栈。
@@ -375,7 +375,7 @@ params.json                 # 完整参数回放文件
 - **configHash 版本化**：configHash 是参数指纹（当前 v1 算法），与 `version` 字段一同写入 `params.json`。未来若 hash 算法或字段序列化变更，将带版本前缀迁移——读取旧 `version` 的回放文件按旧算法口径处理，不静默失效。
 - **执行期参数不在承诺内**：`parallel`、`memoryBudgetMb` 不进 configHash、不影响像素决策（`parallel`），但 `memoryBudgetMb` 收缩工作分辨率时会改变输出像素（见「内存预算 API」）——此时「同参数」以实际生效的工作分辨率为准。
 
-## 动效目录（32 种）
+## 动效目录（33 种）
 
 `EffectConfig.effects` 可任意组合，全部整循环无缝（首尾帧一致）：
 
@@ -389,7 +389,44 @@ params.json                 # 完整参数回放文件
 | 点缀 | `lightSweep` 扫光 · `dust` 尘埃 |
 | 漫画动势语言（v1.3） | `focusLines` 集中线 · `screenTone` 网点 · `mangaShake` 画面震颤 · `impactRings` 冲击环 · `brushStreak` 笔触飞白 |
 | 自然氛围扩充（v1.3） | `flame` 火焰 · `smoke` 烟雾 · `bubbles` 气泡 · `leaves` 落叶 · `meteors` 流星 |
+| 部位动作（v1.4，**opt-in**） | `handMotion` 手腕锚点衰减旋转摆动——部件**只**来自 `part_motion.json`（没有该文件就一个像素都不动）。内置启发式定位器随包发布但**未接入管线**：真实语料召回≈0，漫画手的白区与背景连通、不是被墨线封住的封闭分量 |
 | 节奏与情绪编排（v1.3） | `moodScript` 情绪包络（不画东西，只按 `tension`/`calm`/`burst`/`eerie` 重排已有动效的振幅） |
+
+### 部位动作侧车（`part_motion.json`，v1.4，opt-in）
+
+在交给管线侧车文件之前，`handMotion` **一个像素都不会动**：默认效果表只有三
+件套，而部件**只**来自这份文件。三个入口，同一种载荷——JSON **原文文本**：
+
+| 入口 | 用法 |
+|---|---|
+| 引擎 API | `MotionPipeline(config, partMotion: '<part_motion.json 文本>')`，同时要把 `EffectKind.handMotion` 放进 `config.effects`，幅度用 `HandMotionParams(ampDeg: 8.0, periodSec: 2.0)` |
+| 服务端 CLI | `process` 子命令加 `--part-motion <路径>`（`batch` 明确拒绝：一份侧车不可能描述整个目录） |
+| HTTP 任务 | `"partMotionBase64"`——UTF-8 JSON 做 Base64 |
+
+契约（`version: 1`，最多 8 个部件）：每个部件
+`{"kind","polygon":[[x,y],…],"anchor":{"x","y","joint"},"inpaint"?}`，坐标是
+**工作图归一化 0..1**。`anchor` 是旋转根点（手腕）；落在多边形之外的锚点会被
+钳到最近顶点并记一条告警。当前只实现 `kind: "hand"`——`head`/`arm`/`torso`/
+`hair`/`garment` 能解析、由渲染侧跳过，这样三期 AI 契约可以冻结，引擎一次只
+长一种 kind。`version` 不认识或 JSON 坏了 ⇒ 整份拒绝 + 告警，绝不猜着渲染。
+
+用之前要知道的边界：
+
+- 侧车是**运行期**输入（和 `depthEstimator` 同级）：它改变像素，但**不进**
+  `EffectConfig`、**不参与** `configHash`。它的文本指纹作为
+  `PipelineResult.partMotionDigest` 上报，并追加到服务端任务目录名
+  （`_<digest8>`），避免"同一张图换一份侧车"在缓存里撞名。
+- **legacy 档完全跳过部件形变**——形变在 standard 档闸门之后，v1.2 的字节回滚
+  承诺因此保持不变。
+- `processStrip`（条漫切片）与 `BatchRunner` 不接这条通道：切片之后归一化坐标
+  指向的是某一段切片，而多边形是在整页上画的。
+- 形变只有 **contained** 模式——把旋转采样带羽化混合回原像素。`inpaint` 字段
+  会解析并保留在模型上，但渲染侧从不消费；extended 模式属于三期。
+- 验收脚本（语料是 `page.png` + 同目录 `page.part_motion.json`，目录里没有
+  侧车就 `exit 4`）：
+  `dart run tool/hand_acceptance.dart <corpusDir> [outDir] [--amp=8]`——覆盖
+  首帧静置一致、无缝循环、字节确定性、越足迹/改 alpha/造色三类越界，以及单部件
+  形变成本。
 
 ## 内置预设（presets/）
 
@@ -461,36 +498,37 @@ doc/                       # 动效目录（API/部署文档在 comic_motion_ser
 | 并行 worker 启动失败 | 自动降级串行，结果里 `parallelFallback: true` |
 | 并行 worker 渲染中途崩溃 | `EngineWorkerException`（不静默降级，任务判失败；HTTP 层映射为 `E_WORKER_CRASH`） |
 | `moodScript` 给了未知 `mood` | 落回 `calm`，并在 `warnings` / 台账里记一条 |
+| `part_motion.json` 坏 JSON / 版本不认识 | **永不抛**：整份侧车忽略、记一条 `warnings`，本次渲染按**无部件**继续（绝不猜着渲染） |
 
 任务失败不崩溃、批处理不中断，全部记入台账。
 
 ## 性能参考
 
-`tool/bench.dart` 在 `sample_images/01_portrait.png`（900×1300）上的实测，引擎 1.4.0，parallel=8，**取 3 次运行的中位数**（2026-10-03；末次明细在 `build/bench/bench_report.json`）。峰值 RSS 是进程高水位，因此同一次运行靠后的行共用一个值，不是彼此独立的测量。
+`tool/bench.dart` 在 `sample_images/01_portrait.png`（900×1300）上的实测，引擎 1.4.0，parallel=8，**取 3 次运行的中位数**（2026-10-03；末次明细在 `build/bench/p3/bench_report.json`，两格页那套在 `build/bench/t3/bench_report.json`）。峰值 RSS 是进程高水位，因此同一次运行靠后的行共用一个值，不是彼此独立的测量。
 
 | 场景 | 效果数 | 档位 | 耗时 | 峰值内存 | 红线 |
 |---|---|---|---|---|---|
-| 480p / 12fps / 2s（草稿） | 3 | legacy | 301 ms | 389 MB | ≤450 ms ✅ |
-| 1080p / 24fps / 4s（典型） | 3 | legacy | 2.61 s | 554 MB | ≤5 s ✅ |
-| 1600 / 24fps / 4s（预览上限） | 3 | legacy | 3.73 s | 643 MB | ≤7 s ✅ |
-| 1600 / 24fps / 4s——**出厂默认档** | 3 | standard（引擎默认） | 5.66 s | 647 MB | ≤7 s ✅ |
-| 1080p / 24fps / 4s 标准档 | 3 | standard | 3.95 s | 647 MB | — |
-| 1080p / 24fps / 4s 19 效（v1.2 下限） | 19 | legacy | 3.05 s | 647 MB | — |
-| 1080p / 24fps / 4s 19 效 rich | 19 | rich | 4.24 s | 647 MB | — |
-| 1080p 全效果（最坏情况） | 32 | standard | 5.14 s | 647 MB | ≤9 s ✅ |
+| 480p / 12fps / 2s（草稿） | 3 | legacy | 301 ms | 388 MB | ≤450 ms ✅ |
+| 1080p / 24fps / 4s（典型） | 3 | legacy | 2.29 s | 550 MB | ≤5 s ✅ |
+| 1600 / 24fps / 4s（预览上限） | 3 | legacy | 3.73 s | 633 MB | ≤7 s ✅ |
+| 1600 / 24fps / 4s——**出厂默认档** | 3 | standard（引擎默认） | 5.54 s | 641 MB | ≤7 s ✅ |
+| 1080p / 24fps / 4s 标准档 | 3 | standard | 3.84 s | 644 MB | — |
+| 1080p / 24fps / 4s 19 效（v1.2 下限） | 19 | legacy | 3.03 s | 644 MB | — |
+| 1080p / 24fps / 4s 19 效 rich | 19 | rich | 4.05 s | 644 MB | — |
+| 1080p 全效果（最坏情况） | 33 | standard | 4.81 s | 644 MB | ≤9 s ✅ |
 
-并行度扫描（standard 档 1080p 96 帧三件套）：`1 → 13.66 s`、`2 → 8.95 s`、`4 → 5.62 s`、`8 → 4.02 s`，四次 GIF **字节一致**（FNV `-287a4af0a4b1fe73`），`parallel=1` 峰值 647 MB（红线 780 MB）。可复现性：基准 GIF 三次运行摘要都是 `1d8b6c35a0a57643`，改参数后摘要改变（敏感性门通过）。上表 legacy 行是显式钉住 `tier: legacy` 测出的历史下限；v1.4 出厂即 standard，开箱成本看 standard 行（要按「出厂默认档」那行排产：1600 上限下比 legacy 慢 **+52%**）。v1.2 **逐字节**复现演练已按设计不再全绿（见「复现承诺与边界」：H2/R46b 后 classic 演练 0/10），行为级回滚锚改用 `presets/legacy_v1.0.json`。
+并行度扫描（standard 档 1080p 96 帧三件套）：`1 → 13.66 s`、`2 → 7.68 s`、`4 → 4.92 s`、`8 → 3.66 s`，四次 GIF **字节一致**（FNV `-287a4af0a4b1fe73`），`parallel=1` 峰值 644 MB（红线 780 MB）。可复现性：基准 GIF 三次运行摘要都是 `1d8b6c35a0a57643`，改参数后摘要改变（敏感性门通过）。这两个摘要与 Plan B 之前那张表记录的**是同一组值**——这就是「不给侧车时部件通道零字节、零毫秒」最硬的证据。上表 legacy 行是显式钉住 `tier: legacy` 测出的历史下限；v1.4 出厂即 standard，开箱成本看 standard 行（要按「出厂默认档」那行排产：1600 上限下比 legacy 慢 **+49%**）。v1.2 **逐字节**复现演练已按设计不再全绿（见「复现承诺与边界」：H2/R46b 后 classic 演练 0/10），行为级回滚锚改用 `presets/legacy_v1.0.json`。
 
-**多格输入比样图占位图更贵，并且压破两条红线。** 真实两格页（1800×2600，由 `sample_images/03_two_panel.png` 最近邻 ×2 放大构造，暂存 `build/bench/in_twopanel_1800x2600.png`）跑同一套场景：
+**多格输入比样图占位图明显更费内存，并且仍然压破串行红线。** 真实两格页（1800×2600，由 `sample_images/03_two_panel.png` 最近邻 ×2 放大构造，暂存 `build/bench/in_twopanel_1800x2600.png`）跑同一套场景：
 
 | 场景 | 效果数 | 档位 | 耗时 | 峰值内存 | 红线 |
 |---|---|---|---|---|---|
-| 1600 / 24fps / 4s——**出厂默认档** | 3 | standard（引擎默认） | 8.17 s | 1033 MB | ❌ >7 s（3 次里 2 次超，6.57 s 那次通过） |
-| 1600 / 24fps / 4s legacy | 3 | legacy | 5.40 s | 1023 MB | ≤7 s ✅ |
-| `parallel=1` 串行扫描 | 3 | standard | 11.57 s | 1033 MB | ❌ >780 MB（3 次全超） |
-| 1080p 全效果 | 32 | standard | 4.47 s | 1033 MB | ≤9 s ✅ |
+| 1600 / 24fps / 4s——**出厂默认档** | 3 | standard（引擎默认） | 6.17 s | 1023 MB | ≤7 s ✅（3 次全过，余量仅 ~13%） |
+| 1600 / 24fps / 4s legacy | 3 | legacy | 4.28 s | 1014 MB | ≤7 s ✅ |
+| `parallel=1` 串行扫描 | 3 | standard | 9.69 s | 1033 MB | ❌ >780 MB（3 次全超） |
+| 1080p 全效果 | 33 | standard | 4.10 s | 1033 MB | ≤9 s ✅ |
 
-逐格分层（`panelAware`，R39 起默认开）为每一格保留一份层栅格，峰值内存随**格数**增长而不只是随工作像素增长——同样 `maxDimension` 下单页样图 647 MB、两格页 1033 MB。红线**没有**为它放宽。实际结论：条漫画 / 多格页在 1600 上限下务必传 `memoryBudgetMb`（预算通路会在 OOM 前先降工作分辨率并把降级写进 `warnings`）或把 `maxDimension` 降到 ≤1080；这种页面的 `parallel=1` 视为超出 780 MB 串行红线（用 ≥2 worker，1150 MB 线成立：`2 → 6.74 s`、`4 → 4.56 s`、`8 → 3.37 s`）。确定性在该输入上同样不受影响：基准 GIF 三次都是 `647695f0b0644120`，整条并行扫描产出同一字节流（`-65ae766127adf731`），串行与并行一致。另有一次草稿档偶发越线（`480p` 531 ms > 450 ms，另两次 373 / 390 ms），量级属运行间抖动，未据此调整任何阈值。
+逐格分层（`panelAware`，R39 起默认开）为每一格保留一份层栅格，峰值内存随**格数**增长而不只是随工作像素增长——同样 `maxDimension` 下单页样图 644 MB、两格页 1033 MB。红线**没有**为它放宽。实际结论：条漫画 / 多格页在 1600 上限下务必传 `memoryBudgetMb`（预算通路会在 OOM 前先降工作分辨率并把降级写进 `warnings`）或把 `maxDimension` 降到 ≤1080——7 s 预览线本轮三次都过了，但更早的一组三次测到 8.17 s、其中 2 次越线，所以请把余量当作**临界**而不是宽裕；这种页面的 `parallel=1` 视为超出 780 MB 串行红线（用 ≥2 worker，1150 MB 线成立：`2 → 5.54 s`、`4 → 3.77 s`、`8 → 2.87 s`）。确定性在该输入上同样不受影响：基准 GIF 三次都是 `647695f0b0644120`，整条并行扫描产出同一字节流（`-65ae766127adf731`），串行与并行一致。草稿档本轮三次都在 450 ms 线内（348 / 352 / 351 ms，中位 351 ms）——早先那次 531 ms 越线属运行间抖动，两种情况下都没有为此调整阈值。
 
 ### 移动端真机参考区间（粗略）
 
@@ -510,6 +548,7 @@ doc/                       # 动效目录（API/部署文档在 comic_motion_ser
 dart test                      # 自动化测试
 dart run tool/bench.dart       # 性能基准 + 复现性 + 并行度扫描（超红线 exit 3）
 dart run tool/gif_check.dart   # GIF 严格逐帧解码校验
+dart run tool/hand_acceptance.dart <corpusDir>   # 部位动作验收矩阵（缺参数 exit 64，目录无侧车 exit 4）
 ```
 
 ## 生态

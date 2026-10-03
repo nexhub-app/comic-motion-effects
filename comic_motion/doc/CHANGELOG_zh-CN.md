@@ -34,6 +34,18 @@
 - `snapWave` 缓动（P3.3/P3.4）在 standard+ 档成形 `mangaShake`、`speedLines`、`impactRings`——「起—峰—断」：快速攻到峰值后是**硬切**，波形的负瓣被 `max(0, ·)` 截成 0，后半段保持静默，**不是**正弦，也不是「快起慢落」的长尾余韵（`impactRings` 的落墨在 ph ≳ 0.539 起恒为 0，约占整循环 44%）；legacy 臂逐字保留 `sin`。两者的形状差异由**渲染像素**的判别用例守护（`test/snap_wave_passes_test.dart`），不是只查公式。
 - `periodSec` 自动对齐到整循环数（R18），竖向视差轴对齐到整数循环数（R19），使任意时长下循环都无缝，而不是尾帧跳一下。
 
+### 部位动作（P4 / Plan B，只做手，效果数 32 → 33）
+
+本版回答第三条抱怨：动效不该只包围在画好的人物**外面**，也应该活在人物**身上**。P4 交付引擎这一半，并把三期 AI 侧车要喂的接口冻结下来。
+
+- **`part_motion.json` 契约**（`lib/src/part_motion.dart`）：`version: 1`、最多 8 个部件，`kind: head|hand|arm|torso|hair|garment` 一次列全但只实现 `hand`（`PartKind.isImplemented`，其余解析通过、渲染跳过）。归一化 0..1 多边形 + `anchor{x,y,joint}`；落在多边形外的锚点钳到最近顶点并记告警；旋转杠杆的另一段由「离锚点最远的顶点」确定性推出（`tipPoint`，等距按顶点序取最靠前者）。`PartMotionParser.parse` **永不抛**：坏 JSON 或不认识的版本 ⇒ 「无部件 + 告警」，一份写坏的侧车不可能把渲染拖崩。
+- **`MeshWarper`**（`lib/src/render/mesh_warper.dart`）：只有 contained 模式、2 px 羽化的衰减旋转——摆角从指尖线性衰减到腕根处的 0，因此关节不会撕裂。`buildPlan` 对退化多边形返回 `WarpPlan.empty()`，且**每次渲染只付一次**而不是每帧一次；`apply` 只写 RGB、从不碰 alpha，混合式是 `dst + (sample - dst) * mix`，所以「不造色」「不改蒙版」是结构性保证，不是靠测试兜着。
+- **`HandMotionParams(ampDeg: 8.0, periodSec: 2.0)`** + `EffectKind.handMotion`（目录 32 → 33）由多源锁步守卫覆盖：构造默认 == `fromJson` 缺键 == `fromJson` 显式 null、`toJson` 的键集合**恰好**这两个参数（没有消费方的旋钮不许进契约）、目录文案里的「N 种」按 `EffectKind.values.length` 断言。相位走 `MotionMath.wave`（t=0 精确为 0——用 `snapWave` 会让静置帧预先转起来），周期按整循环对齐（`alignedPeriodSec` 对非有限值或 ≤0 有回落 1.0 s 的护栏），第 i 个部件偏移 `i·π/4`，因此**只有 0 号部件在 t=0 处于静置**。序列化受门控：出厂默认 JSON 不写 `handMotion` 段，效果未启用时改参数既不进 JSON 也不进 `configHash`。
+- **侧车是运行期输入，绝不进配置**：`MotionPipeline(partMotion:)`（与 `depthEstimator` 同级）、服务端 `process` 的 `--part-motion <路径>` 与 HTTP 任务的 `partMotionBase64`；经 `FrameJobSpec.parts` 送达 worker。它改变像素，但**不进** `EffectConfig`、**不参与** `configHash`；文本指纹 `partMotionDigest`（8 位十六进制）随结果上报，并追加到服务端任务目录名，使「同一张图换一份侧车」不会在缓存里撞名。告警冒泡顺序：配置 → 侧车 → 内存预算 → 结果 → 台账 → HTTP 回显 → CLI。
+- **三道门都是刻意的**：不给侧车 ⇒ 一个像素都不动、既有通路逐字节不变；`tier: legacy` ⇒ 部件形变整块跳过（H2 的回滚承诺）；`processStrip` 与 `BatchRunner` 完全不接这条通道（切片后归一化坐标指向的是某一段切片，而多边形是在整页上画的；一份侧车也不可能对应整个目录）。
+- **`HeuristicHandLocator` 随包发布但未接入管线**（`lib/src/hand_locator.dart`）：真实漫画语料召回≈0，因为手的白区与背景是边界连通的，不是被墨线封住的封闭分量。部件**只**来自侧车——这就是三期的边界，代码和文档都写明了。
+- **验收脚本** `dart run tool/hand_acceptance.dart <corpusDir> [outDir] [--amp=8]`：每页五列（有无部件的首帧逐字节一致、峰值帧的位移量、越足迹/改 alpha/造色三类越界、两次重跑 + 串行 + parallel=4 的 GIF 逐字节一致、`t=0` 与 `t=时长` 逐字节一致）。4 张手工标注页全绿，违规 0、告警 0。成本实测（1280×720、足迹 251×169）：`buildPlan` 2.7 ms（一次），`apply` 2.36 ms/帧/部件 ⇒ 单只手 24 帧多付 ~87 ms，8 部件上限 ~489 ms（随部件数线性）。
+
 ### 预设、参数目录与文档
 
 - `presets/` 共 42 份：40 份演示预设（单效、组合与三个演示底座）由单源生成器重发，外加 `classic.json` 与新增的 `legacy_v1.0.json` 锚点。注意分组名里的「v1.1/v1.2 代」描述的是**效果列表**的世代而不是渲染档——重发后 42 份里**只有 `legacy_v1.0.json` 写了 `tier`**，40 份整段省略 `quality`，`dither_compare_forest.json` 只写 `"dither": true`（它就是抖动演示）。`legacy_v1.0.json` 里那句 `"dither": false` 是生成器**手写**的意图表达，不是 `toJson()` 的产物（默认 false 的键按习语应当省略）；R40 的守卫读的是文件、不是重发结果。
@@ -46,9 +58,10 @@
 - **§6.1 stale 重发守卫的盲区**（经裁决接受）：预设守卫断言 `值 >= 新默认 × 0.8`，而旧的 `breathing.amplitude` 变体 `0.010` 恰好等于一个合法新值（0.005 × 2.0 = 0.010），任何 `>= 下限` 形态都分不开两者 ⇒ 单独回退那 2 个 breathing 预设不会被拦住，整批 stale 重发仍会在其余五个键上转红。**不**把下限抬回默认值（那会让已提交的预设集体转红），也不为此改生成数据。
 - **被丢弃的 saliency 扫描**（裁决 #14）：分层导出现在会付一次 saliency 扫描，而该路径丢弃其结果。作为**主干成本**记录（渲染与导出共用同一分析入口），不加旋钮。
 - `rich` 仍与 `standard` 逐字节等价（预留的 `supersample` / `mipLevels` 尚无消费方）——已知偏差，未变。
-- **多格页在 1600 上限下更贵，并压破两条红线**（实测，3 次 bench 的中位数）：真实两格页在出厂默认档下耗时 **8.17 s**，超 `≤7 s` 的预览红线（3 次里 2 次超）；峰值 **1033 MB**，破 `parallel=1` 的 780 MB 串行红线（≥2 worker 的 1150 MB 线仍成立）。根因是 `panelAware`（R39 起默认开）为每格保留一份层栅格，峰值内存随**格数**而不只随工作像素增长——同 `maxDimension` 下单页 647 MB、两格 1033 MB。**没有为它放宽任何阈值**。部署侧对策：传 `memoryBudgetMb`（OOM 前先降工作分辨率并写入 `warnings`）、或把 `maxDimension` 降到 1080、或多格页至少用 2 个 worker。完整前后数据见中英 README 性能章节。
+- **多格页在 1600 上限下明显更费内存，并压破串行红线**（实测，3 次 bench 的中位数；Plan B Task 7 重新测过）：真实两格页在出厂默认档下耗时 **6.17 s**，`≤7 s` 的预览红线三次全过，但余量只有约 13%，而更早一组三次对同一输入测到 **8.17 s**、其中 2 次越线 ⇒ 这条线在该形状上属**临界**，不是宽裕。峰值 **1033 MB** 三次全部破 `parallel=1` 的 780 MB 串行红线（≥2 worker 的 1150 MB 线仍成立）。根因是 `panelAware`（R39 起默认开）为每格保留一份层栅格，峰值内存随**格数**而不只随工作像素增长——同 `maxDimension` 下单页 644 MB、两格 1033 MB。**没有为它放宽任何阈值**。部署侧对策：传 `memoryBudgetMb`（OOM 前先降工作分辨率并写入 `warnings`）、或把 `maxDimension` 降到 1080、或多格页至少用 2 个 worker。完整前后数据见中英 README 性能章节。
+- **contained 旋转在硬边墨线上会留残影**（在验收语料上实测，作为已知限制记录）：把旋转后的采样混合回原像素时，部件让开的那条墨边会被朝背景拖糊，所以黑白线稿页上拇指处可能留下可见的重影；同一幅度在柔和/水彩风页面上读起来是干净的。这是 contained 模式的固有性质，解法是 extended 模式（旋转 + 对让开区域补片），属于三期工作——`inpaint` 字段解析器已经接受，但渲染侧刻意暂不消费。相关的尺度事实：一整页上的手只有约 20–70 px，所以页级改变像素数天然不高（本轮语料 554–29 103 px）。
 
-测试面：393 例引擎用例 + 服务端契约用例，全绿、零 skip；`dart analyze lib tool test` 无告警。
+测试面：486 例引擎用例 + 14 例服务端用例，全绿、零 skip；`dart analyze lib tool test` 与 `dart analyze`（服务端包）均无告警。
 
 ## 1.3.1（2026-09-28）
 

@@ -46,6 +46,7 @@ dependencies:
 | `--quality` | 未传 ⇒ 引擎默认 `standard` | 渲染档 `legacy` \| `standard` \| `rich`（定义见引擎 README；v1.4 起默认 standard，`legacy` 是旧像素算法而非字节承诺） |
 | `--dither` / `--no-dither` | 关 | GIF 误差扩散抖动，减轻 256 色色带；R38 起默认关（GIF 字节 ×2.2–2.4） |
 | `--parallel` | auto | 帧渲染并行 isolate 数（`auto` = min(8, 核数)，`1` = 串行） |
+| `--part-motion` | — | `part_motion.json` 侧车路径（**仅 `process`**）。不传 = 部位一个像素都不动；`batch` 传了直接报错退出 64（部件绑定的是单张图的归一化坐标，一份侧车对不上整个目录） |
 | `--reduced-motion` | — | 减弱动态：输出单帧静态图 |
 
 `--config` 会整体替换参数来源（此时 `--fps/--duration/--amplitude` 等不再叠加），但 `--effects`、`--quality`、`--dither`、`--reduced-motion` 仍可覆盖同名项。

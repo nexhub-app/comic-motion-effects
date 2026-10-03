@@ -13,7 +13,7 @@ sequences.
   Only runtime dependency: the `image` package.
 - Byte-for-byte reproducible output for the same seed + parameters
   (deterministic random seed + configHash)
-- 32 composable effects + 42 built-in presets
+- 33 composable effects + 42 built-in presets
 - Multi-isolate parallel frame rendering: affects wall time only, never the
   output bytes
 
@@ -557,7 +557,7 @@ than a regression. Boundaries:
   working resolution (see the memory budget API) — "same parameters" then
   means the actually effective working resolution.
 
-## Effect catalog (32)
+## Effect catalog (33)
 
 Effects compose freely via `EffectConfig.effects`; all loops are seamless
 (first frame == last frame):
@@ -572,7 +572,51 @@ Effects compose freely via `EffectConfig.effects`; all loops are seamless
 | Accents | `lightSweep` · `dust` |
 | Manga dynamics (v1.3) | `focusLines` concentration lines · `screenTone` halftone · `mangaShake` screen shake · `impactRings` shock rings · `brushStreak` brush streaks |
 | Nature (v1.3) | `flame` · `smoke` · `bubbles` · `leaves` · `meteors` |
+| Part motion (v1.4, **opt-in**) | `handMotion` wrist-anchored taper-rotation wave — parts come **only** from `part_motion.json` (no file ⇒ not a single pixel moves). The built-in heuristic locator ships tested but **unwired**: recall ≈ 0 on real manga, because a hand's white region is border-connected with the background rather than an enclosed ink ring |
 | Mood orchestration (v1.3) | `moodScript` envelope (draws nothing; re-weights amplitudes of the other effects by `tension`/`calm`/`burst`/`eerie`) |
+
+### Part motion sidecar (`part_motion.json`, v1.4, opt-in)
+
+`handMotion` moves **not a single pixel** until you hand the pipeline a
+sidecar: the default effect list is the core trio, and parts come **only** from
+that file. Three entry points, one payload — the raw JSON *text*:
+
+| Surface | How |
+|---|---|
+| Engine API | `MotionPipeline(config, partMotion: '<part_motion.json text>')`, with `EffectKind.handMotion` in `config.effects` and `HandMotionParams(ampDeg: 8.0, periodSec: 2.0)` |
+| Server CLI | `--part-motion <path>` on `process` (rejected on `batch` — one sidecar cannot describe a whole directory) |
+| HTTP job | `"partMotionBase64"` — the UTF-8 JSON, Base64-encoded |
+
+Contract (`version: 1`, ≤8 parts): each part is
+`{"kind","polygon":[[x,y],…],"anchor":{"x","y","joint"},"inpaint"?}` with
+**normalized 0..1 coordinates** of the working image. `anchor` is the rotation
+root (the wrist); an anchor outside its polygon is clamped to the nearest vertex
+and reported as a warning. Only `kind: "hand"` is implemented — `head`/`arm`/
+`torso`/`hair`/`garment` parse fine and are skipped by the renderer, which is
+how the phase-3 AI contract stays frozen while the engine grows one kind at a
+time. Unknown `version` or bad JSON ⇒ whole spec refused + warning, never a
+guess-and-render.
+
+Boundary conditions worth knowing before you rely on it:
+
+- The sidecar is a **runtime** input (like `depthEstimator`): it changes pixels
+  but is **not** in `EffectConfig` and **not** in `configHash`. Its SHA-style
+  fingerprint is reported as `PipelineResult.partMotionDigest` and appended to
+  the server job directory (`_<digest8>`) so two sidecars over one image cannot
+  collide in the cache.
+- **Legacy tier skips part deformation entirely** — the warp is behind the
+  standard-tier gate, which keeps the v1.2 byte-rollback promise intact.
+- `processStrip` (webtoon slicing) and `BatchRunner` do not carry the sidecar:
+  after slicing, normalized coordinates would point at a strip rather than the
+  page they were drawn on.
+- Deformation is **contained-only** — feathered blend of the rotated sample over
+  the existing pixels. `inpaint` is parsed and kept on the model, but the
+  renderer never consumes it; extended mode is phase 3.
+- Acceptance harness (needs a corpus of `page.png` + sibling
+  `page.part_motion.json`, and exits 4 when a directory has none):
+  `dart run tool/hand_acceptance.dart <corpusDir> [outDir] [--amp=8]` — checks
+  rest-pose identity, seamless loop, byte determinism, out-of-footprint/alpha/
+  invented-color containment, and per-part warp cost.
 
 ### Preview assets (doc/previews/)
 
@@ -646,17 +690,20 @@ lib/
     strip.dart             # webtoon strip mode (slicing + processStrip)
     batch_runner.dart      # batch processing
     ledger.dart            # JSONL processing ledger (optional, size-rotating)
+    part_motion.dart       # part_motion.json contract + never-throwing parser
+    hand_locator.dart      # heuristic hand finder (tested, NOT wired into the pipeline)
     render/
       quality.dart         # RenderTier definitions
       raster.dart          # anti-aliased raster primitives
       resampler.dart       # box-average + separable Catmull-Rom
       envelope.dart        # moodScript envelope curves
+      mesh_warper.dart     # contained taper-rotation warp for part motion
     effects/
       comic_pass.dart      # draw path for manga-dynamics effects
       particle_raster_pass.dart  # unified raster path for particle effects
 presets/                   # 42 built-in presets
 sample_images/             # 10 placeholder samples
-tool/                      # sample/smoke/showcase/bench/gif-check scripts
+tool/                      # sample/smoke/showcase/bench/gif-check/hand-acceptance scripts
 test/engine_test.dart      # engine + config tests
 test/render_test.dart      # render + effect tests
 doc/                       # effect catalog, WebP research
@@ -673,6 +720,7 @@ example/                   # three runnable embedding examples
 | Parallel worker failed to start | Automatic serial fallback with `parallelFallback: true` |
 | Worker crashed mid-render | `EngineWorkerException` (code `E_WORKER_CRASH`) — task fails, never silently degrades |
 | Unknown `moodScript.mood` | Falls back to `calm` and records a `warnings` entry |
+| Malformed / unsupported-version `part_motion.json` | Never throws: the whole sidecar is ignored, a `warnings` entry is recorded, and the render proceeds with **no parts** (not a guess-render) |
 
 Failures never crash the caller and never abort a batch; everything is
 recorded (ledger is optional for embedders and size-rotating).
@@ -681,61 +729,67 @@ recorded (ledger is optional for embedders and size-rotating).
 
 Measured by `tool/bench.dart` on `sample_images/01_portrait.png` (900×1300),
 engine 1.4.0, parallel=8, **median of 3 runs** (2026-10-03; the last run's
-detail is in `build/bench/bench_report.json`). Peak RSS is the process
+detail is in `build/bench/p3/bench_report.json`, the two-panel set's in
+`build/bench/t3/bench_report.json`). Peak RSS is the process
 high-water mark, so the later rows of a run share one value rather than being
 independent measurements.
 
 | Scenario | Effects | Tier | Time | Peak RSS | Red line |
 |---|---|---|---|---|---|
-| 480p / 12fps / 2s (draft) | 3 | legacy | 301 ms | 389 MB | ≤450 ms ✅ |
-| 1080p / 24fps / 4s (typical) | 3 | legacy | 2.61 s | 554 MB | ≤5 s ✅ |
-| 1600 / 24fps / 4s (preview cap) | 3 | legacy | 3.73 s | 643 MB | ≤7 s ✅ |
-| 1600 / 24fps / 4s — **shipping default tier** | 3 | standard (engine default) | 5.66 s | 647 MB | ≤7 s ✅ |
-| 1080p / 24fps / 4s standard | 3 | standard | 3.95 s | 647 MB | — |
-| 1080p / 24fps / 4s, 19 effects (v1.2 floor) | 19 | legacy | 3.05 s | 647 MB | — |
-| 1080p / 24fps / 4s, 19 effects, rich | 19 | rich | 4.24 s | 647 MB | — |
-| 1080p all effects (worst case) | 32 | standard | 5.14 s | 647 MB | ≤9 s ✅ |
+| 480p / 12fps / 2s (draft) | 3 | legacy | 301 ms | 388 MB | ≤450 ms ✅ |
+| 1080p / 24fps / 4s (typical) | 3 | legacy | 2.29 s | 550 MB | ≤5 s ✅ |
+| 1600 / 24fps / 4s (preview cap) | 3 | legacy | 3.73 s | 633 MB | ≤7 s ✅ |
+| 1600 / 24fps / 4s — **shipping default tier** | 3 | standard (engine default) | 5.54 s | 641 MB | ≤7 s ✅ |
+| 1080p / 24fps / 4s standard | 3 | standard | 3.84 s | 644 MB | — |
+| 1080p / 24fps / 4s, 19 effects (v1.2 floor) | 19 | legacy | 3.03 s | 644 MB | — |
+| 1080p / 24fps / 4s, 19 effects, rich | 19 | rich | 4.05 s | 644 MB | — |
+| 1080p all effects (worst case) | 33 | standard | 4.81 s | 644 MB | ≤9 s ✅ |
 
 Parallelism scan (standard tier, 1080p, 96 frames, core trio): `1 → 13.66 s`,
-`2 → 8.95 s`, `4 → 5.62 s`, `8 → 4.02 s`; all four GIFs **byte-identical**
-(FNV `-287a4af0a4b1fe73`); `parallel=1` peaks at 647 MB (red line 780 MB).
+`2 → 7.68 s`, `4 → 4.92 s`, `8 → 3.66 s`; all four GIFs **byte-identical**
+(FNV `-287a4af0a4b1fe73`); `parallel=1` peaks at 644 MB (red line 780 MB).
 Reproducibility: the bench GIF digested to `1d8b6c35a0a57643` in all three
 runs, and changing a parameter still changes the digest (sensitivity gate).
+Both digests are the same values the pre-Plan-B table recorded, which is the
+strongest available evidence that the part-motion channel costs **zero** bytes
+and **zero** milliseconds when no sidecar is supplied.
 The legacy-tier rows are measured with `tier: legacy` pinned and are kept as
 the historical floor — v1.4 ships standard, so read the standard rows for
-out-of-box cost (the default-tier row is the one to plan against: **+52%**
+out-of-box cost (the default-tier row is the one to plan against: **+49%**
 over legacy at the 1600 cap). The v1.2 *byte* reproduction drill is no longer
 green by design (see "Reproduction promise and boundaries": classic drill 0/10
 since H2/R46b); `presets/legacy_v1.0.json` is the behavior-level rollback
 anchor instead.
 
-**Multi-panel input costs more than the corpus placeholder, and breaches two
-red lines.** A real two-panel page (1800×2600, built by nearest-neighbour ×2
-upscale of `sample_images/03_two_panel.png`, staged at
+**Multi-panel input costs markedly more memory than the corpus placeholder, and
+still breaches the serial red line.** A real two-panel page (1800×2600, built by
+nearest-neighbour ×2 upscale of `sample_images/03_two_panel.png`, staged at
 `build/bench/in_twopanel_1800x2600.png`) run through the same scenarios:
 
 | Scenario | Effects | Tier | Time | Peak RSS | Red line |
 |---|---|---|---|---|---|
-| 1600 / 24fps / 4s — **shipping default tier** | 3 | standard (engine default) | 8.17 s | 1033 MB | ❌ >7 s (2 of 3 runs; 6.57 s passed once) |
-| 1600 / 24fps / 4s, legacy | 3 | legacy | 5.40 s | 1023 MB | ≤7 s ✅ |
-| `parallel=1` serial sweep | 3 | standard | 11.57 s | 1033 MB | ❌ >780 MB (all 3 runs) |
-| 1080p all effects | 32 | standard | 4.47 s | 1033 MB | ≤9 s ✅ |
+| 1600 / 24fps / 4s — **shipping default tier** | 3 | standard (engine default) | 6.17 s | 1023 MB | ≤7 s ✅ (3 of 3 runs; ~13% headroom) |
+| 1600 / 24fps / 4s, legacy | 3 | legacy | 4.28 s | 1014 MB | ≤7 s ✅ |
+| `parallel=1` serial sweep | 3 | standard | 9.69 s | 1033 MB | ❌ >780 MB (all 3 runs) |
+| 1080p all effects | 33 | standard | 4.10 s | 1033 MB | ≤9 s ✅ |
 
 Per-panel layering (`panelAware`, on by default since R39) keeps a layer raster
 per panel, so peak RSS grows with panel count rather than only with working
-pixels — 1033 MB versus 647 MB on the single-page sample at the same
+pixels — 1033 MB versus 644 MB on the single-page sample at the same
 `maxDimension`. Thresholds were **not** moved to accommodate this. Practical
 consequences: on comic strips / multi-panel pages at the 1600 cap, pass
 `memoryBudgetMb` (the budget path degrades working resolution before OOM and
-records a warning) or drop `maxDimension` to ≤1080; and treat `parallel=1` on
-such a page as out of spec for the 780 MB serial line (use ≥2 workers, where
-the 1150 MB line holds: `2 → 6.74 s`, `4 → 4.56 s`, `8 → 3.37 s`). Determinism
-is unaffected on this input either: its bench GIF digested to `647695f0b0644120`
-in all three runs and the whole parallel sweep produced one identical byte
-stream (`-65ae766127adf731`), serial included. One further one-off breach on
-that input: the draft row hit 531 ms > 450 ms in one of the three runs (373 ms
-and 390 ms in the other two) — run-to-run jitter, and no threshold was moved
-for it.
+records a warning) or drop `maxDimension` to ≤1080 — the 7 s preview line now
+passes here, but an earlier 3-run sample put the same row at 8.17 s with 2 of 3
+runs over, so treat the headroom as marginal, not as margin; and treat
+`parallel=1` on such a page as out of spec for the 780 MB serial line (use ≥2
+workers, where the 1150 MB line holds: `2 → 5.54 s`, `4 → 3.77 s`, `8 → 2.87 s`).
+Determinism is unaffected on this input either: its bench GIF digested to
+`647695f0b0644120` in all three runs and the whole parallel sweep produced one
+identical byte stream (`-65ae766127adf731`), serial included. The draft row came
+in under the 450 ms line in every run this time (348/352/351 ms, median 351 ms) —
+the earlier single 531 ms outlier was run-to-run jitter, and no threshold was
+moved for it either way.
 
 ### Mobile reference ranges (rough)
 
@@ -763,6 +817,7 @@ config on demand; run one render at a time (see the concurrency section).
 dart test                      # automated tests
 dart run tool/bench.dart       # perf + reproducibility + parallelism scan (exit 3 over red line)
 dart run tool/gif_check.dart   # strict per-frame GIF decode verification
+dart run tool/hand_acceptance.dart <corpusDir>   # part-motion acceptance matrix (exit 64 no args, 4 no sidecars)
 ```
 
 ## Ecosystem

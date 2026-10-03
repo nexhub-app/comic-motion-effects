@@ -116,6 +116,65 @@ before and only unpinned configs move.
   the vertical parallax axis to an integer cycle count (R19), so loops are
   seamless at any duration instead of drifting on the last frame.
 
+### Part motion — Plan B, hand only (`handMotion`, effect count 32 → 33)
+
+The third complaint this release answers: motion should also live *in* the
+drawn subject, not only around it. Phase 4 ships the engine half of Plan B and
+freezes the interface the phase-3 AI sidecar will feed.
+
+- **`part_motion.json` contract** (`lib/src/part_motion.dart`): `version: 1`,
+  ≤8 parts, `kind: head|hand|arm|torso|hair|garment` declared in full but with
+  only `hand` implemented (`PartKind.isImplemented`; the rest parse and are
+  skipped by the renderer). Normalized 0..1 polygon + `anchor{x,y,joint}`;
+  out-of-polygon anchors clamp to the nearest vertex with a warning; the
+  rotation lever end is derived deterministically as the farthest vertex
+  (`tipPoint`, ties broken by vertex order). `PartMotionParser.parse` never
+  throws — bad JSON or an unknown version yields "no parts + warning", so a
+  broken sidecar can never take a render down.
+- **`MeshWarper`** (`lib/src/render/mesh_warper.dart`): contained-only,
+  feathered (2 px) taper rotation — angle falls linearly from the tip to 0 at
+  the wrist anchor, so the joint cannot tear. `buildPlan` returns
+  `WarpPlan.empty()` for degenerate polygons and is paid **once per render**,
+  not per frame; `apply` blends `dst + (sample - dst) * mix` over RGB only and
+  never touches alpha, which makes "no invented colors" and "no matte
+  surprises" structural rather than tested-for.
+- **`HandMotionParams(ampDeg: 8.0, periodSec: 2.0)`** + `EffectKind.handMotion`
+  (catalog 32 → 33) under the multi-source lockstep guards: constructor default
+  == `fromJson` missing key == `fromJson` explicit null, `toJson`'s key set is
+  exactly those two params (a knob with no consumer may not enter the contract),
+  and the catalog's "N 种" text is asserted against `EffectKind.values.length`.
+  Phase runs on `MotionMath.wave` (exactly 0 at t=0 — `snapWave` would pre-rotate
+  the rest pose), with period aligned to whole cycles (`alignedPeriodSec`
+  falls back to 1.0 s for non-finite or ≤0 input) and part *i* offset by `i·π/4`,
+  so **only part 0 rests at t=0**. Serialization is gated: the shipping default
+  JSON writes no `handMotion` segment, and while the effect is off the params
+  enter neither the JSON nor `configHash`.
+- **Sidecar is a runtime input**, never config: `MotionPipeline(partMotion:)`
+  (sibling of `depthEstimator`), server `--part-motion <path>` on `process` and
+  `partMotionBase64` on the HTTP job; it travels to workers via
+  `FrameJobSpec.parts`. It changes pixels but stays out of `EffectConfig` and
+  `configHash`; `partMotionDigest` (8 hex of the text) is reported on the
+  result and appended to the server job directory so two sidecars over one
+  image cannot collide in cache. Warnings bubble config → sidecar → budget →
+  result → ledger → HTTP echo → CLI.
+- **Gates, all three deliberate:** no sidecar ⇒ zero pixels changed and the
+  existing path byte-identical; `tier: legacy` ⇒ part deformation is skipped
+  whole (H2's rollback promise); `processStrip` and `BatchRunner` do not carry
+  the sidecar at all (sliced coordinates would point at a strip, and one
+  sidecar cannot describe a directory).
+- **`HeuristicHandLocator` ships tested but unwired** (`lib/src/hand_locator.dart`):
+  recall ≈ 0 on real manga because a hand's white region is border-connected
+  with the background instead of an enclosed ink ring. Parts come **only** from
+  the sidecar. This is the phase-3 boundary, stated in code and docs.
+- **Acceptance harness** `dart run tool/hand_acceptance.dart <corpusDir>
+  [outDir] [--amp=8]` — five columns per page (rest-pose byte-identity with and
+  without parts, motion magnitude at peak, footprint/alpha/color containment,
+  determinism across 2× repeat + serial + parallel-4 GIFs, seamless t=0 vs
+  t=duration). Run against 4 hand-keyed pages: all green, 0 violations, 0
+  warnings; measured warp cost at 1280×720 with a 251×169 footprint is
+  `buildPlan` 2.7 ms (once) and `apply` 2.36 ms/frame/part ⇒ +87 ms over a
+  24-frame clip for one hand, ~489 ms for the 8-part cap (linear in parts).
+
 ### Presets, catalog and docs
 
 - `presets/` is 42 files: the 40 showcase presets (single effects, combos and
@@ -156,21 +215,33 @@ before and only unpinned configs move.
   knob added.
 - **`rich` remains byte-equivalent to `standard`** (reserved `supersample` /
   `mipLevels` have no consumer yet) — unchanged known deviation.
-- **Multi-panel pages cost more at the 1600 cap, and breach two red lines**
-  (measured, medians of 3 bench runs): a real two-panel page at the shipping
-  default tier takes **8.17 s** against the `≤7 s` preview red line (breached
-  in 2 of 3 runs) and peaks at **1033 MB**, which breaks the 780 MB
-  `parallel=1` serial line (the 1150 MB multi-worker line still holds). Cause:
-  `panelAware` (on by default since R39) keeps a layer raster per panel, so
-  peak RSS scales with panel count, not only with working pixels — 647 MB
-  single-page vs 1033 MB two-page at the same `maxDimension`. **No threshold
-  was moved.** Mitigation for deployment: pass `memoryBudgetMb` (it degrades
-  working resolution before OOM and records a warning), or cap
-  `maxDimension` at 1080, or use ≥2 workers on such pages. Full before/after
-  rows are in both READMEs' performance sections.
+- **Multi-panel pages cost markedly more memory at the 1600 cap, and breach the
+  serial red line** (measured, medians of 3 bench runs, re-measured at Plan B
+  Task 7): a real two-panel page at the shipping default tier takes **6.17 s**
+  against the `≤7 s` preview red line — inside it in 3 of 3 runs, but with only
+  ~13% headroom, and an earlier 3-run sample of the same input put that row at
+  **8.17 s** with 2 of 3 runs over, so the line is marginal on this shape. Peak
+  RSS **1033 MB** breaks the 780 MB `parallel=1` serial line in every run (the
+  1150 MB multi-worker line still holds). Cause: `panelAware` (on by default
+  since R39) keeps a layer raster per panel, so peak RSS scales with panel
+  count, not only with working pixels — 644 MB single-page vs 1033 MB two-page
+  at the same `maxDimension`. **No threshold was moved.** Mitigation for
+  deployment: pass `memoryBudgetMb` (it degrades working resolution before OOM
+  and records a warning), or cap `maxDimension` at 1080, or use ≥2 workers on
+  such pages. Full before/after rows are in both READMEs' performance sections.
+- **Contained rotation ghosts on hard-edged ink** (measured on the acceptance
+  corpus, accepted as a known limitation): blending the rotated sample back over
+  the existing pixels smears the ink the part vacated toward the background, so
+  on black-and-white line art a visible doubling can remain at the thumb — the
+  same amplitude reads clean on soft/painterly pages. This is inherent to
+  contained mode; the fix is extended mode (rotate + inpaint the vacated
+  region), which is phase-3 work and whose `inpaint` field the parser already
+  accepts but the renderer deliberately does not consume. Related scale fact: a
+  whole hand on a page is only ~20–70 px, so page-level changed-pixel counts are
+  inherently modest (554–29 103 px in the corpus run).
 
-Test surface: 393 engine cases + server contract cases, all green, no skips.
-`dart analyze lib tool test` clean.
+Test surface: 486 engine cases + 14 server cases, all green, no skips.
+`dart analyze lib tool test` clean (both packages).
 
 ## 1.3.2 (2026-09-29)
 
