@@ -8,6 +8,7 @@ data/ledger/
 # comic_motion/docs 与 comic_motion_server/docs 是对外文档，纳入 git
 /docs/
 /DELIVERY/
+/.superpowers/
 realtime/comparison.md
 realtime/readme.md
 
