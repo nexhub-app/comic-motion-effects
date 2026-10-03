@@ -1,5 +1,7 @@
 # 动效目录 v1.3 —— 漫画动势 + 自然氛围 + 情绪编排 + 质量层
 
+> **阅读入口**：本文件按版本分节。§一–§六 是 v1.3 轮存档；**v1.4 现行口径见 §七**（内容感知落位 / 硬派张力默认值 / 部位动作 `handMotion` / v1.4 性能复测）。
+
 > 载体：comic-motion-backend 纯 Dart 动效引擎。本轮三条主张：**把漫画的分镜语言做成动效**（集中线/网点/波环/笔触/震动）、**把自然现象再补五种**（火/烟/泡/叶/流星）、**把「什么时候该重、什么时候该轻」抽成一条可编排的曲线**（`moodScript`）。质量与性能是这三条主张的前提，不是并列目标。
 >
 > 硬承诺（全部实测，非设计意图）：默认/经典配置的 `configHash` 未变，输出字节与 v1.2 轮冻结的基线逐字节一致（v1.3 复跑 10/10；该基线在 v1.2 轮文档中已记录为与 v1.0.0 输出一致，本轮未对 v1.0.0 产物直接复测）；`moodScript.strength=0` 与不挂该效果逐字节等价；`--parallel n` 只改耗时不改字节。**注（v1.4.0）**：本段的跨版本字节口径是 v1.3 轮的历史记录——v1.4 起 `legacy` 只冻结像素算法（H2），默认值亦就地改动（H1），详见 `CHANGELOG.md` 1.4.0 段与 `comic_motion_server/docs/deploy.md` §二。
@@ -58,6 +60,8 @@
 | Q9 | 档位分级 | `RenderTier legacy/standard/rich`，legacy 逐字节复现 v1.2（**本文档口径，v1.4 起废止**：legacy 只冻结像素算法，H2） | — | — | ⚠ **`rich` 当前与 `standard` 等价**：`RenderTier.supersample` 与 `QualityParams.mipLevels` 已定义无消费方 |
 
 ## 四、性能实测（`dart run tool/bench.dart`，2026-09-19，同机 18 核，JIT 预热后二跑）
+
+> **本节全部为 v1.3 轮数值**（32 效、legacy 为默认档）。v1.4 出厂默认已是 `standard` 档且新增第 33 效，复测红线判定见 §七。
 
 | 场景 | 效果数 | 档位 | 耗时 | 峰值 RSS | 红线 |
 |---|---|---|---|---|---|
@@ -118,3 +122,64 @@ dart run bin/comic_motion.dart job all --data-dir build/mood_data   # 演练用�
 | combo_peaceful_evening | `36dca20dcdbbce57` | 36 | 3 475 KB |
 
 统一口径：`fps 12 / durationSec 3 / maxDimension 512 / quality.tier standard`，视差与呼吸 `periodSec` 显式设为 3——默认的 6s/4s 周期在 3s 片段上首尾不等，会破坏无缝承诺。整目录 87 MB，单卡 2.5-5.1 MB。
+
+## 七、v1.4 当期口径：内容感知落位 + 硬派张力 + 部位动作
+
+> **本节起为 v1.4 的现行口径**；上文 §一–§六 保留为 v1.3 轮存档（其历史指纹、历史耗时与已废止的跨版本逐字节承诺仍在原处，只作对照，不再被当前代码复现）。文件名沿用 `motion_catalog_v13.md` 不改（R53 裁定：改名会把一个命名偏差换成一批死链——`comic_motion_server/docs/deploy.md` 与两份 CHANGELOG 直链此路径），后续新版本按节追加、不再往旧节里塞警示行。
+
+### 7.1 一句话主张
+
+v1.3 解决「有没有动效」，v1.4 解决「动得像不像」：**该动的地方动**（落位）、**动得有劲**（张力）、**画面里的主体本身能动**（部位动作）。前两条改的是默认行为，第三条是第 33 个效果且默认关闭。
+
+### 7.2 内容感知落位（`contentAware`，v1.4 默认开启）
+
+新增 `saliency_anchors.dart`：构图先做一遍显著性分析（复用启发式深度的信号混合——墨色、局部对比、饱和、肤色），产出 `AnchorMap`＝`activity` 逐像素活动场 + `subjectBox` 主体框 + `anchors` 焦点列表（NMS 后按权重降序）+ 逐格切分。分析全部在**构建期一次性**完成，不进帧循环。
+
+| 落位改动 | 生效条件 | 关闭后 |
+|---|---|---|
+| 集中线 / 冲击环焦点自动跟主体走（取 `anchors.first`，即权重最高焦点；调用方显式传非默认 `focal` 则让位） | `contentAware` 且拿到 map | 逐字节等于旧行为（固定/参数焦点） |
+| 氛围与天气粒子按 `activity` 加权播种：有界拒绝采样（≤16 次重试），密度∝`activity/activityMax`，命中上限取末次候选 | 同上，且 `activityMax > 1e-6` | 走原均匀分布；属性流游标不变（采样用的是每效果新增的独立位置流） |
+| 覆盖层按分格裁剪 + 逐格播种：粒子配额按各格面积切分，叠加不跨格 | `panelAware`（v1.4 默认开） | 整页一套覆盖层 |
+| 墨线极性自适应：采样点亮度 `>200` 压墨（`darken`）、`<80` 爆白（`screen`）、过渡带以 `140` 分界 | 合成器 `_aa` 门控（standard+） | legacy 档恒为加法白光，逐字节走 v1.2 通路 |
+
+门控只读 `config.contentAware`，**不看渲染档位**（R6/R36：落位是 WHERE、档位是 WHICH pixel algorithm，两者正交）；空白或平坦图自动回落旧路径，不猜。
+
+### 7.3 硬派张力（默认值就地抬升，破坏性变更）
+
+- 视差 / 呼吸 / 震动类幅度默认上抬并配钳位上限，具体取值以 `param_catalog.dart` 与 `CHANGELOG.md` 1.4.0 段为准，本文档不复制一份（避免第三处真相源）。
+- 新增非对称缓动 `snapWave`（`render/waveform.dart`）驱动 `mangaShake` / `speedLines` / `impactRings`：爆点快、回程慢。只在 standard+ 生效，legacy 档不吃这条波形。
+- `periodSec` 自动对齐 `durationSec` 的整数周期 ⇒ 无缝承诺在全部预设上成立（既有 38 份预设据此重出，另补 3 份此前落后于生成器的文件；`presets/legacy_v1.0.json` 例外，作为行为级回滚锚单独钉住）。
+- 默认渲染档位改为 `standard`；`panelAware` 默认开；GIF 抖动 `dither` 默认关（R38 用户裁决）；调色板探针由 3 帧增至 6 帧。
+- **指纹口径**：v1.4.0 做过**唯一一次** re-baseline，两个 `configHash` 的当前取值只见于 `comic_motion_server/docs/deploy.md` §二。本文档全文不复写哈希字面量。
+- **回滚口径**：`legacy` 自 v1.4 起只冻结像素算法（H2），不再承诺跨版本逐字节复现；行为级回滚锚是 `presets/legacy_v1.0.json`。`contentAware=false` 与 `quality.tier: legacy` 仍是两条独立的收回路径。
+
+### 7.4 部位动作：第 33 效 `handMotion`（v1.4 新增，**opt-in**）
+
+- **契约**：`part_motion.json`（`version: 1`，≤8 部件，归一化多边形轮廓 + 锚点）。`kind` 预留 `head|hand|arm|torso|hair|garment`，**本期只实现 `hand`**——其余 kind 解析通过但渲染侧跳过。
+- **输入通道**：`MotionPipeline(config, partMotion: '<json 文本>')`，与 `DepthEstimator` 同级的运行时侧车；**不进 `EffectConfig`、不进 `configHash`**，因此开启它不会改动任何既有指纹。`partMotionDigest` 落 ledger，产物目录带 `_<digest8>` 标签，调用方可证这次渲染用的是哪一份侧车。服务端入口：CLI `--part-motion <path>`（仅 `process`；`batch` 带该参数直接退出 64）与 HTTP `partMotionBase64`。
+- **形变**：`MeshWarper` 绕锚点的**衰减旋转**——手腕锚点固定、位移随到锚点的距离递增，配合 `featherPx = 2` 边缘羽化，观感是「挥手/示意」级节律摆动而非抬手。相位为 `i·π/4`，所以只有第 0 个部件在 `t=0` 处于静息位。
+- **波形选择**：走 `MotionMath.wave`（sin，`t=0` 恰为 0）而**不是** §7.3 的 `snapWave`——后者 `snapWave(0)≈0.34`，会把静帧预先拧歪，破坏「phase=0 ≡ 静帧」红线。
+- **只在 standard+ 生效**：整条通路在合成器 `_aa` 门控之后，legacy 档直接跳过 ⇒ v1.2 字节承诺不破。
+- **不传侧车 = 零成本**：`_initPartWarps` 在 parts 为 null/空、或效果未列出时早退；两侧基准（单页与两格页）的 GIF 摘要与并行扫描 FNV 与本特性合入前**逐字节相同**。
+- **容错**：坏 JSON / 非对象顶层 / 版本不认识 ⇒ **永不抛**，整份侧车忽略并记一条 `warnings`，本次渲染按「无部件」继续（绝不猜着渲染）。锚点落在多边形外则钳到最近顶点并告警；`inpaint` 字段解析并保留但当前无消费方，故不告警。
+- **模式边界**：本期只有 `contained`（位移限制在部位轮廓内；`apply` 只写 RGB、不写 alpha ⇒ 凸组合，不可能造出原图没有的颜色）。`extended`（抬手/转头级）与 `inpaint` 贴片属三期。
+- **已知限制**：硬边墨线上做旋转，部位离开处会向背景抹出残影——contained 混合不做补片的必然结果；柔和/水彩向的页在 `ampDeg: 8` 下测得干净。
+- **验收**：`dart run tool/hand_acceptance.dart <corpusDir>` 输出验收矩阵（缺参数 exit 64，目录无侧车 exit 4）。本轮在 4 张真实页上 4/4 通过：静帧字节一致、无缝、确定性（两次重复 + 串行 + `parallel=4`）、足迹外 0 改动、alpha 0 改动、不造色、`warnings` 为 0。**默认值仍为关闭**，翻默认需要人眼验收签字。
+
+### 7.5 v1.4 性能复测（`tool/bench.dart`，2026-10-03，取 3 次运行中位数）
+
+完整双语表在 README / README_zh-CN 的「性能参考」；此处只留红线判定与新增成本项。
+
+| 场景 | 效果数 | 档位 | 耗时 | 峰值 RSS | 红线 |
+|---|---|---|---|---|---|
+| 1080p 全效果（最坏情况） | 33 | standard | 4.81 s | 644 MB | ≤9 s ✅ |
+| 1600 上限 · 出厂默认档（单页样图） | 3 | standard | 5.54 s | 641 MB | ≤7 s ✅ |
+| 1600 上限 · 出厂默认档（两格页） | 3 | standard | 6.17 s | 1023 MB | ≤7 s ⚠ 压线（3/3 通过，约 13% 余量） |
+| `parallel=1`（两格页） | 3 | standard | 9.69 s | 1033 MB | ❌ >780 MB 串行线 |
+
+- 部位动作的边际成本（实测）：`buildPlan` 一次性 2.7 ms，`apply` 2.36 ms/帧/部件 ⇒ 24 帧单手 **+87 ms**，8 部件上限约 **+489 ms**，在既定预算（部位动作新增耗时 ≤1.5 s 红线）内。
+- 多格页的峰值内存由 `panelAware`（逐格保留一份层栅格）主导，随**格数**而非仅随工作像素增长：同 `maxDimension` 下单页 644 MB、两格页 1033 MB。红线未放宽 ⇒ 长条漫画/多格页务必传 `memoryBudgetMb`（预算通路会在 OOM 前先降工作分辨率并把降级写进 `warnings`）或把 `maxDimension` 压到 ≤1080，并按 ≥2 worker 部署。
+
+### 7.6 三期路线
+
+`extended` 模式与补片、其余 `kind`（head / arm / torso / hair / garment）、以及由 AI 分析产出 `part_motion.json` 的 sidecar，全部记在 `doc/roadmap.md` R5。本期只交付契约与 hand 一条通路。
