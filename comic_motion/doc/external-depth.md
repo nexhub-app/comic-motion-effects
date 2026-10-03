@@ -78,9 +78,11 @@ Practical notes:
 4. **Determinism**: the engine is byte-reproducible for the same input +
    config + depth map. Your model must be deterministic for the same
    input (quantized tflite models are; enable fixed thread counts).
-5. **panelAware interplay**: with `panelAware: true` the estimator runs
-   per panel on the panel's crop — models see cropped panels, which
-   usually improves per-subject depth quality.
+5. **panelAware interplay**: since v1.4 this is the default, and the
+   estimator runs per panel on the panel's crop — models see cropped
+   panels, which usually improves per-subject depth quality. Pass
+   `panelAware: false` (or feed a single-panel page) to get one whole-page
+   call instead.
 
 ## Debugging with exportLayers
 
