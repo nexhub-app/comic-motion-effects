@@ -28,6 +28,15 @@ jobs:
         with:
           sdk: 3.13.0
 
+      # engine 1.4.0（partMotion 侧车等 API）尚未发布 pub.dev，server 的
+      # hosted 声明 ^1.3.1 解析不到新 API。发布窗口期内 CI 同本地开发一致，
+      # 用 path override 指向工作区引擎；1.4.0 上架后删除本步（见
+      # comic_motion/doc/release_checklist.md 第二节）。
+      - name: Wire server to workspace engine (pre-publish window)
+        if: matrix.package == 'comic_motion_server'
+        run: printf 'dependency_overrides:\n  comic_motion:\n    path: ../comic_motion\n' > pubspec_overrides.yaml
+        shell: bash
+
       - name: Install dependencies
         run: dart pub get
 
@@ -56,6 +65,12 @@ jobs:
       - uses: dart-lang/setup-dart@v1
         with:
           sdk: stable
+
+      # 与 test job 同理：发布窗口期内 server 指向工作区引擎（见上）。
+      - name: Wire server to workspace engine (pre-publish window)
+        if: matrix.package == 'comic_motion_server'
+        run: printf 'dependency_overrides:\n  comic_motion:\n    path: ../comic_motion\n' > pubspec_overrides.yaml
+        shell: bash
 
       - name: Install dependencies
         run: dart pub get

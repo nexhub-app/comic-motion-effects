@@ -18,3 +18,7 @@ realtime/readme.md
 # example assets are user-supplied render outputs; keep dir marker only
 comic_motion_flutter/example/assets/*
 !comic_motion_flutter/example/assets/.gitkeep
+
+# server 的机器本地 path override：engine 1.4.0 发布 pub.dev 前的临时窗口产物
+# （release_checklist.md 第二节）；CI 在运行时自行生成同名文件，不入库
+comic_motion_server/pubspec_overrides.yaml
