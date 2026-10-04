@@ -34,7 +34,8 @@ jobs:
       # comic_motion/doc/release_checklist.md 第二节）。
       - name: Wire server to workspace engine (pre-publish window)
         if: matrix.package == 'comic_motion_server'
-        run: printf 'dependency_overrides:\n  comic_motion:\n    path: ../comic_motion\n' > pubspec_overrides.yaml
+        run: |
+          printf 'dependency_overrides:\n  comic_motion:\n    path: ../comic_motion\n' > pubspec_overrides.yaml
         shell: bash
 
       - name: Install dependencies
@@ -69,7 +70,8 @@ jobs:
       # 与 test job 同理：发布窗口期内 server 指向工作区引擎（见上）。
       - name: Wire server to workspace engine (pre-publish window)
         if: matrix.package == 'comic_motion_server'
-        run: printf 'dependency_overrides:\n  comic_motion:\n    path: ../comic_motion\n' > pubspec_overrides.yaml
+        run: |
+          printf 'dependency_overrides:\n  comic_motion:\n    path: ../comic_motion\n' > pubspec_overrides.yaml
         shell: bash
 
       - name: Install dependencies
