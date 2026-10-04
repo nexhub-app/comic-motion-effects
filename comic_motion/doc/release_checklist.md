@@ -60,6 +60,11 @@
 hosted 解析、6 例契约测试全绿）；两个伴生包与两个 example 同步删除
 override，统一走版本依赖。
 
+**执行记录（2026-10-04）**：engine 1.4.0 经 tag `v1.4.0` 触发 OIDC 自动
+发布至 pub.dev（publish workflow 内 test + dry-run 门禁通过）；server 切至
+`comic_motion: ^1.4.0` 并删除 `pubspec_overrides.yaml`，CI 拆除
+pre-publish window 临时 wire 步骤，恢复测 pub.dev 真实产物。
+
 ## 四、pub.dev score 优化清单
 
 | 计分项 | 现状 | 动作 |
