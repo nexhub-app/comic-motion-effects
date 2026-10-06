@@ -25,10 +25,14 @@ part 'effects/particle_raster_pass.dart';
 /// [DeterministicRandom], so identical input + config => identical frames.
 class FrameCompositor {
   FrameCompositor(this.layers, this.base, this.config,
-      {AnchorMap? anchors, List<PartMotion>? parts})
+      {AnchorMap? anchors,
+      List<PartMotion>? parts,
+      bool enableStaticCache = true})
       : w = base.width,
         h = base.height,
         _anchors = anchors,
+        _staticCompositeCacheable =
+            enableStaticCache && _isStaticCompositeConfig(config),
         _envelope = config.effects.contains(EffectKind.moodScript)
             ? MotionEnvelope.of(config.moodScript.mood,
                 strength: config.moodScript.strength,
@@ -85,6 +89,7 @@ class FrameCompositor {
     List<PixelRect?>? clips,
     AnchorMap? anchors,
     List<PartMotion>? parts,
+    bool enableStaticCache = true,
   }) {
     final ls = [
       for (var i = 0; i < layers.length; i++)
@@ -94,7 +99,7 @@ class FrameCompositor {
     ];
     return FrameCompositor(
         ls, RgbaImage.fromBytes(width: w, height: h, data: base), config,
-        anchors: anchors, parts: parts);
+        anchors: anchors, parts: parts, enableStaticCache: enableStaticCache);
   }
 
   // ---- v1.1 新动效状态（各自独立随机流，不扰动经典路径的 _rng 序列）----
@@ -787,6 +792,48 @@ class FrameCompositor {
   late List<PixelRect?> _layerClips; // W5 分格裁剪（null = 全画布）
   late Uint8List _basePixels;
 
+  // ---- X2（v1.5）：静态层栈合成缓存 ----
+  //
+  // 效果集不含任何层变换效果（parallax / breathing / heartbeat / slowPush /
+  // mangaShake）时，底图与各层在整段动画里以 (0,0,1.0) 原样叠合——层栈合成
+  // 结果逐帧恒定。此时首帧把「底图 + 各层」画进缓存栅格一次，后续每帧
+  // `setAll` 整块拷贝进新帧缓冲后只重画叠加效果：每帧省掉 (层数+1) 次全画布
+  // 重采样循环（standard 档 Catmull-Rom ≈1.8× 双线性代价），换 1 次 memcpy。
+  // 代价是每个合成器实例多持 1 份全画布 RGBA（worker_pool 的内存模型按
+  // (层数+2)×1.5 估算，1.5 安全系数吸收这 1 份，预算门槛不变）。
+  //
+  // 零输出变化是构造出来的性质：缓存由**同一条**底图/层绘制代码建出
+  // （[_buildStaticComposite] 与被替换的代码逐参数相同，位移 0、缩放 1），
+  // 之后每帧字节级拷贝。交互式视差（parallaxOverride）只在 parallax 效果
+  // 开启时被消费 ⇒ 被本门自然排除，interaction 路径不受影响。reducedMotion
+  // 的单帧早退发生在本门之前，语义不变。
+  final bool _staticCompositeCacheable;
+  RgbaImage? _staticComposite;
+
+  /// 构造期判定：该配置下「底图 + 层栈」是否逐帧恒定（与 renderFrame 里
+  /// zoom / 位移 / 层偏移的每个来源一一对应，新增层变换效果时必须同步）。
+  static bool _isStaticCompositeConfig(EffectConfig config) =>
+      !config.effects.contains(EffectKind.parallax) &&
+      !(config.effects.contains(EffectKind.breathing) &&
+          config.breathing.enabled) &&
+      !config.effects.contains(EffectKind.heartbeat) &&
+      !config.effects.contains(EffectKind.slowPush) &&
+      !config.effects.contains(EffectKind.mangaShake);
+
+  /// 首帧建缓存：与被缓存的绘制路径逐参数相同（位移 0、缩放 1）。
+  RgbaImage _buildStaticComposite() {
+    final buf = RgbaImage(width: w, height: h);
+    final tier = config.quality.tier;
+    _drawLayer(buf, _basePixels, base.width, base.height, 0, 0, 1.0,
+        _anchorY(), tier);
+    for (var li = 0; li < layers.length; li++) {
+      _drawLayer(buf, _layerPixels[li], layers[li].image.width,
+          layers[li].image.height, 0, 0, 1.0, _anchorY(), tier,
+          clip: _layerClips[li]);
+    }
+    return buf;
+  }
+
   // ---- Task 2.3：分格叠加裁剪 + 逐格播种 ----
   //
   // 规格 §5 line 75（权威）：panelAware 下叠加 pass 逐格播种 + 用本格 clip 裁剪。
@@ -921,54 +968,20 @@ class FrameCompositor {
     }
   }
 
-  /// Render frame at normalized time t in [0, duration).
-  RgbaImage renderFrame(double tSec) {
-    final frame = RgbaImage(width: w, height: h);
-    final tier = config.quality.tier;
-    // 情绪包络每帧只取一次因子，后面各 pass 直接读 [_env]。
-    final envelope = _envelope;
-    _env =
-        envelope == null ? EnvelopeFactors.identity : envelope.at(_loopU(tSec));
+  /// 底图 + 层栈的整段绘制（X2 从 renderFrame 原样搬出）。缓存臂
+  /// [_buildStaticComposite] 与非缓存臂共用本实现——缓存内容与逐帧绘制
+  /// 路径逐参数一致，「零输出变化」由同一段代码构造性保证。
+  void _drawLayerStack(
+      RgbaImage frame,
+      double tSec,
+      double shakeX,
+      double shakeY,
+      double zoom,
+      RenderTier tier,
+  ) {
     final dirRad = config.parallax.directionDeg * math.pi / 180.0;
     final dxDir = math.cos(dirRad);
     final dyDir = math.sin(dirRad);
-
-    // Global breathing zoom around the anchor.
-    var zoom = 1.0;
-    if (config.effects.contains(EffectKind.breathing) &&
-        config.breathing.enabled) {
-      zoom = 1.0 +
-          config.breathing.amplitude *
-              _env.motion *
-              MotionMath.wave(tSec,
-                  periodSec: MotionMath.alignedPeriodSec(
-                      config.durationSec, config.breathing.periodSec),
-                  phase: 0);
-    }
-    // v1.1 心跳脉冲：双拍缩放（乘法叠加在呼吸之上）。
-    if (config.effects.contains(EffectKind.heartbeat)) {
-      zoom *= _heartbeatZoom(tSec);
-    }
-    // v1.2 缓慢推镜：Ken Burns 式单向前推（往返整数周期保证无缝）。
-    if (config.effects.contains(EffectKind.slowPush)) {
-      zoom *= _slowPushZoom(tSec);
-    }
-
-    // 减弱动态降级：单帧静态底图，无任何动效。
-    if (config.reducedMotion) {
-      _drawLayer(frame, _basePixels, base.width, base.height, 0, 0, 1.0,
-          _anchorY(), tier);
-      return frame;
-    }
-
-    // v1.3 震屏：整体平移底图与层（减弱动态分支已在上面 return，不受影响）。
-    var shakeX = 0.0, shakeY = 0.0;
-    if (config.effects.contains(EffectKind.mangaShake)) {
-      final s = _shakeOffset(tSec);
-      shakeX = s.$1;
-      shakeY = s.$2;
-    }
-
     // Base with breathing zoom only.
     // 平移会露出画布外的空白，所以底图也按位移量略微放大覆盖（无抖时系数
     // 恰为 1.0，legacy 路径逐字节不变）。
@@ -1052,10 +1065,64 @@ class FrameCompositor {
           layers[li].image.height, dx, dy, zoom * cover, _anchorY(), tier,
           clip: _layerClips[li]);
     }
+  }
 
-    // ---- v1.4 Plan B：部位动作（手腕锚点的衰减旋转摆动）----
-    // 位置在层合成之后、叠加层之前：形变的输入必须是「已经合成好的手」，
-    // 而雨/雪/光晕等叠加层不该被跟着扭（它们是氛围，贴在相机前而非纸面上）。
+  /// Render frame at normalized time t in [0, duration).
+  RgbaImage renderFrame(double tSec) {
+    final frame = RgbaImage(width: w, height: h);
+    final tier = config.quality.tier;
+    // 情绪包络每帧只取一次因子，后面各 pass 直接读 [_env]。
+    final envelope = _envelope;
+    _env =
+        envelope == null ? EnvelopeFactors.identity : envelope.at(_loopU(tSec));
+
+    // Global breathing zoom around the anchor.
+    var zoom = 1.0;
+    if (config.effects.contains(EffectKind.breathing) &&
+        config.breathing.enabled) {
+      zoom = 1.0 +
+          config.breathing.amplitude *
+              _env.motion *
+              MotionMath.wave(tSec,
+                  periodSec: MotionMath.alignedPeriodSec(
+                      config.durationSec, config.breathing.periodSec),
+                  phase: 0);
+    }
+    // v1.1 心跳脉冲：双拍缩放（乘法叠加在呼吸之上）。
+    if (config.effects.contains(EffectKind.heartbeat)) {
+      zoom *= _heartbeatZoom(tSec);
+    }
+    // v1.2 缓慢推镜：Ken Burns 式单向前推（往返整数周期保证无缝）。
+    if (config.effects.contains(EffectKind.slowPush)) {
+      zoom *= _slowPushZoom(tSec);
+    }
+
+    // 减弱动态降级：单帧静态底图，无任何动效。
+    if (config.reducedMotion) {
+      _drawLayer(frame, _basePixels, base.width, base.height, 0, 0, 1.0,
+          _anchorY(), tier);
+      return frame;
+    }
+
+    // v1.3 震屏：整体平移底图与层（减弱动态分支已在上面 return，不受影响）。
+    var shakeX = 0.0, shakeY = 0.0;
+    if (config.effects.contains(EffectKind.mangaShake)) {
+      final s = _shakeOffset(tSec);
+      shakeX = s.$1;
+      shakeY = s.$2;
+    }
+
+    // Base with breathing zoom only.
+    // 平移会露出画布外的空白，所以底图也按位移量略微放大覆盖（无抖时系数
+    // 恰为 1.0，legacy 路径逐字节不变）。
+    if (_staticCompositeCacheable) {
+      // X2 静态层栈缓存：无层变换效果 ⇒ 底图+层栈恒为 (0,0,1.0) 叠合，
+      // 首帧建一次缓存，此后每帧整块拷贝再重画叠加效果（零输出变化）。
+      final cache = _staticComposite ??= _buildStaticComposite();
+      frame.data.setAll(0, cache.data);
+    } else {
+      _drawLayerStack(frame, tSec, shakeX, shakeY, zoom, tier);
+    }
     // legacy 档整体跳过（`_aa`）——v1.2 的逐字节回滚承诺覆盖这条新通道。
     // 快照**整帧一次、所有部件共用**：apply 只读 src、只写 dst，所以部件之间
     // 不叠加彼此的形变。逐部件 bbox 局部快照不可行——旋转会把采样点推出 bbox
