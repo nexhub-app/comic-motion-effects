@@ -41,6 +41,7 @@ class Ledger {
     int? parallel,
     bool? parallelFallback,
     String? partMotionDigest,
+    String? anchorsDigest,
     List<String>? warnings,
     String? error,
   }) {
@@ -64,6 +65,9 @@ class Ledger {
       // 改变像素——没有这一条，事后无法区分「同配置两次跑出不同 GIF」是
       // bug 还是换了侧车。null = 未启用侧车，键不出现在旧记录里。
       if (partMotionDigest != null) 'partMotionDigest': partMotionDigest,
+      // X3（v1.5）：anchors 侧车指纹，语义同 partMotionDigest（运行期输入，
+      // 改变像素但不进 configHash）。null = 未启用，键不出现在旧记录里。
+      if (anchorsDigest != null) 'anchorsDigest': anchorsDigest,
       if (warnings != null && warnings.isNotEmpty) 'warnings': warnings,
       if (error != null) 'error': error,
     };

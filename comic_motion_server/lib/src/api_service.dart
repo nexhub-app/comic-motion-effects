@@ -10,7 +10,7 @@ import 'package:shelf_router/shelf_router.dart';
 /// In-memory job record for the async HTTP API.
 class _HttpJob {
   _HttpJob(this.id, this.inputPath, this.config,
-      {this.parallel, this.partMotion});
+      {this.parallel, this.partMotion, this.anchors});
   final String id;
   final String inputPath;
   final EffectConfig config;
@@ -21,6 +21,10 @@ class _HttpJob {
   /// `part_motion.json` 侧车原文（null = 不做部位形变）。同 [parallel]：运行期
   /// 输入，不进 config，因此不影响 configHash，但要单独记进台账。
   final String? partMotion;
+
+  /// `anchors.json` 显著性侧车原文（X3，null = 内置启发式）。语义同
+  /// [partMotion]：运行期输入，不进 configHash，单独记进台账。
+  final String? anchors;
   String status = 'queued'; // queued | running | success | failed
   Map<String, dynamic>? result;
   String? error;
@@ -32,7 +36,7 @@ class _HttpJob {
 /// Endpoints:
 ///   GET  /health                     liveness + version + queue depth
 ///   POST /api/v1/jobs                submit {inputPath|inputBase64, config,
-///                                        partMotionBase64?}
+///                                        partMotionBase64?, anchorsBase64?}
 ///   GET  /api/v1/jobs/<id>           job status + result paths
 ///   GET  /api/v1/jobs                all tracked jobs
 ///   GET  /api/v1/ledger?jobId&status persisted ledger query
@@ -137,9 +141,24 @@ class MotionApiService {
         }
       }
 
+      String? anchors;
+      if (j['anchorsBase64'] is String) {
+        try {
+          anchors =
+              convert.utf8.decode(convert.base64Decode(j['anchorsBase64'] as String));
+        } on FormatException {
+          return _json({
+            'error': 'E_BAD_INPUT',
+            'message': 'anchorsBase64 不是合法 Base64（UTF-8 文本）'
+          }, 400);
+        }
+      }
+
       final jobId = 'job-${DateTime.now().millisecondsSinceEpoch}-${++_seq}';
       _jobs[jobId] = _HttpJob(jobId, inputPath, config,
-          parallel: (j['parallel'] as num?)?.toInt(), partMotion: partMotion);
+          parallel: (j['parallel'] as num?)?.toInt(),
+          partMotion: partMotion,
+          anchors: anchors);
       _queue.add(jobId);
       _pump();
       return _json({'jobId': jobId, 'status': 'queued'}, 202);
@@ -220,7 +239,8 @@ class MotionApiService {
       Future(() async {
         final r = await MotionPipeline(job.config,
                 parallel: job.parallel ?? _parallelPerJob,
-                partMotion: job.partMotion)
+                partMotion: job.partMotion,
+                anchors: job.anchors)
             .processFile(job.inputPath, _outputsDir);
         job.result = {
           'input': r.inputPath,
@@ -235,6 +255,7 @@ class MotionApiService {
           'parallel': r.parallel,
           if (r.parallelFallback) 'parallelFallback': true,
           if (r.partMotionDigest != null) 'partMotionDigest': r.partMotionDigest,
+          if (r.anchorsDigest != null) 'anchorsDigest': r.anchorsDigest,
           if (r.warnings.isNotEmpty) 'warnings': r.warnings,
         };
         job.status = 'success';
@@ -254,6 +275,7 @@ class MotionApiService {
           parallel: r.parallel,
           parallelFallback: r.parallelFallback ? true : null,
           partMotionDigest: r.partMotionDigest,
+          anchorsDigest: r.anchorsDigest,
           warnings: r.warnings,
         );
       }).catchError((Object e) {

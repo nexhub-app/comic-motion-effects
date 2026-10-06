@@ -33,6 +33,18 @@ class AnchorMap {
   }
 }
 
+/// X3（v1.5）：显著性估算器接口——与 [DepthEstimator]（W6，见
+/// `depth_splitter.dart` / `doc/external-depth.md`）同性质：**运行期依赖，
+/// 不参与 configHash**。内置实现 [SaliencyAnalyzer]；外部 AI（显著性模型 /
+/// 人物检测 / 页面理解）实现本接口后经 `MotionPipeline(saliencyEstimator:)`
+/// 构造注入。优先级：`anchors` 侧车（逐页数据，见 `anchor_sidecar.dart`）>
+/// 本接口注入 > 内置启发式（默认路径逐字节不变）。
+abstract class SaliencyEstimator {
+  /// 对 [img]（工作分辨率栅格）做内容分析；[panels] 为 panelAware 检出的
+  /// 画布像素格（多格页逐格分析、格间不渗色；null/单格 = 整页）。
+  AnchorMap analyze(RgbaImage img, {List<PixelRect>? panels});
+}
+
 /// Computes a saliency/activity field from page pixels, reusing the
 /// `HeuristicDepthEstimator` signal mix (ink, local contrast, saturation,
 /// skin — `depth_splitter.dart:113, 128-158`) plus its coherent-field
@@ -52,7 +64,7 @@ class AnchorMap {
 /// ([0,1]), so downstream consumers are resolution-independent. [panels]
 /// are full-canvas PIXEL rects, exactly as produced by `PanelSplitter.split`
 /// (same space as the input [RgbaImage]).
-class SaliencyAnalyzer {
+class SaliencyAnalyzer implements SaliencyEstimator {
   const SaliencyAnalyzer({this.workScale = 0.5});
   final double workScale;
 

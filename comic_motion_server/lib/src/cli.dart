@@ -41,6 +41,9 @@ Future<void> main(List<String> args) async {
         help: '帧渲染并行 isolate 数：auto 或正整数（1=串行）。只影响耗时，不影响输出字节')
     ..addOption('part-motion',
         help: 'part_motion.json 侧车路径（仅 process）。不传 = 一个像素都不形变')
+    ..addOption('anchors',
+        help: 'anchors.json 显著性侧车路径（仅 process）。外部 AI 焦点/活动度'
+              '数据，改变效果落位与焦点；不传 = 内置启发式分析')
     ..addFlag('version', negatable: false, help: '打印版本');
   final res = parser.parse(args);
 
@@ -144,6 +147,19 @@ int? _parallelArg(ArgResults res) {
 ///
 /// 这里只读文件、不解析也不校验 JSON——解析与降级（坏侧车 ⇒ 空部件 + warning）
 /// 是引擎 [PartMotionParser] 的职责，CLI 重复一遍只会让两处口径漂移。
+/// `--anchors <path>`：读取 `anchors.json` 显著性侧车**原文**（X3）。
+///
+/// 与 [partMotionFromFile] 同一习语：这里只读文件、不解析不校验——解析与
+/// 降级（坏侧车 ⇒ null spec + warning）是引擎 [AnchorsSpecParser] 的职责。
+String? anchorsFromFile(String? path) {
+  if (path == null) return null;
+  final f = File(path);
+  if (!f.existsSync()) {
+    throw ConfigException('anchors 侧车不存在: $path');
+  }
+  return f.readAsStringSync();
+}
+
 String? partMotionFromFile(String? path) {
   if (path == null) return null;
   final f = File(path);
@@ -161,11 +177,12 @@ Future<void> _process(ArgResults res) async {
   }
   final cfg = _cfg(res);
   final partMotion = partMotionFromFile(res['part-motion'] as String?);
+  final anchors = anchorsFromFile(res['anchors'] as String?);
   final ledger = Ledger('${res['data-dir'] as String}/ledger');
   final jobId = 'cli-${DateTime.now().millisecondsSinceEpoch}';
   try {
     final r = await MotionPipeline(cfg,
-            parallel: _parallelArg(res), partMotion: partMotion)
+            parallel: _parallelArg(res), partMotion: partMotion, anchors: anchors)
         .processFile(input, res['out'] as String);
     ledger.appendJob(
       jobId: jobId,
@@ -183,6 +200,7 @@ Future<void> _process(ArgResults res) async {
       parallel: r.parallel,
       parallelFallback: r.parallelFallback ? true : null,
       partMotionDigest: r.partMotionDigest,
+      anchorsDigest: r.anchorsDigest,
       warnings: r.warnings,
     );
     for (final w in r.warnings) {
@@ -227,9 +245,15 @@ Future<void> _batch(ArgResults res) async {
   }
   // 部件多边形是**这一张图**的归一化坐标；一个目录里的每张图各绑一份侧车，
   // 一份 part_motion.json 不可能对上整目录。宁可直接拒绝，也不静默忽略。
+  // anchors 侧车同一口径（X3）：归一化坐标与「这一张图」绑定。
   if (res['part-motion'] != null) {
     stderr.writeln('--part-motion 只用于 process：batch 需要 per-image 侧车，'
         '请逐图调用 process 或走 HTTP 的 partMotionBase64');
+    exit(64);
+  }
+  if (res['anchors'] != null) {
+    stderr.writeln('--anchors 只用于 process：batch 需要 per-image 侧车，'
+        '请逐图调用 process 或走 HTTP 的 anchorsBase64');
     exit(64);
   }
   final cfg = _cfg(res);
@@ -276,7 +300,8 @@ Future<void> _serve(int port, String dataDir) async {
       'comic-motion-backend $comicMotionVersion listening on http://0.0.0.0:${server.port}');
   stdout.writeln('  GET  /health');
   stdout.writeln(
-      '  POST /api/v1/jobs   {inputPath|inputBase64, config{...}, partMotionBase64?}');
+      '  POST /api/v1/jobs   {inputPath|inputBase64, config{...}, '
+      'partMotionBase64?, anchorsBase64?}');
   stdout.writeln('  GET  /api/v1/jobs/<id>');
   stdout.writeln('  GET  /api/v1/ledger?jobId=&status=');
   stdout.writeln('  GET  /files/<相对输出路径>');

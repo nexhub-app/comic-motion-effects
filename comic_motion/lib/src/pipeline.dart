@@ -12,6 +12,7 @@ import 'gif_writer.dart';
 import 'depth_splitter.dart';
 import 'image_io.dart';
 import 'image_model.dart';
+import 'anchor_sidecar.dart';
 import 'part_motion.dart';
 import 'render/resampler.dart';
 import 'saliency_anchors.dart';
@@ -43,6 +44,7 @@ class PipelineResult {
     this.warnings = const [],
     this.outputApng = '',
     this.partMotionDigest,
+    this.anchorsDigest,
   });
 
   final String inputPath;
@@ -83,6 +85,10 @@ class PipelineResult {
   /// 渲染会被当成同一缓存。执行期属性，不参与 configHash。
   final String? partMotionDigest;
 
+  /// 侧车 `anchors.json` 的文本指纹（X3）。语义同 [partMotionDigest]：
+  /// 运行期指纹，改变落位但不进 configHash。null = 未给侧车。
+  final String? anchorsDigest;
+
   /// `includeFirstFrame: true` 时的首帧 PNG（Uint8List），未请求为 null。
   /// 与 GIF 首帧同源（同一渲染帧：GIF 里的副本经调色板量化），字节与
   /// `frames/frame_0000.png` 完全一致。执行期产物，不进 [toJson]。
@@ -106,6 +112,7 @@ class PipelineResult {
         if (warnings.isNotEmpty) 'warnings': warnings,
         if (outputApng.isNotEmpty) 'outputApng': outputApng,
         if (partMotionDigest != null) 'partMotionDigest': partMotionDigest,
+        if (anchorsDigest != null) 'anchorsDigest': anchorsDigest,
       };
 }
 
@@ -131,6 +138,7 @@ class MemoryPipelineResult {
     this.warnings = const [],
     this.apngBytes,
     this.partMotionDigest,
+    this.anchorsDigest,
   });
 
   /// Encoded GIF bytes. Null when the config requests frames-only output
@@ -166,6 +174,9 @@ class MemoryPipelineResult {
 
   /// 侧车 `part_motion.json` 文本指纹（语义同 [PipelineResult.partMotionDigest]）。
   final String? partMotionDigest;
+
+  /// 侧车 `anchors.json` 文本指纹（X3，语义同 [PipelineResult.anchorsDigest]）。
+  final String? anchorsDigest;
 
   /// `includeFirstFrame: true` 时的首帧 PNG，未请求为 null（语义同
   /// [PipelineResult.firstFramePng]）。
@@ -230,14 +241,21 @@ class MotionPipeline {
     this.keepPartial = false,
     DepthEstimator? depthEstimator,
     String? partMotion,
+    SaliencyEstimator? saliencyEstimator,
+    String? anchors,
   }) : _parallel = parallel ??
             math.min(
                 kDefaultParallel, math.max(1, io.Platform.numberOfProcessors)),
         _depthEstimator = depthEstimator,
+        _saliencyEstimator = saliencyEstimator,
         partMotion = partMotion,
+        anchors = anchors,
         _partParse = partMotion == null
             ? const PartMotionParse(null, [])
-            : PartMotionParser.parse(partMotion);
+            : PartMotionParser.parse(partMotion),
+        _anchorsParse = anchors == null
+            ? const AnchorsParse(null, [])
+            : AnchorsSpecParser.parse(anchors);
 
   /// 深度估算器注入（W6）：null = 内置启发式（[HeuristicDepthEstimator]，
   /// 与接口化前像素输出逐字节一致）。执行期依赖，不参与 configHash。
@@ -281,6 +299,37 @@ class MotionPipeline {
   /// 产物目录后缀：未给侧车时是空串（既有命名逐字节不变），给了就是
   /// `_<digest>`。见 [partMotionDigest] 的缓存撞名论证。
   String get partsDirTag => partMotionDigest == null ? '' : '_$partMotionDigest';
+
+  /// 显著性估算器注入（X3）：null = 内置启发式（[SaliencyAnalyzer]，与接口
+  /// 化前像素输出逐字节一致）。执行期依赖，不参与 configHash。
+  final SaliencyEstimator? _saliencyEstimator;
+
+  /// `anchors.json` 侧车**原文**（X3）：外部 AI 显著性/焦点识别的页级数据。
+  /// 运行期输入，与 [partMotion] 同级：改变落位与焦点，但不进 EffectConfig、
+  /// 不参与 configHash。null = 不启用，既有路径逐字节零变化。
+  ///
+  /// 优先级：本侧车 > saliencyEstimator 注入 > 内置启发式——侧车是逐页
+  /// 数据，比可复用的估算器更具体。侧车与**这一张图**绑定（归一化坐标换图
+  /// 即失效），因此 [BatchRunner] 与 `processStrip` 与部件侧车同一理由**不
+  /// 接**这条通道。
+  final String? anchors;
+  final AnchorsParse _anchorsParse;
+
+  /// 本次生效的 anchors 侧车（未给或解析失败为 null）。
+  AnchorsSpec? get effectiveAnchors => _anchorsParse.spec;
+
+  /// 侧车解析告警。冒泡路径与 [partWarnings] 相同。
+  List<String> get anchorsWarnings => _anchorsParse.warnings;
+
+  /// 侧车文本指纹（8 位十六进制，与 [ImageIO.contentHash8] 同算法）。
+  /// 语义同 [partMotionDigest]：运行期输入改变像素但不进 configHash，
+  /// 产物目录必须单独记一笔，否则「同图同配置、只换侧车」会命中旧缓存。
+  String? get anchorsDigest => anchors == null
+      ? null
+      : ImageIO.contentHash8(convert.utf8.encode(anchors!));
+
+  /// 产物目录后缀（X3）：未给侧车时是空串（既有命名逐字节不变）。
+  String get anchorsDirTag => anchorsDigest == null ? '' : '_${anchorsDigest}';
 
   final EffectConfig config;
 
@@ -375,7 +424,7 @@ class MotionPipeline {
     final contentHash = ImageIO.contentHash8(bytes);
     final jobDir = '$outputDir/'
         '${baseName}_${contentHash}_${config.configHash.substring(0, 8)}'
-        '${partsDirTag}';
+        '${partsDirTag}${anchorsDirTag}';
 
     final core = await _runCore(src,
         jobDir: jobDir, includeFirstFrame: includeFirstFrame);
@@ -400,6 +449,7 @@ class MotionPipeline {
       warnings: core.warnings,
       outputApng: core.apngPath,
       partMotionDigest: partMotionDigest,
+      anchorsDigest: anchorsDigest,
     );
   }
 
@@ -423,7 +473,7 @@ class MotionPipeline {
     final contentHash = ImageIO.contentHash8(source.data);
     final jobDir = '$outputDir/'
         '${baseName}_${contentHash}_${config.configHash.substring(0, 8)}'
-        '${partsDirTag}';
+        '${partsDirTag}${anchorsDirTag}';
     final core = await _runCore(source,
         jobDir: jobDir, includeFirstFrame: includeFirstFrame);
     sw.stop();
@@ -447,6 +497,7 @@ class MotionPipeline {
       warnings: core.warnings,
       outputApng: core.apngPath,
       partMotionDigest: partMotionDigest,
+      anchorsDigest: anchorsDigest,
     );
   }
 
@@ -491,6 +542,7 @@ class MotionPipeline {
       parallelFallback: core.parallelFallback,
       warnings: core.warnings,
       partMotionDigest: partMotionDigest,
+      anchorsDigest: anchorsDigest,
     );
   }
 
@@ -911,7 +963,12 @@ class MotionPipeline {
       frameCount: n,
       parallel: parallel,
       parallelFallback: fallback || budgetCappedParallel,
-      warnings: [...config.warnings, ...partWarnings, ...budgetWarnings],
+      warnings: [
+      ...config.warnings,
+      ...partWarnings,
+      ...anchorsWarnings,
+      ...budgetWarnings,
+    ],
     );
   }
 
@@ -999,8 +1056,19 @@ class MotionPipeline {
   /// （工作分辨率画布像素格，null = 整页）分析底图。
   AnchorMap? _analyzeAnchors(RgbaImage working, List<PixelRect>? panels) {
     if (!config.contentAware) return null;
-    return const SaliencyAnalyzer().analyze(working, panels: panels);
+    // X3 优先级：anchors 侧车 > 估算器注入 > 内置启发式。侧车是整页口径
+    // （归一化坐标），panels 被忽略。
+    final spec = _anchorsParse.spec;
+    if (spec != null) {
+      return spec.toAnchorMap(working.width, working.height);
+    }
+    return effectiveSaliencyEstimator.analyze(working, panels: panels);
   }
+
+  /// 当前生效的显著性估算器（注入优先，缺省内置启发式；默认路径与接口化
+  /// 前逐字节一致）。
+  SaliencyEstimator get effectiveSaliencyEstimator =>
+      _saliencyEstimator ?? const SaliencyAnalyzer();
 
   /// W5 分格感知：逐格裁剪子图 → 独立 DepthEstimator + LayerSplitter →
   /// 层内容写回全图尺寸透明画布（格区域），携带格内 rank 与格边界裁剪。
