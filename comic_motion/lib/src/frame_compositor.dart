@@ -190,7 +190,7 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x51A1);
       final pos = DeterministicRandom(config.seed ^ 0x5601);
       final p = config.rain;
-      final rn = p.count.clamp(0, 400);
+      final rn = _curatedCount(p.count.clamp(0, 400));
       _rain = List.generate(rn, (i) {
         // 先按旧路径消费属性流两个 draw（游标与逐字节基线一致），再在内容感知
         // 开启时用位置专用流 [pos] 的拒绝采样覆盖坐标。Task 2.3：逐格路径启用时
@@ -212,7 +212,7 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x51A2);
       final pos = DeterministicRandom(config.seed ^ 0x5602);
       final p = config.snow;
-      final sn = p.count.clamp(0, 400);
+      final sn = _curatedCount(p.count.clamp(0, 400));
       _snow = List.generate(sn, (i) {
         final (x0, y0, clip) = _seedPlacement(i, sn, pos, r.nextDouble(),
             r.nextDouble(), roi: _roiRects[EffectKind.snow]);
@@ -233,7 +233,7 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x51A3);
       final pos = DeterministicRandom(config.seed ^ 0x5603);
       final p = config.sakura;
-      final kn = p.count.clamp(0, 300);
+      final kn = _curatedCount(p.count.clamp(0, 300));
       _sakura = List.generate(kn, (i) {
         final (x0, y0, clip) = _seedPlacement(i, kn, pos, r.nextDouble(),
             r.nextDouble(), roi: _roiRects[EffectKind.sakura]);
@@ -256,7 +256,7 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x51A4);
       final pos = DeterministicRandom(config.seed ^ 0x5604);
       final p = config.fireflies;
-      final fn = p.count.clamp(0, 200);
+      final fn = _curatedCount(p.count.clamp(0, 200));
       _fireflies = List.generate(fn, (i) {
         final (x0, y0, clip) = _seedPlacement(
             i, fn, pos, 0.08 + r.nextDouble() * 0.84, 0.08 + r.nextDouble() * 0.84,
@@ -314,7 +314,7 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x52B1);
       final pos = DeterministicRandom(config.seed ^ 0x5605);
       final p = config.fog;
-      final bn = p.blobs.clamp(0, 40);
+      final bn = _curatedCount(p.blobs.clamp(0, 40));
       _fogBlobs = List.generate(bn, (i) {
         final (x0, y0, clip) = _seedPlacement(i, bn, pos, r.nextDouble(),
             0.15 + r.nextDouble() * 0.8, roi: _roiRects[EffectKind.fog]);
@@ -336,7 +336,7 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x52B2);
       final pos = DeterministicRandom(config.seed ^ 0x5606);
       final p = config.embers;
-      final en = p.count.clamp(0, 300);
+      final en = _curatedCount(p.count.clamp(0, 300));
       _embers = List.generate(en, (i) {
         final (x0, y0, clip) = _seedPlacement(i, en, pos, r.nextDouble(),
             r.nextDouble(), roi: _roiRects[EffectKind.embers]);
@@ -482,7 +482,7 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x54D3);
       final pos = DeterministicRandom(config.seed ^ 0x5607);
       final p = config.bubbles;
-      final un = p.count.clamp(0, 120);
+      final un = _curatedCount(p.count.clamp(0, 120));
       _bubbles = List.generate(un, (i) {
         final (x0, y0, clip) = _seedPlacement(
             i, un, pos, 0.04 + r.nextDouble() * 0.92, r.nextDouble(),
@@ -504,7 +504,7 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x54D4);
       final pos = DeterministicRandom(config.seed ^ 0x5608);
       final p = config.leaves;
-      final ln = p.count.clamp(0, 300);
+      final ln = _curatedCount(p.count.clamp(0, 300));
       _leaves = List.generate(ln, (i) {
         final (x0, y0, clip) = _seedPlacement(i, ln, pos, r.nextDouble(),
             r.nextDouble(), roi: _roiRects[EffectKind.leaves]);
@@ -527,7 +527,7 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x54D5);
       final pos = DeterministicRandom(config.seed ^ 0x5609);
       final p = config.meteors;
-      final mn = p.count.clamp(1, 20);
+      final mn = _curatedCount(p.count.clamp(1, 20));
       _meteors = List.generate(mn, (i) {
         final (x0, y0, clip) = _seedPlacement(
             i, mn, pos, 0.1 + r.nextDouble() * 0.8, 0.05 + r.nextDouble() * 0.55,
@@ -594,7 +594,7 @@ class FrameCompositor {
       final r = DeterministicRandom(config.seed ^ 0x55E4);
       final pos = DeterministicRandom(config.seed ^ 0x5610);
       final p = config.windStreak;
-      final wn = p.count.clamp(2, 80);
+      final wn = _curatedCount(p.count.clamp(2, 80));
       _windStreaks = List.generate(wn, (i) {
         final (sx, sy, clip) = _seedPlacement(i, wn, pos, r.nextDouble(),
             0.05 + r.nextDouble() * 0.9,
@@ -732,6 +732,24 @@ class FrameCompositor {
   /// 构造期单次扫描 activity 网格得到的最大值（无数组分配）。门控关/无 map 时为 0。
   late final double _activityMax;
 
+  /// X7：同一遍扫描得到的平均活动度（autoCurate 判据；门控关/无 map 时为 0）。
+  late final double _activityMean;
+
+  /// X7（v1.5）：autoCurate 内容感知效果量调节——把「这页有多忙」折成
+  /// 播种粒子族的总量系数。判定只在构造期做一次（确定性，不影响无缝循环）：
+  /// - 近空白页（mean < 0.02）⇒ 0：对话页/扉页不再被默认粒子铺满；
+  /// - 其余 ⇒ count × (mean / 0.12)，clamp [0.3, 1.0]（忙页满配、静页收敛）。
+  /// autoCurate 关 / contentAware 关 / 无有效 AnchorMap ⇒ 恒等返回（默认
+  /// 配置零行为变化）。
+  int _curatedCount(int n) {
+    if (!config.autoCurate) return n;
+    final map = _anchors;
+    if (map == null || !config.contentAware) return n;
+    if (map.width < 2 || map.height < 2) return n;
+    if (_activityMean < 0.02) return 0;
+    return (n * (_activityMean / 0.12).clamp(0.3, 1.0)).round();
+  }
+
   /// 落位加权是否生效：R6 单一门控 `contentAware && anchors != null` 且
   /// 网格可用、`maxAct > 1e-6`（否则无主体 → 等价旧均匀分布）。
   bool get _particleWeightingActive {
@@ -746,16 +764,26 @@ class FrameCompositor {
 
   double _computeMaxActivity() {
     final map = _anchors;
-    if (map == null || !config.contentAware) return 0.0;
+    if (map == null || !config.contentAware) {
+      _activityMean = 0.0;
+      return 0.0;
+    }
     final act = map.activity;
     final aw = map.width, ah = map.height;
-    if (aw < 2 || ah < 2) return 0.0;
+    if (aw < 2 || ah < 2) {
+      _activityMean = 0.0;
+      return 0.0;
+    }
     final limit = act.length < aw * ah ? act.length : aw * ah;
     var mx = 0.0;
+    var sum = 0.0;
     for (var i = 0; i < limit; i++) {
       final v = act[i];
       if (v > mx) mx = v;
+      sum += v;
     }
+    // X7：同一遍扫描顺带求均值（autoCurate 的「这页有多忙」判据）。
+    _activityMean = limit > 0 ? sum / limit : 0.0;
     return mx;
   }
 
@@ -1075,7 +1103,7 @@ class FrameCompositor {
     if (!config.effects.contains(EffectKind.ambient)) return;
     final amb = config.ambient;
     final pos = DeterministicRandom(config.seed ^ 0x5600);
-    final an = amb.particleCount;
+    final an = _curatedCount(amb.particleCount);
     for (var i = 0; i < an; i++) {
       final (px, py, clip) = _seedPlacement(i, an, pos, _rng.nextDouble(),
           _rng.nextDouble(), roi: _roiRects[EffectKind.ambient]);

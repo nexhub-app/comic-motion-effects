@@ -1646,6 +1646,7 @@ class EffectConfig {
     // 三源锁步之一（另两处：toJson 省略哨兵 / fromJson 缺键兜底）。
     this.panelAware = true,
     this.contentAware = true,
+    this.autoCurate = false,
 
     /// ---- R5 顶层便捷参数（null = 不触碰对应嵌套字段）----
     /// 嵌入方在一处设齐全部渲染参数；非 null 时映射到既有字段，与显式
@@ -1821,6 +1822,18 @@ class EffectConfig {
   /// 逐字节相同；显式 false 写出键 ⇒ 回滚意图无损往返。
   final bool contentAware;
 
+  /// 内容感知效果量调节（v1.5 X7，opt-in，默认 false）：开启后按页面活动度
+  /// 自动缩放**播种粒子族**的总量——
+  /// - 近空白页（平均活动度 < 0.02）：叠加粒子效果整体跳过（对话页/扉页
+  ///   不再被默认粒子铺满，「精确识别需要动效的图片」的引擎侧落地）；
+  /// - 其余页面：count × (meanActivity / 0.12)，下限 0.3、上限 1.0——忙页
+  ///   满配、静页收敛，比例是构造期一次判定（确定性、不影响无缝循环）。
+  /// 依赖 contentAware 的 AnchorMap：contentAware=false 时本开关不生效。
+  /// 不消费 focusLines/sparkBurst 等焦点/爆发效果（它们本来只作用于锚点
+  /// 处）。条件序列化（reducedMotion 同款习语）：默认 false 不写键 ⇒
+  /// 默认 configHash 键集与旧版逐字节一致。
+  final bool autoCurate;
+
   int get frameCount =>
       reducedMotion ? 1 : (fps * durationSec).round().clamp(2, maxFrames);
 
@@ -1917,6 +1930,8 @@ class EffectConfig {
         'maxDimension': maxDimension,
         'maxFrames': maxFrames,
         if (reducedMotion) 'reducedMotion': true,
+        // X7：默认 false 不写键（默认 JSON 键集与旧版逐字节一致）。
+        if (autoCurate) 'autoCurate': true,
         // R39 翻转（习语同 R32 / 3.6b / 3.6e）：省略条件必须等于
         // 「== 构造默认(true)」——默认不写键（默认 JSON 键集逐字节不动、
         // configHash 不移动），显式回滚 false 才写出键。旧写法
@@ -2005,6 +2020,7 @@ class EffectConfig {
         reducedMotion: reducedMotion,
         panelAware: panelAware,
         contentAware: contentAware,
+        autoCurate: autoCurate,
         effectRegions: effectRegions,
       );
 
@@ -2224,6 +2240,8 @@ class EffectConfig {
       maxDimension: (j['maxDimension'] as num?)?.toInt() ?? 1600,
       maxFrames: (j['maxFrames'] as num?)?.toInt() ?? 96,
       reducedMotion: j['reducedMotion'] == true,
+      // X7：与 reducedMotion 同款 sanitize——只有严格布尔 true 才算开启。
+      autoCurate: j['autoCurate'] == true,
       // R39（三源锁步第三源，写法与下面 contentAware 逐字同构）：缺键与显式
       // null 都是「没说过」⇒ 落新默认 true；显式 false 与非 bool 值仍
       // sanitize 成 false——sanitize **方向**与翻转前一致（旧 `== true` 一直把
