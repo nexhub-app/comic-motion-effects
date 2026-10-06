@@ -69,6 +69,7 @@ class FrameCompositor {
     // 节路径（R9：panelAware on ≡ off）。构造期一次性静态空间数据，无时钟、
     // 不参与每帧循环，无缝/确定性不受影响。
     _computePanels();
+    _roiRects = _computeRoiRects();
     // Task 2.2：构造期对 activity 网格做一次 max 扫描（单个 double，无数组分配，
     // R5）。门控关时 [config.contentAware]==false → 直接返回 0，零成本、不扫描。
     _activityMax = _computeMaxActivity();
@@ -188,8 +189,8 @@ class FrameCompositor {
         // 先按旧路径消费属性流两个 draw（游标与逐字节基线一致），再在内容感知
         // 开启时用位置专用流 [pos] 的拒绝采样覆盖坐标。Task 2.3：逐格路径启用时
         // 把位置约束到本格并携带 clip。
-        final (x0, y0, clip) =
-            _seedPlacement(i, rn, pos, r.nextDouble(), r.nextDouble());
+        final (x0, y0, clip) = _seedPlacement(i, rn, pos, r.nextDouble(),
+            r.nextDouble(), roi: _roiRects[EffectKind.rain]);
         return _Drop(
           x0: x0,
           y0: y0,
@@ -207,8 +208,8 @@ class FrameCompositor {
       final p = config.snow;
       final sn = p.count.clamp(0, 400);
       _snow = List.generate(sn, (i) {
-        final (x0, y0, clip) =
-            _seedPlacement(i, sn, pos, r.nextDouble(), r.nextDouble());
+        final (x0, y0, clip) = _seedPlacement(i, sn, pos, r.nextDouble(),
+            r.nextDouble(), roi: _roiRects[EffectKind.snow]);
         return _SnowFlake(
           x0: x0,
           y0: y0,
@@ -228,8 +229,8 @@ class FrameCompositor {
       final p = config.sakura;
       final kn = p.count.clamp(0, 300);
       _sakura = List.generate(kn, (i) {
-        final (x0, y0, clip) =
-            _seedPlacement(i, kn, pos, r.nextDouble(), r.nextDouble());
+        final (x0, y0, clip) = _seedPlacement(i, kn, pos, r.nextDouble(),
+            r.nextDouble(), roi: _roiRects[EffectKind.sakura]);
         return _Petal(
           x0: x0,
           y0: y0,
@@ -252,7 +253,8 @@ class FrameCompositor {
       final fn = p.count.clamp(0, 200);
       _fireflies = List.generate(fn, (i) {
         final (x0, y0, clip) = _seedPlacement(
-            i, fn, pos, 0.08 + r.nextDouble() * 0.84, 0.08 + r.nextDouble() * 0.84);
+            i, fn, pos, 0.08 + r.nextDouble() * 0.84, 0.08 + r.nextDouble() * 0.84,
+            roi: _roiRects[EffectKind.fireflies]);
         return _Firefly(
           x0: x0,
           y0: y0,
@@ -308,8 +310,8 @@ class FrameCompositor {
       final p = config.fog;
       final bn = p.blobs.clamp(0, 40);
       _fogBlobs = List.generate(bn, (i) {
-        final (x0, y0, clip) =
-            _seedPlacement(i, bn, pos, r.nextDouble(), 0.15 + r.nextDouble() * 0.8);
+        final (x0, y0, clip) = _seedPlacement(i, bn, pos, r.nextDouble(),
+            0.15 + r.nextDouble() * 0.8, roi: _roiRects[EffectKind.fog]);
         return _FogBlob(
           x0: x0,
           y0: y0,
@@ -330,8 +332,8 @@ class FrameCompositor {
       final p = config.embers;
       final en = p.count.clamp(0, 300);
       _embers = List.generate(en, (i) {
-        final (x0, y0, clip) =
-            _seedPlacement(i, en, pos, r.nextDouble(), r.nextDouble());
+        final (x0, y0, clip) = _seedPlacement(i, en, pos, r.nextDouble(),
+            r.nextDouble(), roi: _roiRects[EffectKind.embers]);
         return _Ember(
           x0: x0,
           y0: y0,
@@ -477,7 +479,8 @@ class FrameCompositor {
       final un = p.count.clamp(0, 120);
       _bubbles = List.generate(un, (i) {
         final (x0, y0, clip) = _seedPlacement(
-            i, un, pos, 0.04 + r.nextDouble() * 0.92, r.nextDouble());
+            i, un, pos, 0.04 + r.nextDouble() * 0.92, r.nextDouble(),
+            roi: _roiRects[EffectKind.bubbles]);
         return _Bubble(
           x0: x0,
           y0: y0,
@@ -497,8 +500,8 @@ class FrameCompositor {
       final p = config.leaves;
       final ln = p.count.clamp(0, 300);
       _leaves = List.generate(ln, (i) {
-        final (x0, y0, clip) =
-            _seedPlacement(i, ln, pos, r.nextDouble(), r.nextDouble());
+        final (x0, y0, clip) = _seedPlacement(i, ln, pos, r.nextDouble(),
+            r.nextDouble(), roi: _roiRects[EffectKind.leaves]);
         return _Leaf(
           x0: x0,
           y0: y0,
@@ -521,7 +524,8 @@ class FrameCompositor {
       final mn = p.count.clamp(1, 20);
       _meteors = List.generate(mn, (i) {
         final (x0, y0, clip) = _seedPlacement(
-            i, mn, pos, 0.1 + r.nextDouble() * 0.8, 0.05 + r.nextDouble() * 0.55);
+            i, mn, pos, 0.1 + r.nextDouble() * 0.8, 0.05 + r.nextDouble() * 0.55,
+            roi: _roiRects[EffectKind.meteors]);
         return _Meteor(
           x0: x0,
           y0: y0,
@@ -844,10 +848,36 @@ class FrameCompositor {
   //   播种/绘制原样走全画布路径，故单格/无白带图 panelAware on ≡ off 逐字节等。
   /// 去重后的本格画布矩形（首次出现序）；非 panelAware / 单格时可为空或单元素。
   List<PixelRect> _panelRects = const [];
+  /// X5（v1.5）：effectRegions 的画布像素矩形（构造期换算一次；键 = 效果）。
+  late Map<EffectKind, PixelRect> _roiRects;
   /// 逐格播种 + 裁剪是否启用（panelAware 且派生格数 ≥2）。
   bool _perPanelActive = false;
   /// 按粒子总数缓存的面积∝数量切分（纯函数：total + 本格面积 → 各格计数）。
   final Map<int, List<int>> _splitCache = {};
+
+  /// X5：effectRegions 归一化矩形 → 画布像素矩形。四舍五入后宽/高为 0 的
+  /// 退化区域钳到 1px——区域语义是「限制」，最小仍可画 1 列/行。
+  Map<EffectKind, PixelRect> _computeRoiRects() {
+    final out = <EffectKind, PixelRect>{};
+    config.effectRegions.forEach((kind, r) {
+      final x0 = (r.x * w).round().clamp(0, w - 1);
+      final y0 = (r.y * h).round().clamp(0, h - 1);
+      final x1 = ((r.x + r.w) * w).round().clamp(x0 + 1, w);
+      final y1 = ((r.y + r.h) * h).round().clamp(y0 + 1, h);
+      out[kind] = PixelRect(x0, y0, x1 - x0, y1 - y0);
+    });
+    return out;
+  }
+
+  /// 两个画布矩形的交集；不相交时返回宽/高为 0 的退化矩形（语义：该效果
+  /// 的粒子全部被裁掉，可见区域为空）。
+  static PixelRect _intersectRect(PixelRect a, PixelRect b) {
+    final x0 = math.max(a.x, b.x);
+    final y0 = math.max(a.y, b.y);
+    final x1 = math.min(a.x + a.width, b.x + b.width);
+    final y1 = math.min(a.y + a.height, b.y + b.height);
+    return PixelRect(x0, y0, math.max(0, x1 - x0), math.max(0, y1 - y0));
+  }
 
   void _computePanels() {
     if (!config.panelAware) {
@@ -925,17 +955,27 @@ class FrameCompositor {
   /// 行为，逐字节不变）；启用时把该 [total] 序号映射到本格，并把全画布归一基准
   /// 位置线性重映射进本格归一矩形（`x0 = panelNx + base·panelNW`）——RNG 消费
   /// 序列与旧路径完全一致（仍调用一次 `_seedPosition`），仅位置落点约束到本格。
+  /// [roi]（X5）为该效果的 ROI 画布矩形（无则 null）：与 panelAware 的本格
+  /// 矩形求交后作为落位约束与裁剪矩形。RNG 消费序列与无 ROI 路径完全一致
+  /// （仍只调用一次 [_seedPosition]）；roi == null 时与旧路径逐字节相同。
   (double, double, PixelRect?) _seedPlacement(
-      int index, int total, DeterministicRandom pos, double uniformX, double uniformY) {
+      int index, int total, DeterministicRandom pos, double uniformX, double uniformY,
+      {PixelRect? roi}) {
     final base = _seedPosition(pos, uniformX, uniformY);
-    if (!_perPanelActive) return (base.$1, base.$2, null);
-    final counts = _splitFor(total);
-    final panel = _panelRects[_panelIndexFor(index, counts)];
-    final nx = panel.x / w, ny = panel.y / h;
-    final nw = panel.width / w, nh = panel.height / h;
+    PixelRect? rect;
+    if (!_perPanelActive) {
+      rect = roi;
+    } else {
+      final counts = _splitFor(total);
+      final panel = _panelRects[_panelIndexFor(index, counts)];
+      rect = roi == null ? panel : _intersectRect(panel, roi);
+    }
+    if (rect == null) return (base.$1, base.$2, null);
+    final nx = rect.x / w, ny = rect.y / h;
+    final nw = rect.width / w, nh = rect.height / h;
     final x0 = (nx + base.$1 * nw).clamp(0.0, 1.0);
     final y0 = (ny + base.$2 * nh).clamp(0.0, 1.0);
-    return (x0, y0, panel);
+    return (x0, y0, rect);
   }
 
   /// 测试访问器（Task 2.3，非公共契约）：返回构造期派生的本格画布矩形集。
@@ -954,8 +994,8 @@ class FrameCompositor {
     final pos = DeterministicRandom(config.seed ^ 0x5600);
     final an = amb.particleCount;
     for (var i = 0; i < an; i++) {
-      final (px, py, clip) =
-          _seedPlacement(i, an, pos, _rng.nextDouble(), _rng.nextDouble());
+      final (px, py, clip) = _seedPlacement(i, an, pos, _rng.nextDouble(),
+          _rng.nextDouble(), roi: _roiRects[EffectKind.ambient]);
       _particles.add(_Particle(
         px: px,
         py: py,

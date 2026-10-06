@@ -1271,6 +1271,71 @@ class EncodingParams {
       apngDelay: (j['apngDelay'] == 'exact') ? 'exact' : 'cs');
 }
 
+/// 效果 ROI 区域（v1.5 X5）：把某个效果**限制**在画布的一个归一化矩形内。
+///
+/// 这是「精确识别需要动作特效的部位」的引擎侧通用能力：AI 侧车（如
+/// anchors/部件多边形）或调用方都可以填。语义与消费范围：
+/// - 坐标为画布归一化 [0,1]，`(x,y)` 是左上角，`(w,h)` 是宽高（同样归一化）；
+/// - 结构性 fail-fast：非有限值、w/h ≤ 0、越出 [0,1]（x+w 或 y+h > 1）在
+///   构造时抛 [ConfigException]（code `E_BAD_CONFIG`）——与 fps/durationSec
+///   同一条校验路线，合法域内渲染不受影响；
+/// - 渲染侧消费范围（MVP）：**播种粒子族**（rain / snow / sakura /
+///   fireflies / fog / embers / bubbles / leaves / meteors / ambient 及后续
+///   新增的播种效果）。实现走 R7 的 clip 管线：ROI 矩形与 panelAware 的格
+///   矩形求交后同时约束播种位置与逐粒子裁剪，RNG 消费序列不变。整帧变换类
+///   （parallax/breathing 等）与自绘类（flame/smoke/screenTone 等）暂不消费，
+///   配了也不生效（不做静默裁剪半帧的效果）。
+class RegionParams {
+  /// const 构造器不做校验（const 语境里无法抛 [ConfigException]）——结构性
+  /// fail-fast 统一走 [validate]，由 [EffectConfig] 构造与 [fromJson] 调用。
+  const RegionParams({
+    required this.x,
+    required this.y,
+    required this.w,
+    required this.h,
+  });
+
+  final double x, y, w, h;
+
+  /// 结构性校验（assert 在 release/profile 下被剥离，这里补 fail-fast）。
+  /// 与 [EffectConfig] 构造校验同一路线：非法值直接抛，不静默 clamp。
+  void validate() {
+    void check(bool ok, String what) {
+      if (!ok) {
+        throw ConfigException(
+            'effectRegions: $what (x=$x, y=$y, w=$w, h=$h)');
+      }
+    }
+
+    final finite = x.isFinite && y.isFinite && w.isFinite && h.isFinite;
+    check(finite, '坐标必须是有限数值');
+    check(x >= 0 && x <= 1, 'x 必须在 [0,1]');
+    check(y >= 0 && y <= 1, 'y 必须在 [0,1]');
+    check(w > 0, 'w 必须 > 0');
+    check(h > 0, 'h 必须 > 0');
+    check(x + w <= 1.0 + 1e-9, 'x + w 越出画布右缘');
+    check(y + h <= 1.0 + 1e-9, 'y + h 越出画布下缘');
+  }
+
+  Map<String, dynamic> toJson() => {
+        'x': x,
+        'y': y,
+        'w': w,
+        'h': h,
+      };
+
+  static RegionParams fromJson(Map<String, dynamic> j) {
+    final r = RegionParams(
+      x: (j['x'] as num?)?.toDouble() ?? 0.0,
+      y: (j['y'] as num?)?.toDouble() ?? 0.0,
+      w: (j['w'] as num?)?.toDouble() ?? 1.0,
+      h: (j['h'] as num?)?.toDouble() ?? 1.0,
+    );
+    r.validate();
+    return r;
+  }
+}
+
 class EffectConfig {
   EffectConfig({
     this.effects = const [
@@ -1311,6 +1376,7 @@ class EffectConfig {
     MoodScriptParams? moodScript,
     QualityParams? quality,
     EncodingParams? encoding,
+    Map<EffectKind, RegionParams>? effectRegions,
     this.fps = 24,
     this.durationSec = 4.0,
     this.depthMode = DepthMode.autoLayers,
@@ -1371,13 +1437,17 @@ class EffectConfig {
         moodScript = moodScript ?? MoodScriptParams(),
         quality = (quality ?? QualityParams())
             .copyWith(dither: dither, tier: qualityTier),
-        encoding = encoding ?? EncodingParams() {
+        encoding = encoding ?? EncodingParams(),
+        effectRegions = effectRegions ?? const {} {
     // Structural fail-fast (v1.3.1): these parameters define the shape of the
     // output; out-of-domain values used to fall through to per-path degenerate
     // behavior (fps=0 divides t by zero in frame rendering, maxFrames<2 breaks
     // the frameCount clamp, maxDimension<1 breaks the downscale clamp). Only
     // *illegal* values are rejected - legal domains render byte-identically,
     // so configHash stability is unaffected.
+    for (final r in this.effectRegions.values) {
+      r.validate();
+    }
     if (fps < 1) {
       throw ConfigException('fps must be a positive integer, got $fps');
     }
@@ -1448,6 +1518,11 @@ class EffectConfig {
   /// GIF 编码参数（帧间差分）。条件序列化：默认 `none` 时整段不出现，
   /// 既有配置的 configHash 不受影响。
   EncodingParams encoding;
+
+  /// 效果 ROI 区域（v1.5 X5）：效果名 → 归一化矩形，把该效果限制在区域内。
+  /// 条件序列化：空表整段不出现 ⇒ 默认 configHash 键集一字不动。键序取
+  /// 插入序（Dart Map 保序），同一输入恒得同一序列化 ⇒ configHash 稳定。
+  final Map<EffectKind, RegionParams> effectRegions;
 
   final int fps;
   final double durationSec;
@@ -1555,6 +1630,11 @@ class EffectConfig {
         // ⇒ 往返无损。
         if (!quality.isDefault) 'quality': quality.toJson(),
         if (!encoding.isDefault) 'encoding': encoding.toJson(),
+        // v1.5 X5：效果 ROI 区域。空表省略（默认 JSON 键集与旧版逐字节一致）。
+        if (effectRegions.isNotEmpty)
+          'effectRegions': {
+            for (final e in effectRegions.entries) e.key.name: e.value.toJson(),
+          },
         'fps': fps,
         'durationSec': durationSec,
         'depthMode': depthMode.name,
@@ -1648,6 +1728,7 @@ class EffectConfig {
         reducedMotion: reducedMotion,
         panelAware: panelAware,
         contentAware: contentAware,
+        effectRegions: effectRegions,
       );
 
   /// 启用一个效果（已启用则为无变化的等价新实例）。
@@ -1831,6 +1912,16 @@ class EffectConfig {
           ? null
           : EncodingParams.fromJson(
               (j['encoding'] as Map).cast<String, dynamic>()),
+      // v1.5 X5：效果名走 effectKindFromName 同一条校验（未知名字抛
+      // E_UNKNOWN_EFFECT，与 effects 数组口径一致），区域值结构性校验在
+      // RegionParams / EffectConfig 构造时 fail-fast。
+      effectRegions: j['effectRegions'] == null
+          ? null
+          : {
+              for (final e in (j['effectRegions'] as Map).entries)
+                effectKindFromName(e.key): RegionParams.fromJson(
+                    (e.value as Map).cast<String, dynamic>()),
+            },
       fps: (j['fps'] as num?)?.toInt() ?? 24,
       durationSec: (j['durationSec'] as num?)?.toDouble() ?? 4.0,
       depthMode: depthMode,
