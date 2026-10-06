@@ -2,6 +2,96 @@
 
 本项目版本记录。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)，`pubspec.yaml`、`lib/src/version.dart` 与 `dart run bin/comic_motion.dart --version` 使用同一常量。
 
+## 1.5.0（2026-10-07）
+
+第七轮（X1–X8）：省资源 + 精确识别 + 动作动效。**默认配置的序列化形状与
+configHash 一字未动**——全部新能力都是 opt-in（条件序列化），且 X2 的性能
+优化以「零输出变化」为验收门槛（on/off 双实例逐字节对照 + 全量字节契约
+测试群在优化启用下通过）。`handMotion`/侧车习语延续：anchors 侧车与
+SaliencyEstimator 注入均为运行期输入，不参与 configHash。
+
+### X2——静态层栈合成缓存（省 CPU，零输出变化）
+
+效果集不含任何层变换效果（parallax / breathing / heartbeat / slowPush /
+mangaShake）时，底图与层栈整段动画恒为 (0,0,1.0) 叠合，逐帧重采样是纯
+浪费。首帧把层栈画进缓存栅格一次，此后每帧整块拷贝、只重画叠加效果。
+缓存臂与非缓存臂共用同一段绘制代码（`_drawLayerStack` 从 renderFrame 原样
+搬出），零输出变化由构造保证。实测 640×800×3 层 4 效果 96 帧：5056ms →
+707ms（**7.15×**）。代价是每个合成器实例多持 1 份全画布 RGBA，被 worker
+内存模型的 1.5 安全系数吸收，预算门槛不变。
+
+### X4——分格检测升级两级：行带内纵向细分（精确识别分格）
+
+横向白带检测之后，行带内再做列向白带细分：单行多列（1×2）与网格页
+（2×2）此前只会被切成全宽横条或整页，现在能切到真格。纵向阈值与横向
+同构（白带厚 ≥ minGutterFrac×页宽、格宽 ≥ minPanelFrac×页宽）；横向切不
+出行带时把整页当唯一行带继续纵向检测；单列页检出结果与旧版一致。更深
+的递归细分（任意镶嵌布局）仍在 roadmap。
+
+### X5——effectRegions：效果 ROI 区域（精确识别部位）
+
+`EffectConfig.effectRegions`（效果名 → `RegionParams` 归一化矩形）：把某个
+效果限制在画布指定区域。渲染侧复用 R7 的 clip 管线：ROI 与 panelAware 格
+矩形求交后同时约束播种位置与逐粒子裁剪，RNG 消费序列不变；不配置时与
+旧路径逐字节相同。覆盖全部播种粒子族（rain/snow/sakura/fireflies/fog/
+embers/bubbles/leaves/meteors/ambient/windStreak）。区域值结构性 fail-fast
+（E_BAD_CONFIG），未知效果名 E_UNKNOWN_EFFECT。整帧变换类与自绘类
+（flame/smoke/screenTone 等）暂不消费 ROI（配了不生效，文档明示）。
+
+### X3——SaliencyEstimator 接口化 + anchors.json 显著性侧车（可使用 AI）
+
+与 DepthEstimator（W6）/part_motion.json（Plan B）同一习语族的 AI 插入面：
+
+- `SaliencyEstimator` 抽象接口（运行期注入、不进 configHash），内置
+  `SaliencyAnalyzer` 实现之；默认路径逐字节零变化。
+- `anchors.json` 侧车契约（`anchor_sidecar.dart`）：外部 AI 产出页级锚点
+  （归一化坐标 + 权重 ≤16 条）+ 可选归一化主体框 + 可选活动度网格（驱动
+  粒子密度加权）。解析器永不抛、不静默（warnings 冒泡到结果/台账/HTTP）、
+  确定性（weight 降序、并列按输入序）。
+- `MotionPipeline(saliencyEstimator:/anchors:)` 注入；优先级 侧车 > 估算器
+  > 内置启发式。`anchorsDigest` 运行期指纹进产物目录后缀与结果 JSON
+  （「同图同配置、只换侧车」不命中旧缓存）。contentAware=false 一并关闭。
+- 通道：CLI `--anchors`（仅 process，batch 拒绝——归一化坐标与单图绑定）、
+  HTTP `anchorsBase64`、台账 `anchorsDigest` 条目。外部 ML 产出方仍定位为
+  独立项目（roadmap R5），本包只做接口与消费。
+- CI 在 1.5.0 发布 pub.dev 前恢复 1.4.0 先例的运行时 path override 接线
+  （`pubspec_overrides.yaml` 不入库）。
+
+### X6——四个动作向新效果（37 个 EffectKind）
+
+`effects/action_pass.dart`（与 comic_pass 同构；standard+ 档渲染，legacy 档
+整体跳过——handMotion 同款裁决习语；窗口式 sin 包络两端归零 ⇒ 循环无缝；
+独立随机流 0x55E1..0x55E4/0x5610）：
+
+| 效果 | 观感 | 与既有效果的分工 |
+|---|---|---|
+| `slashFlash` 刀光斜闪 | 斜向高斯亮带短窗口扫过全屏，出手猛收束快 | 全屏光带（lightSweep 是慢扫光，本效果是战斗一闪） |
+| `sparkBurst` 火花四溅 | 自焦点放射的短促火花，easeOutCubic 减速推进 | 焦点爆发（speedLines 是持续放射线） |
+| `impactDust` 冲击尘雾 | 自焦点外扩的柔和尘团 | 软粒子（impactRings 是解析距离场硬边环） |
+| `windStreak` 风线 | 横贯画面的环境气流线 | 场景风（speedLines 是角色动势集中线） |
+
+「精确识别 × 动作动效」联动：sparkBurst/impactDust 焦点吃 contentAware
+锚点（显式 pin 优先，Task 2.1 同语义）；windStreak 泳道走内容感知播种
+管线（activity 加权 + X5 ROI + 分格约束生效）。全部 opt-in：不进默认效果
+集，条件序列化 ⇒ 出厂 configHash 一字不动。
+
+### X7——autoCurate：内容感知效果量调节（精确识别图片）
+
+`EffectConfig.autoCurate`（opt-in，默认 false）：按页面平均活动度在构造期
+一次判定播种粒子族的总量系数——近空白页（mean < 0.02）整体跳过叠加粒子
+（对话页/扉页不再被默认粒子铺满）；其余 count × (mean/0.12) clamp
+[0.3, 1.0]，忙页满配（= 关闭状态产出）、静页收敛。依赖 contentAware 的
+AnchorMap（同一遍 max 扫描顺带求均值，零额外扫描）。
+
+### 其他
+
+- 台账/结果 JSON 新增条件键 `anchorsDigest`（给了侧车才出现；既有响应
+  键序零变化）。
+- `param_catalog` 效果计数文案 33→37（锁步测试钉住）；`effectRegions` /
+  `autoCurate` 列入故意不列清单（面板难以泛化表达）。
+- server 包依赖升为 `comic_motion: ^1.5.0`；flutter/shaders 伴生包不依赖
+  新能力，约束不变（^1.3.1 仍满足）。
+
 ## 1.4.0（2026-10-03）
 
 内容感知落位 + 硬派张力。**本版带两个刻意的破坏性变更，均在实施前作为产品决策获批**（下面的 H1 与 H2）：JSON schema 未变、没有新增必填键、不需要迁移步骤——移动的是**默认值**与 `legacy` 的**含义**，所以显式钉住取值的配置逐字节照旧，只有未钉值的配置随之改变。

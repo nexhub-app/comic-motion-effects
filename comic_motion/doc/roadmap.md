@@ -15,6 +15,15 @@
 > 逐格分层 + 格内 rank 归一视差）；③ AI 深度接口化（`DepthEstimator`
 > 抽象接口 + `MotionPipeline(depthEstimator:)` 注入 + `exportLayers`
 > 分层纹理集导出 + `doc/external-depth.md` 外部 ML 指南）。
+>
+> **X8 刷新记录（v1.5 第七轮）**：① `PanelSplitter` 纵向细分（X4，单行
+> 多列与网格页切到真格，单列页结果与旧版一致）已实施并从下方 R2 的
+> 失准场景注记中收窄；② 显著性接口化（X3，`SaliencyEstimator` 抽象 +
+> `anchors.json` 侧车 + CLI/HTTP 通道）落地，R2 的「显著性模型注入」
+> 一半已由接口面承接，剩深度模型侧；③ 四个动作效果（X6）与
+> `effectRegions`（X5）/`autoCurate`(X7) 入目录（`motion_catalog_v15.md`）；
+> ④ 静态层栈合成缓存（X2）落地——overlay-only 配置渲染 7.15×，产物
+> 逐字节不变。
 
 ---
 
@@ -45,8 +54,12 @@
 **现状**：深度接口已就位——`DepthEstimator` 抽象接口（`estimate` 返回
 `DepthMap`）、`MotionPipeline(depthEstimator:)` 注入点、内置启发式实现
 为缺省（行为逐字节不变）、`exportLayers` 分层纹理集导出、
-`doc/external-depth.md` 外部 ML 适配指南（含 tflite 最小示例）。启发式
-估深的失准场景不变：复杂分格、跨格气泡、主体与背景对比度低。
+`doc/external-depth.md` 外部 ML 适配指南（含 tflite 最小示例）。v1.5（X3）
+起显著性侧有同样的接口面：`SaliencyEstimator` 注入 + `anchors.json` 侧车
+（CLI `--anchors` / HTTP `anchorsBase64`），显著性模型可先行接入，深度侧
+仍待模型适配。启发式估深的失准场景收窄：~~复杂分格~~（v1.5 X4 起分格
+检测升级横向+纵向两级，网格页可切到真格；更深的任意镶嵌细分见 R6）、
+跨格气泡、主体与背景对比度低。
 
 **方案**：单目深度 / 显著性主体模型（开源轻量模型 + 量化）产出逐像素
 深度图，适配 `DepthEstimator` 接口注入。原生依赖按侵入度排序：
@@ -160,6 +173,51 @@ WebP 编码（VP8/VP8L + ANMF 容器），零新增依赖即可实现。V3 决�
    的宽松策略，收紧与否要一并决定；
 4. **验收语料口径**：4 页样本不足以支撑观感结论，需要按画风（柔和/硬边）、
    按格数（单格/多格）分层的验收集。
+
+---
+
+## R6 分格任意镶嵌细分（PanelSplitter 三级递归）
+
+**现状**：v1.5（X4）起为两级检测（横向行带 + 行带内纵向列分），1×2/2×2/
+2×3 网格页可切到真格；单列页与旧版逐字节一致。真正的**任意镶嵌**布局
+（L 形格、格中格、不同行不同列数交错）需要按子格面积重判阈值的递归细分。
+
+**方案**：对每个子格递归跑横纵两向白带检测，深度上限 2–3 层；阈值随子格
+面积缩放；防止过切的最小面积闸沿用 `minPanelFrac`。风险是过切与欠切的
+平衡需要真实语料调参。
+
+**价值**：panelAware 与逐格 effectRegions 的精度上限由分格检测决定。
+
+**工作量级**：**M**。
+
+## R7 动作效果预览资产与 shader 实时化跟进
+
+**现状**：v1.5 新增的四个动作效果（slashFlash / sparkBurst / impactDust /
+windStreak）没有 preview 卡（`tool/generate_showcase.dart` 未为它们建演示，
+`kEffectPreviewRefs` 未建行）；shader 包（R1）未覆盖新效果。
+
+**方案**：① generate_showcase 增四演示 + 生成预览资产 + 交叉引用建行
+（S）；② R1 粒子 GPU 化时把窗口式动作效果纳入第二批（M，与 R1 合并评估）。
+
+**价值**：卖点可见性（README/面板能演示新效果）。
+
+**工作量级**：**S**（①）。
+
+## R8 ROI 区域扩展到自绘/整帧效果
+
+**现状**：`effectRegions`（X5）只覆盖播种粒子族。flame/smoke（属性流播种，
+不走 `_seedPlacement`）、screenTone/focusLines（全帧自绘）配 ROI 不生效
+（文档明示，不做静默半帧裁剪）。
+
+**方案**：自绘类效果在 pass 入口按 ROI 裁剪绘制循环（逐像素 loop 的
+x/y 范围改按 ROI，与 panel clip 同一求交习语）；flame/smoke 的播种改走
+`_seedPlacement`（注意 RNG 消费序列会变——这些效果自 v1.3 起的字节序列
+会移动，需要一次用户裁决）。焦点类（focusLines/impactRings）ROI 语义
+应是「焦点钳制到区域内」而非裁剪，分开建模。
+
+**价值**：区域表达全覆盖；当前粒子族覆盖已满足主要场景。
+
+**工作量级**：**M**（含字节序列移动的裁决与验收）。
 
 ---
 

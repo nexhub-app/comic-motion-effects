@@ -13,6 +13,9 @@
 /// 才序列化，语义见 [QualityParams]；面板能表达，本目录尚未为它建行）。
 /// `parallel` / `memoryBudgetMb` 属于执行期
 /// 参数（在 [MotionPipeline] 上，不进 configHash），见 pipeline.dart 文档。
+/// v1.5 另有两个故意不列的序列化参数：`effectRegions`（效果名 → 归一化
+/// ROI 矩形的映射，面板难以泛化表达，语义见 [RegionParams]）与
+/// `autoCurate`（内容感知效果量调节，语义见 EffectConfig.autoCurate）。
 library;
 
 import 'effect_config.dart';
