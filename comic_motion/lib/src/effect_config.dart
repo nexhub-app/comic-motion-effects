@@ -52,6 +52,14 @@ enum EffectKind {
   /// opt-in：不进出厂默认效果集。
   handMotion,
   moodScript,
+
+  /// ---- v1.5 动作动效（X6，opt-in：不进出厂默认效果集）----
+  /// 四个动作向新效果，全部只在 standard+ 档渲染（legacy 冻结承诺不覆盖
+  /// 新通道，与 handMotion 同一裁决习语）。
+  slashFlash,
+  sparkBurst,
+  impactDust,
+  windStreak,
 }
 
 /// 效果名 → 枚举。未知名一律抛 [ConfigException]，不静默退化成某个效果：
@@ -1098,6 +1106,248 @@ class HandMotionParams {
       );
 }
 
+/// ---- v1.5 动作动效参数（X6，opt-in：仅当 effects 含对应 kind 时序列化
+/// ⇒ 出厂 configHash 不受影响。渲染只在 standard+ 档生效。）----
+
+/// 刀光斜闪：斜向亮带短窗口扫过全屏，出手猛、收束快（战斗系一闪）。
+class SlashFlashParams {
+  const SlashFlashParams({
+    this.flashes = 2,
+    this.windowFrac = 0.16,
+    this.angleDeg = 35.0,
+    this.widthPx = 30.0,
+    this.intensity = 0.8,
+    this.color = 'ffffff',
+  });
+
+  /// 每循环道数（整数 → 无缝）。
+  final int flashes;
+
+  /// 单道可见窗口占本轮比例（窗口内 sin 包络，两端归零）。
+  final double windowFrac;
+
+  /// 亮带法线方向（度）：带沿自身法线推进，35° 即右下斜劈读感。
+  final double angleDeg;
+
+  /// 亮带半宽（px，高斯 σ）。
+  final double widthPx;
+
+  /// 峰值亮度（0..1）。
+  final double intensity;
+
+  final String color;
+
+  Map<String, dynamic> toJson() => {
+        'flashes': flashes,
+        'windowFrac': windowFrac,
+        'angleDeg': angleDeg,
+        'widthPx': widthPx,
+        'intensity': intensity,
+        'color': color,
+      };
+
+  static SlashFlashParams fromJson(Map<String, dynamic> j) =>
+      SlashFlashParams(
+        flashes: (j['flashes'] as num?)?.toInt() ?? 2,
+        windowFrac: (j['windowFrac'] as num?)?.toDouble() ?? 0.16,
+        angleDeg: (j['angleDeg'] as num?)?.toDouble() ?? 35.0,
+        widthPx: (j['widthPx'] as num?)?.toDouble() ?? 30.0,
+        intensity: (j['intensity'] as num?)?.toDouble() ?? 0.8,
+        color: _normHex(j['color'] as String?) ?? 'ffffff',
+      );
+}
+
+/// 火花四溅：自焦点放射的短促火花爆发（撞击点读感），焦点默认吃 contentAware
+/// 锚点——「效果送到主体所在处」对动作效果的直接落地。
+class SparkBurstParams {
+  const SparkBurstParams({
+    this.bursts = 2,
+    this.sparks = 14,
+    this.windowFrac = 0.28,
+    this.speedFrac = 0.30,
+    this.sizePx = 1.8,
+    this.opacity = 0.9,
+    this.color = 'ffd27a',
+    this.focalX = 0.5,
+    this.focalY = 0.5,
+  });
+
+  /// 每循环爆发轮数（整数 → 无缝）。
+  final int bursts;
+
+  /// 每轮火花数。
+  final int sparks;
+
+  /// 单轮可见窗口占本轮比例。
+  final double windowFrac;
+
+  /// 射程占短边比例（easeOutCubic 减速推进）。
+  final double speedFrac;
+
+  /// 火花头半径（px），尾长按其倍数派生。
+  final double sizePx;
+
+  final double opacity;
+  final String color;
+
+  /// 焦点（归一化）；contentAware 开且未显式 pin 时自动取权重最高锚点。
+  final double focalX, focalY;
+
+  Map<String, dynamic> toJson() => {
+        'bursts': bursts,
+        'sparks': sparks,
+        'windowFrac': windowFrac,
+        'speedFrac': speedFrac,
+        'sizePx': sizePx,
+        'opacity': opacity,
+        'color': color,
+        'focalX': focalX,
+        'focalY': focalY,
+      };
+
+  static SparkBurstParams fromJson(Map<String, dynamic> j) =>
+      SparkBurstParams(
+        bursts: (j['bursts'] as num?)?.toInt() ?? 2,
+        sparks: (j['sparks'] as num?)?.toInt() ?? 14,
+        windowFrac: (j['windowFrac'] as num?)?.toDouble() ?? 0.28,
+        speedFrac: (j['speedFrac'] as num?)?.toDouble() ?? 0.30,
+        sizePx: (j['sizePx'] as num?)?.toDouble() ?? 1.8,
+        opacity: (j['opacity'] as num?)?.toDouble() ?? 0.9,
+        color: _normHex(j['color'] as String?) ?? 'ffd27a',
+        focalX: (j['focalX'] as num?)?.toDouble() ?? 0.5,
+        focalY: (j['focalY'] as num?)?.toDouble() ?? 0.5,
+      );
+}
+
+/// 冲击尘雾：自焦点外扩的一圈柔和尘团（落地/撞击的重量感），
+/// 与 impactRings（硬边漫画描边环）视觉分工：软粒子 vs 解析距离场。
+class ImpactDustParams {
+  const ImpactDustParams({
+    this.pulses = 1,
+    this.puffs = 10,
+    this.innerFrac = 0.04,
+    this.outerFrac = 0.30,
+    this.sizePx = 14.0,
+    this.opacity = 0.35,
+    this.color = 'c9bfae',
+    this.focalX = 0.5,
+    this.focalY = 0.55,
+  });
+
+  /// 每循环轮数（整数 → 无缝）。
+  final int pulses;
+
+  /// 每轮尘团数。
+  final int puffs;
+
+  /// 起始/终止半径（占半对角线）。
+  final double innerFrac, outerFrac;
+
+  /// 单团基准半径（px）。
+  final double sizePx;
+
+  final double opacity;
+  final String color;
+
+  /// 焦点（归一化）；contentAware 语义同 sparkBurst。
+  final double focalX, focalY;
+
+  Map<String, dynamic> toJson() => {
+        'pulses': pulses,
+        'puffs': puffs,
+        'innerFrac': innerFrac,
+        'outerFrac': outerFrac,
+        'sizePx': sizePx,
+        'opacity': opacity,
+        'color': color,
+        'focalX': focalX,
+        'focalY': focalY,
+      };
+
+  static ImpactDustParams fromJson(Map<String, dynamic> j) =>
+      ImpactDustParams(
+        pulses: (j['pulses'] as num?)?.toInt() ?? 1,
+        puffs: (j['puffs'] as num?)?.toInt() ?? 10,
+        innerFrac: (j['innerFrac'] as num?)?.toDouble() ?? 0.04,
+        outerFrac: (j['outerFrac'] as num?)?.toDouble() ?? 0.30,
+        sizePx: (j['sizePx'] as num?)?.toDouble() ?? 14.0,
+        opacity: (j['opacity'] as num?)?.toDouble() ?? 0.35,
+        color: _normHex(j['color'] as String?) ?? 'c9bfae',
+        focalX: (j['focalX'] as num?)?.toDouble() ?? 0.5,
+        focalY: (j['focalY'] as num?)?.toDouble() ?? 0.55,
+      );
+}
+
+/// 风线：横贯画面的细长气流线（环境动感；与 speedLines 的放射集中线分工：
+/// 风线是场景里的风，速度线是角色的动）。播种位置走内容感知管线
+/// （activity 加权 + effectRegions ROI + 分格约束全部生效）。
+class WindStreakParams {
+  const WindStreakParams({
+    this.count = 10,
+    this.windowFrac = 0.5,
+    this.cycles = 1,
+    this.swayCycles = 1,
+    this.swayPx = 8.0,
+    this.lengthFrac = 0.25,
+    this.thicknessPx = 1.4,
+    this.opacity = 0.30,
+    this.color = 'ffffff',
+    this.angleDeg = 0.0,
+  });
+
+  /// 风线条数。
+  final int count;
+
+  /// 单条可见窗口占本轮比例。
+  final double windowFrac;
+
+  /// 每循环横贯轮数（整数 → 无缝）。
+  final int cycles;
+
+  /// 每循环纵向摆动轮数（整数 → 无缝；0 = 不摆）。
+  final int swayCycles;
+
+  /// 纵向摆幅（px）。
+  final double swayPx;
+
+  /// 线长占短边比例。
+  final double lengthFrac;
+
+  final double thicknessPx;
+  final double opacity;
+  final String color;
+
+  /// 行进方向倾角（度，0 = 纯横向向右）。
+  final double angleDeg;
+
+  Map<String, dynamic> toJson() => {
+        'count': count,
+        'windowFrac': windowFrac,
+        'cycles': cycles,
+        'swayCycles': swayCycles,
+        'swayPx': swayPx,
+        'lengthFrac': lengthFrac,
+        'thicknessPx': thicknessPx,
+        'opacity': opacity,
+        'color': color,
+        'angleDeg': angleDeg,
+      };
+
+  static WindStreakParams fromJson(Map<String, dynamic> j) =>
+      WindStreakParams(
+        count: (j['count'] as num?)?.toInt() ?? 10,
+        windowFrac: (j['windowFrac'] as num?)?.toDouble() ?? 0.5,
+        cycles: (j['cycles'] as num?)?.toInt() ?? 1,
+        swayCycles: (j['swayCycles'] as num?)?.toInt() ?? 1,
+        swayPx: (j['swayPx'] as num?)?.toDouble() ?? 8.0,
+        lengthFrac: (j['lengthFrac'] as num?)?.toDouble() ?? 0.25,
+        thicknessPx: (j['thicknessPx'] as num?)?.toDouble() ?? 1.4,
+        opacity: (j['opacity'] as num?)?.toDouble() ?? 0.30,
+        color: _normHex(j['color'] as String?) ?? 'ffffff',
+        angleDeg: (j['angleDeg'] as num?)?.toDouble() ?? 0.0,
+      );
+}
+
 /// moodScript 情绪包络：自身不绘制任何东西，只按整循环曲线缩放已有动效的
 /// 振幅/浓度/曝光，并给 toneShift 与 vignette 叠加增量（见 render/envelope.dart）。
 class MoodScriptParams {
@@ -1374,6 +1624,10 @@ class EffectConfig {
     MeteorsParams? meteors,
     HandMotionParams? handMotion,
     MoodScriptParams? moodScript,
+    SlashFlashParams? slashFlash,
+    SparkBurstParams? sparkBurst,
+    ImpactDustParams? impactDust,
+    WindStreakParams? windStreak,
     QualityParams? quality,
     EncodingParams? encoding,
     Map<EffectKind, RegionParams>? effectRegions,
@@ -1435,6 +1689,10 @@ class EffectConfig {
         meteors = meteors ?? MeteorsParams(),
         handMotion = handMotion ?? HandMotionParams(),
         moodScript = moodScript ?? MoodScriptParams(),
+        slashFlash = slashFlash ?? SlashFlashParams(),
+        sparkBurst = sparkBurst ?? SparkBurstParams(),
+        impactDust = impactDust ?? ImpactDustParams(),
+        windStreak = windStreak ?? WindStreakParams(),
         quality = (quality ?? QualityParams())
             .copyWith(dither: dither, tier: qualityTier),
         encoding = encoding ?? EncodingParams(),
@@ -1503,6 +1761,12 @@ class EffectConfig {
 
   /// 情绪包络（v1.3）：仅当 `effects` 含 moodScript 时生效并序列化。
   MoodScriptParams moodScript;
+
+  /// ---- v1.5 动作动效（X6）：仅当 `effects` 含对应 kind 时生效并序列化。
+  SlashFlashParams slashFlash;
+  SparkBurstParams sparkBurst;
+  ImpactDustParams impactDust;
+  WindStreakParams windStreak;
 
   /// 渲染质量（v1.2 引入 GIF 抖动）。v1.4 起 tier 默认 standard、
   /// `ditherMode` 的默认值是 sierra（R24），但 **dither 默认关闭**（R38：误差
@@ -1625,6 +1889,15 @@ class EffectConfig {
           'handMotion': handMotion.toJson(),
         if (effects.contains(EffectKind.moodScript))
           'moodScript': moodScript.toJson(),
+        // v1.5 动作动效（X6）：同样只在启用时序列化 ⇒ 出厂基线哈希一字不动。
+        if (effects.contains(EffectKind.slashFlash))
+          'slashFlash': slashFlash.toJson(),
+        if (effects.contains(EffectKind.sparkBurst))
+          'sparkBurst': sparkBurst.toJson(),
+        if (effects.contains(EffectKind.impactDust))
+          'impactDust': impactDust.toJson(),
+        if (effects.contains(EffectKind.windStreak))
+          'windStreak': windStreak.toJson(),
         // v1.4 R32/R38：quality 段等于**当前默认**（standard/sierra/false/2/6）时
         // 整段省略，v1.2 回滚配置与任何混档配置逐键写出（等于自身默认的键省略）
         // ⇒ 往返无损。
@@ -1716,6 +1989,10 @@ class EffectConfig {
         meteors: meteors,
         handMotion: handMotion,
         moodScript: moodScript,
+        slashFlash: slashFlash,
+        sparkBurst: sparkBurst,
+        impactDust: impactDust,
+        windStreak: windStreak,
         quality: quality,
         fps: fps,
         durationSec: durationSec,
@@ -1904,6 +2181,22 @@ class EffectConfig {
           ? null
           : MoodScriptParams.fromJson(
               (j['moodScript'] as Map).cast<String, dynamic>()),
+      slashFlash: j['slashFlash'] == null
+          ? null
+          : SlashFlashParams.fromJson(
+              (j['slashFlash'] as Map).cast<String, dynamic>()),
+      sparkBurst: j['sparkBurst'] == null
+          ? null
+          : SparkBurstParams.fromJson(
+              (j['sparkBurst'] as Map).cast<String, dynamic>()),
+      impactDust: j['impactDust'] == null
+          ? null
+          : ImpactDustParams.fromJson(
+              (j['impactDust'] as Map).cast<String, dynamic>()),
+      windStreak: j['windStreak'] == null
+          ? null
+          : WindStreakParams.fromJson(
+              (j['windStreak'] as Map).cast<String, dynamic>()),
       quality: j['quality'] == null
           ? null
           : QualityParams.fromJson(

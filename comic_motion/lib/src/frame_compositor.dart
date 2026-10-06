@@ -17,6 +17,7 @@ import 'saliency_anchors.dart';
 
 part 'effects/comic_pass.dart';
 part 'effects/particle_raster_pass.dart';
+part 'effects/action_pass.dart';
 
 /// Renders animated frames by compositing depth layers with per-layer parallax
 /// offsets, a global breathing zoom, and optional ambient particles.
@@ -128,6 +129,11 @@ class FrameCompositor {
   late List<_Meteor> _meteors;
   // ---- v1.4 Plan B 部位动作状态（构造期建表，逐帧只查表）----
   late List<WarpPlan> _warpPlans;
+  // ---- v1.5 动作动效状态（X6；独立随机流 0x55E1..0x55E4 + 位置流 0x5610）----
+  late List<_SlashBeam> _slashBeams;
+  late List<_Spark> _sparks;
+  late List<_DustPuff> _dustPuffs;
+  late List<_WindLine> _windStreaks;
 
   static const MeshWarper _meshWarper = MeshWarper();
 
@@ -538,6 +544,74 @@ class FrameCompositor {
     } else {
       _meteors = const [];
     }
+    // ---- v1.5 动作动效状态（X6）----
+    if (fx.contains(EffectKind.slashFlash)) {
+      final r = DeterministicRandom(config.seed ^ 0x55E1);
+      final p = config.slashFlash;
+      _slashBeams = List.generate(p.flashes.clamp(1, 8), (i) {
+        return _SlashBeam(
+          widthJit: 0.8 + r.nextDouble() * 0.4,
+          intenJit: 0.7 + r.nextDouble() * 0.3,
+          angleJit: (r.nextDouble() - 0.5) * (math.pi / 45),
+          extJit: 0.85 + r.nextDouble() * 0.3,
+        );
+      });
+    } else {
+      _slashBeams = const [];
+    }
+    if (fx.contains(EffectKind.sparkBurst)) {
+      final r = DeterministicRandom(config.seed ^ 0x55E2);
+      final p = config.sparkBurst;
+      final sn = p.sparks.clamp(4, 48);
+      _sparks = List.generate(sn, (i) {
+        return _Spark(
+          angle: 2 * math.pi * i / sn +
+              (r.nextDouble() - 0.5) * (2 * math.pi / sn),
+          speedJit: 0.75 + r.nextDouble() * 0.5,
+          lenJit: 0.6 + r.nextDouble() * 0.8,
+        );
+      });
+    } else {
+      _sparks = const [];
+    }
+    if (fx.contains(EffectKind.impactDust)) {
+      final r = DeterministicRandom(config.seed ^ 0x55E3);
+      final p = config.impactDust;
+      final dn = p.puffs.clamp(4, 24);
+      _dustPuffs = List.generate(dn, (i) {
+        return _DustPuff(
+          angle: 2 * math.pi * i / dn +
+              (r.nextDouble() - 0.5) * (2 * math.pi / dn),
+          radJit: 0.8 + r.nextDouble() * 0.4,
+          sizeJit: 0.7 + r.nextDouble() * 0.6,
+          alphaJit: 0.6 + r.nextDouble() * 0.4,
+        );
+      });
+    } else {
+      _dustPuffs = const [];
+    }
+    if (fx.contains(EffectKind.windStreak)) {
+      final r = DeterministicRandom(config.seed ^ 0x55E4);
+      final pos = DeterministicRandom(config.seed ^ 0x5610);
+      final p = config.windStreak;
+      final wn = p.count.clamp(2, 80);
+      _windStreaks = List.generate(wn, (i) {
+        final (sx, sy, clip) = _seedPlacement(i, wn, pos, r.nextDouble(),
+            0.05 + r.nextDouble() * 0.9,
+            roi: _roiRects[EffectKind.windStreak]);
+        return _WindLine(
+          x0: sx,
+          y0: sy,
+          clip: clip,
+          lenJit: 0.7 + r.nextDouble() * 0.6,
+          thickJit: 0.7 + r.nextDouble() * 0.6,
+          alphaJit: 0.6 + r.nextDouble() * 0.4,
+          phase: r.nextDouble() * 2 * math.pi,
+        );
+      });
+    } else {
+      _windStreaks = const [];
+    }
   }
 
   /// 震屏本帧位移（像素）。每个爆点内做 [_shakeRattle] 次完整往返，
@@ -737,10 +811,19 @@ class FrameCompositor {
         return [for (final m in _meteors) (m.x0, m.y0)];
       case EffectKind.ambient:
         return [for (final p in _particles) (p.px, p.py)];
+      case EffectKind.windStreak:
+        return [for (final w in _windStreaks) (w.x0, w.y0)];
       default:
         return const [];
     }
   }
+
+  /// 测试访问器（X6，非公共契约）：sparkBurst / impactDust 的生效焦点
+  /// （归一化），用于断言 contentAware 焦点解析。
+  ({double fx, double fy}) debugActionFocal(EffectKind kind) =>
+      kind == EffectKind.sparkBurst
+          ? _sparkBurstFocal(this)
+          : _impactDustFocal(this);
 
   // ---- Task 2.1：内容感知焦点解析（规格 §A：焦点取 anchors.first，显式非默认 focal 覆盖）----
   ({double fx, double fy}) _contentAwareFocal({
@@ -1241,6 +1324,19 @@ class FrameCompositor {
     }
     if (config.effects.contains(EffectKind.meteors)) {
       _renderMeteors(this, frame, tSec);
+    }
+    // ---- v1.5 动作动效渲染（X6；standard+ 档，各 pass 入口自 gate）----
+    if (config.effects.contains(EffectKind.slashFlash)) {
+      _renderSlashFlash(this, frame, tSec);
+    }
+    if (config.effects.contains(EffectKind.sparkBurst)) {
+      _renderSparkBurst(this, frame, tSec);
+    }
+    if (config.effects.contains(EffectKind.impactDust)) {
+      _renderImpactDust(this, frame, tSec);
+    }
+    if (config.effects.contains(EffectKind.windStreak)) {
+      _renderWindStreak(this, frame, tSec);
     }
     // ---- v1.3 漫画动势渲染 ----
     if (config.effects.contains(EffectKind.screenTone)) {
