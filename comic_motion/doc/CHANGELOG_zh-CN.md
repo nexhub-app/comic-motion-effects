@@ -4,13 +4,13 @@
 
 ## 1.5.0（2026-10-07）
 
-第七轮（X1–X8）：省资源 + 精确识别 + 动作动效。**默认配置的序列化形状与
-configHash 一字未动**——全部新能力都是 opt-in（条件序列化），且 X2 的性能
-优化以「零输出变化」为验收门槛（on/off 双实例逐字节对照 + 全量字节契约
+省资源 + 精确识别 + 动作动效。**默认配置的序列化形状与
+configHash 一字未动**——全部新能力都是 opt-in（条件序列化），且合成缓存的
+性能优化以「零输出变化」为验收门槛（on/off 双实例逐字节对照 + 全量字节契约
 测试群在优化启用下通过）。`handMotion`/侧车习语延续：anchors 侧车与
 SaliencyEstimator 注入均为运行期输入，不参与 configHash。
 
-### X2——静态层栈合成缓存（省 CPU，零输出变化）
+### 静态层栈合成缓存（省 CPU，零输出变化）
 
 效果集不含任何层变换效果（parallax / breathing / heartbeat / slowPush /
 mangaShake）时，底图与层栈整段动画恒为 (0,0,1.0) 叠合，逐帧重采样是纯
@@ -20,7 +20,7 @@ mangaShake）时，底图与层栈整段动画恒为 (0,0,1.0) 叠合，逐帧�
 707ms（**7.15×**）。代价是每个合成器实例多持 1 份全画布 RGBA，被 worker
 内存模型的 1.5 安全系数吸收，预算门槛不变。
 
-### X4——分格检测升级两级：行带内纵向细分（精确识别分格）
+### 分格检测升级两级：行带内纵向细分（精确识别分格）
 
 横向白带检测之后，行带内再做列向白带细分：单行多列（1×2）与网格页
 （2×2）此前只会被切成全宽横条或整页，现在能切到真格。纵向阈值与横向
@@ -28,7 +28,7 @@ mangaShake）时，底图与层栈整段动画恒为 (0,0,1.0) 叠合，逐帧�
 出行带时把整页当唯一行带继续纵向检测；单列页检出结果与旧版一致。更深
 的递归细分（任意镶嵌布局）仍在 roadmap。
 
-### X5——effectRegions：效果 ROI 区域（精确识别部位）
+### effectRegions：效果 ROI 区域（精确识别部位）
 
 `EffectConfig.effectRegions`（效果名 → `RegionParams` 归一化矩形）：把某个
 效果限制在画布指定区域。渲染侧复用 R7 的 clip 管线：ROI 与 panelAware 格
@@ -38,7 +38,7 @@ embers/bubbles/leaves/meteors/ambient/windStreak）。区域值结构性 fail-fa
 （E_BAD_CONFIG），未知效果名 E_UNKNOWN_EFFECT。整帧变换类与自绘类
 （flame/smoke/screenTone 等）暂不消费 ROI（配了不生效，文档明示）。
 
-### X3——SaliencyEstimator 接口化 + anchors.json 显著性侧车（可使用 AI）
+### SaliencyEstimator 接口化 + anchors.json 显著性侧车（可使用 AI）
 
 与 DepthEstimator（W6）/part_motion.json（Plan B）同一习语族的 AI 插入面：
 
@@ -57,7 +57,7 @@ embers/bubbles/leaves/meteors/ambient/windStreak）。区域值结构性 fail-fa
 - CI 在 1.5.0 发布 pub.dev 前恢复 1.4.0 先例的运行时 path override 接线
   （`pubspec_overrides.yaml` 不入库）。
 
-### X6——四个动作向新效果（37 个 EffectKind）
+### 四个动作向新效果（37 个 EffectKind）
 
 `effects/action_pass.dart`（与 comic_pass 同构；standard+ 档渲染，legacy 档
 整体跳过——handMotion 同款裁决习语；窗口式 sin 包络两端归零 ⇒ 循环无缝；
@@ -72,10 +72,10 @@ embers/bubbles/leaves/meteors/ambient/windStreak）。区域值结构性 fail-fa
 
 「精确识别 × 动作动效」联动：sparkBurst/impactDust 焦点吃 contentAware
 锚点（显式 pin 优先，Task 2.1 同语义）；windStreak 泳道走内容感知播种
-管线（activity 加权 + X5 ROI + 分格约束生效）。全部 opt-in：不进默认效果
+管线（activity 加权 + `effectRegions` ROI + 分格约束生效）。全部 opt-in：不进默认效果
 集，条件序列化 ⇒ 出厂 configHash 一字不动。
 
-### X7——autoCurate：内容感知效果量调节（精确识别图片）
+### autoCurate：内容感知效果量调节（精确识别图片）
 
 `EffectConfig.autoCurate`（opt-in，默认 false）：按页面平均活动度在构造期
 一次判定播种粒子族的总量系数——近空白页（mean < 0.02）整体跳过叠加粒子

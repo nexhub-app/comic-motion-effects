@@ -6,7 +6,7 @@
 
 - 纯 Dart，无原生依赖，UI-free，可嵌入任意 Dart / Flutter 工程；运行时只依赖 `image` 一个包
 - 同参数输出字节级可复现（确定性随机种子 + configHash）
-- 33 种可组合动效 + 42 个内置预设参数
+- 37 种可组合动效 + 42 个内置预设参数
 - 帧渲染多 isolate 并行：只影响耗时，不影响输出字节
 
 CLI（单图 / 批处理）与 HTTP API 服务在姊妹包 **[comic_motion_server](../comic_motion_server)**，二者与本包解耦：只想嵌引擎的 App 不会引入任何 HTTP 服务栈。
@@ -375,7 +375,7 @@ params.json                 # 完整参数回放文件
 - **configHash 版本化**：configHash 是参数指纹（当前 v1 算法），与 `version` 字段一同写入 `params.json`。未来若 hash 算法或字段序列化变更，将带版本前缀迁移——读取旧 `version` 的回放文件按旧算法口径处理，不静默失效。
 - **执行期参数不在承诺内**：`parallel`、`memoryBudgetMb` 不进 configHash、不影响像素决策（`parallel`），但 `memoryBudgetMb` 收缩工作分辨率时会改变输出像素（见「内存预算 API」）——此时「同参数」以实际生效的工作分辨率为准。
 
-## 动效目录（33 种）
+## 动效目录（37 种）
 
 `EffectConfig.effects` 可任意组合，全部整循环无缝（首尾帧一致）：
 
@@ -390,7 +390,13 @@ params.json                 # 完整参数回放文件
 | 漫画动势语言（v1.3） | `focusLines` 集中线 · `screenTone` 网点 · `mangaShake` 画面震颤 · `impactRings` 冲击环 · `brushStreak` 笔触飞白 |
 | 自然氛围扩充（v1.3） | `flame` 火焰 · `smoke` 烟雾 · `bubbles` 气泡 · `leaves` 落叶 · `meteors` 流星 |
 | 部位动作（v1.4，**opt-in**） | `handMotion` 手腕锚点衰减旋转摆动——部件**只**来自 `part_motion.json`（没有该文件就一个像素都不动）。内置启发式定位器随包发布但**未接入管线**：真实语料召回≈0，漫画手的白区与背景连通、不是被墨线封住的封闭分量 |
+| 动作动效（v1.5，**opt-in**） | `slashFlash` 刀光斜闪 · `sparkBurst` 火花四溅 · `impactDust` 冲击尘雾 · `windStreak` 风线 |
 | 节奏与情绪编排（v1.3） | `moodScript` 情绪包络（不画东西，只按 `tension`/`calm`/`burst`/`eerie` 重排已有动效的振幅） |
+
+v1.5 另有两个 opt-in 能力，不进默认效果表：`effectRegions`（效果名 → 归一化
+矩形，把该效果限制在指定区域，覆盖全部播种粒子族）与 `autoCurate`（按页面平均
+活动度缩放粒子总量，近空白页整体跳过）。两者的序列化条件与边界见
+[`doc/motion_catalog_v15.md`](doc/motion_catalog_v15.md)。
 
 ### 部位动作侧车（`part_motion.json`，v1.4，opt-in）
 

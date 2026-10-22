@@ -1,14 +1,14 @@
 # 动效目录 v1.5 —— 动作动效 + 效果区域 + 内容感知量调节 + AI 显著性侧车
 
 > 承接 `motion_catalog_v13.md`（§一–§六 v1.3 存档、§七 v1.4 现行口径）。
-> 本文件记录 **v1.5 第七轮（X1–X8）** 的目录增量。默认配置的序列化形状与
+> 本文件记录 **v1.5** 的目录增量。默认配置的序列化形状与
 > configHash 一字未动——全部新能力 opt-in；新增效果不进默认效果集。
 >
-> 硬承诺（全部实测）：X2 缓存零输出变化（on/off 双实例逐字节对照 +
-> 全量字节契约测试群）；X6 四效果窗口包络两端归零 ⇒ 循环无缝（u=0 与
+> 硬承诺（全部实测）：合成缓存零输出变化（on/off 双实例逐字节对照 +
+> 全量字节契约测试群）；动作四件套窗口包络两端归零 ⇒ 循环无缝（u=0 与
 > u=1 逐字节一致，有测试）；legacy 档新效果整体跳过。
 
-## §八、v1.5 动作动效四件套（X6）
+## §八、v1.5 动作动效四件套
 
 | # | 效果 | 类别 | 触发场景 | 预期观感 | 作用 | 参数（默认） |
 |---|---|---|---|---|---|---|
@@ -33,13 +33,13 @@
 - `sparkBurst` / `impactDust` 的焦点吃 contentAware 锚点：contentAware 开且
   调用方未显式 pin `focalX/focalY` 时自动取权重最高锚点（Task 2.1 同语义）。
 - `windStreak` 的泳道走内容感知播种管线：activity 加权（R5/R6）+
-  `effectRegions` ROI（X5）+ panelAware 分格约束（R7/R8/R9）全部生效。
+  `effectRegions` ROI + panelAware 分格约束（R7/R8/R9）全部生效。
 - 窗口式设计（meteors/闪电同族）：第 k 道只在 `(cycles·u + k/n)%1 <
   windowFrac` 时可见，包络 `sin(π·local)` 两端归零 ⇒ 无缝循环，且多数
   时刻画面安静（偶发不是背景噪声）。
 - 全部只在 standard+ 档渲染；legacy 档整体跳过（handMotion 同款裁决习语）。
 
-## §九、效果区域 effectRegions（X5）
+## §九、效果区域 effectRegions
 
 `EffectConfig.effectRegions: {效果名: RegionParams}`——把该效果限制在画布
 的一个归一化矩形内（`x/y/w/h` ∈ [0,1]，结构性 fail-fast）。语义：**限制**，
@@ -54,7 +54,7 @@
 - 与 AI 的关系：ROI 是引擎侧的通用承载——外部 AI（或用户）识别出「该动
   的部位」后以归一化矩形下发即可。
 
-## §十、autoCurate 内容感知量调节（X7）
+## §十、autoCurate 内容感知量调节
 
 `EffectConfig.autoCurate`（默认 false）：按页面平均活动度（AnchorMap 的
 构造期统计）缩放全部播种粒子族的总量——
@@ -69,7 +69,7 @@
 时本开关不生效。这是「精确识别**需要**动效的图片」的引擎侧落地：该安静的
 页安静，该动的页动。
 
-## §十一、AI 显著性侧车 anchors.json（X3）
+## §十一、AI 显著性侧车 anchors.json
 
 外部 AI（显著性模型 / 人物检测 / 页面理解）与引擎之间的注入接口，与
 `part_motion.json` 同族（运行期输入、不进 configHash、digest 单独记账）：
@@ -94,7 +94,7 @@
   （`SaliencyAnalyzer`）。三者的取舍与外部 ML 适配指南见
   `doc/external-depth.md`（同族先例）与 `lib/src/anchor_sidecar.dart` 契约注释。
 
-## §十二、性能与资源（X2）
+## §十二、性能与资源
 
 - **静态层栈合成缓存**：效果集不含层变换效果时，首帧缓存「底图 + 层栈」
   合成结果，此后每帧整块拷贝、只重画叠加效果。实测 640×800×3 层 4 效果

@@ -13,7 +13,7 @@ sequences.
   Only runtime dependency: the `image` package.
 - Byte-for-byte reproducible output for the same seed + parameters
   (deterministic random seed + configHash)
-- 33 composable effects + 42 built-in presets
+- 37 composable effects + 42 built-in presets
 - Multi-isolate parallel frame rendering: affects wall time only, never the
   output bytes
 
@@ -557,7 +557,7 @@ than a regression. Boundaries:
   working resolution (see the memory budget API) — "same parameters" then
   means the actually effective working resolution.
 
-## Effect catalog (33)
+## Effect catalog (37)
 
 Effects compose freely via `EffectConfig.effects`; all loops are seamless
 (first frame == last frame):
@@ -574,6 +574,14 @@ Effects compose freely via `EffectConfig.effects`; all loops are seamless
 | Nature (v1.3) | `flame` · `smoke` · `bubbles` · `leaves` · `meteors` |
 | Part motion (v1.4, **opt-in**) | `handMotion` wrist-anchored taper-rotation wave — parts come **only** from `part_motion.json` (no file ⇒ not a single pixel moves). The built-in heuristic locator ships tested but **unwired**: recall ≈ 0 on real manga, because a hand's white region is border-connected with the background rather than an enclosed ink ring |
 | Mood orchestration (v1.3) | `moodScript` envelope (draws nothing; re-weights amplitudes of the other effects by `tension`/`calm`/`burst`/`eerie`) |
+| Action effects (v1.5, **opt-in**) | `slashFlash` diagonal light band · `sparkBurst` focal sparks · `impactDust` impact dust · `windStreak` airflow lines |
+
+v1.5 adds two more opt-in abilities that stay out of the default effect list:
+`effectRegions` (effect name → normalized rectangle, confining that effect to a
+region; covers the whole seeding-particle family) and `autoCurate` (scales the
+particle budget by the page's mean activity, skipping near-blank pages
+entirely). Serialization conditions and boundaries:
+[`doc/motion_catalog_v15.md`](doc/motion_catalog_v15.md).
 
 ### Part motion sidecar (`part_motion.json`, v1.4, opt-in)
 

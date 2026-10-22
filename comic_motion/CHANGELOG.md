@@ -7,6 +7,138 @@ and `dart run bin/comic_motion.dart --version` share one version constant.
 > The full changelog in Chinese — including all historical entries — lives in
 > [doc/CHANGELOG_zh-CN.md](doc/CHANGELOG_zh-CN.md).
 
+## 1.5.0 (2026-10-07)
+
+Cheaper rendering, sharper recognition, action effects. **The serialized shape
+of the default config and its `configHash` are untouched** — every new ability
+ships opt-in through conditional serialization, and the performance work was
+accepted only under a "zero output change" gate (on/off dual-instance
+frame-by-frame byte comparison, plus the full byte-contract suite passing with
+the cache enabled). The `handMotion` / sidecar idiom continues: the `anchors.json`
+sidecar and an injected `SaliencyEstimator` are runtime inputs and never enter
+`configHash`.
+
+### Static layer-stack composite cache (less CPU, zero output change)
+
+When the effect set contains no layer-transform effect (`parallax` / `breathing`
+/ `heartbeat` / `slowPush` / `mangaShake`), the base plate and the layer stack
+stay at the identity transform `(0,0,1.0)` for the whole animation, so
+resampling them every frame is pure waste. The first frame now paints the layer
+stack into a cached raster once; every later frame blits it whole and redraws
+only the overlay effects. Both arms share the same drawing code
+(`_drawLayerStack` moved out of `renderFrame` verbatim), so zero output change
+holds by construction rather than by re-tuning. Measured on 640×800, 3 layers,
+4 effects, 96 frames: 5056 ms → 707 ms (**7.15×**). The cost is one extra
+full-canvas RGBA buffer per compositor instance, absorbed by the worker memory
+model's 1.5 safety factor — the budget thresholds do not move. `reducedMotion`
+single-frame early exit and the interactive parallax path are unaffected.
+
+### Two-level panel splitting: vertical subdivision inside row bands
+
+Single-row multi-column pages (1×2) and grid pages (2×2) used to be cut into
+full-width horizontal strips or left whole. Row bands are now sub-divided
+vertically: the column threshold mirrors the row one (gutter ≥
+`minGutterFrac` × page width, cell ≥ `minPanelFrac` × page width, trailing
+white columns are not a separator), a page that yields no row band is treated
+as a single row band and still gets the vertical pass, and fewer than two cells
+fall back to the whole page. Single-column pages detect no vertical gutter and
+keep their row bands unchanged — identical to the v1.4 horizontal-only result.
+Recursive subdivision (arbitrary mosaic layouts) remains on the roadmap.
+
+### `effectRegions`: per-effect ROI rectangle
+
+`EffectConfig.effectRegions` (effect name → `RegionParams`, a normalized
+rectangle) confines an effect to a region of the canvas. Rendering reuses the
+existing clip pipeline: the ROI is intersected with the `panelAware` cell
+rectangle and constrains both seeding positions and per-particle clipping, with
+the RNG consumption sequence unchanged; a `null` ROI is byte-identical to the
+old path. Covers the whole seeding-particle family (`rain` / `snow` / `sakura` /
+`fireflies` / `fog` / `embers` / `bubbles` / `leaves` / `meteors` / `ambient` /
+`windStreak`).
+
+Region values fail fast structurally (`E_BAD_CONFIG`: out of range, zero width
+or height, non-finite), unknown effect names go through the same
+`effectKindFromName` validation (`E_UNKNOWN_EFFECT`). Conditional
+serialization: an empty map is omitted, so the default `configHash` key set is
+byte-identical to the previous version. Whole-frame transform effects and
+self-drawn effects (`flame` / `smoke` / `screenTone` …) do not consume the ROI
+yet — configuring one is a documented no-op rather than a silent half-frame
+clip.
+
+### `SaliencyEstimator` interface + `anchors.json` saliency sidecar
+
+The external-AI insertion surface, in the same idiom family as
+`DepthEstimator` and `part_motion.json`:
+
+- `SaliencyEstimator` abstract interface (injected at runtime, not part of
+  `configHash`); the built-in `SaliencyAnalyzer` implements it, and the default
+  path is byte-for-byte unchanged.
+- `anchors.json` sidecar contract (`anchor_sidecar.dart`): page-level anchors
+  produced by an external model (normalized coordinates + weight, ≤16 entries),
+  an optional normalized subject box and an optional activity grid that drives
+  particle-density weighting. The parser never throws and never stays silent
+  (warnings bubble up to the result, the ledger and the HTTP response) and is
+  deterministic (weight descending, ties in input order).
+- `MotionPipeline(saliencyEstimator: …, anchors: …)` injection; precedence
+  sidecar > estimator > built-in heuristic. The runtime `anchorsDigest` goes
+  into the output directory suffix and the result JSON, so "same image, same
+  config, different sidecar" never hits a stale cache entry.
+  `contentAware: false` switches the whole path off.
+- Channels: CLI `--anchors` (`process` only — `batch` rejects it, normalized
+  coordinates are bound to one image), HTTP `anchorsBase64`, ledger
+  `anchorsDigest` entry. Producing anchors with an external ML model stays a
+  separate project (roadmap R5); this package owns the interface and the
+  consumption side.
+- CI restores the runtime path override wiring that 1.4.0 also used before its
+  release window (`pubspec_overrides.yaml` is never committed).
+
+### Four action effects (37 `EffectKind`s)
+
+`effects/action_pass.dart`, structurally parallel to `comic_pass`: rendered on
+the `standard` tier and up, skipped entirely on `legacy` (the same ruling as
+`handMotion`); a windowed sine envelope zeroes both ends, so loops stay
+seamless; dedicated random streams `0x55E1..0x55E4` / `0x5610`.
+
+| Effect | Look | Division of labour |
+|---|---|---|
+| `slashFlash` | Diagonal Gaussian light band sweeping the frame in a short window — fast on, faster off | Full-frame band (`lightSweep` is a slow showcase sweep; this is a combat flash) |
+| `sparkBurst` | Short radial sparks bursting from the focal point, `easeOutCubic` deceleration | Focal burst (`speedLines` are sustained radial lines) |
+| `impactDust` | Soft dust puffs expanding from the focal point | Soft particles (`impactRings` are hard-edged analytic distance-field rings) |
+| `windStreak` | Thin horizontal airflow lines crossing the frame | Ambient wind (`speedLines` are concentrated character-motion lines) |
+
+"Recognition × action" wiring: `sparkBurst` / `impactDust` take their focal
+point from the `contentAware` anchors (an explicit pin still wins, same
+semantics as `focusLines`); `windStreak` lanes go through the content-aware
+seeding pipeline (activity weighting + `effectRegions` ROI + panel
+constraints). All four are opt-in — not in the default effect set — and are
+conditionally serialized, so the factory `configHash` does not move.
+
+### `autoCurate`: content-aware effect budget
+
+`EffectConfig.autoCurate` (opt-in, default `false`) decides once, at
+construction time, on a global multiplier for the seeding-particle families
+based on the page's mean activity. Near-blank pages (mean < 0.02) skip overlay
+particles entirely, so dialogue pages and title pages are no longer carpeted
+with the default particle set. Everything else scales the count by
+`mean / 0.12`, clamped to `[0.3, 1.0]` — busy pages keep the full budget
+(identical to `autoCurate: false`), quiet pages converge. It reuses the
+`contentAware` `AnchorMap` (the mean falls out of the same max scan, no extra
+pass); `contentAware: false` means zero behavioural change. Focal and burst
+effects (`focusLines` / `sparkBurst` …) are out of scope — they already act
+only at the anchor. Conditional serialization: no key by default, so the
+factory `configHash` stays put.
+
+### Other
+
+- Ledger / result JSON gain the conditional key `anchorsDigest` (present only
+  when a sidecar was supplied; the existing response key order is unchanged).
+- `param_catalog` effect count text 33 → 37 (pinned by a lock-step test);
+  `effectRegions` / `autoCurate` join the deliberately-unlisted set (a generic
+  settings panel cannot express them well).
+- `comic_motion_server` dependency raised to `comic_motion: ^1.5.0`; the
+  flutter/shaders companion packages do not use the new abilities and keep
+  their constraints (`^1.3.1` still resolves).
+
 ## 1.4.0 (2026-10-03)
 
 Content-aware placement + hard-edged tension. **This release ships two
