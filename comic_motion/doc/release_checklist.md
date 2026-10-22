@@ -24,8 +24,8 @@
 ## 二、双包版本对齐策略
 
 - `comic_motion`（发布到 pub.dev）与 `comic_motion_server`（`publish_to: none`）
-  当前同为 1.3.0，**没有硬性同步义务**，但约定：
-  - server 依赖声明用 `comic_motion: ^<兼容版本>`（当前 `^1.3.0`），engine
+  版本各自独立（当前 1.5.0 / 1.3.0），**没有硬性同步义务**，但约定：
+  - server 依赖声明用 `comic_motion: ^<兼容版本>`（当前 `^1.5.0`），engine
     发布 minor/patch 升级时 server 无需跟着发版（path override + 版本区间
     双通道见下）。
   - engine 出现 **BREAKING CHANGE（major 或带 @Deprecated 清算的 minor）**
@@ -37,7 +37,7 @@
   时序硬约束**：伴生包消费 V1/V2 新 API（`exportInteractionFrames` /
   `exportEntranceFrames` / 产物 index.json 契约），这些 API 尚未随
   engine 稳定版发布——伴生包发版前，engine 必须先发布包含对应 API 的
-  版本，并把伴生包 `pubspec.yaml` 的 `comic_motion: ^1.3.0` 下限提到
+  版本，并把伴生包 `pubspec.yaml` 的 `comic_motion: ^1.3.1` 下限提到
   实际包含这些 API 的版本。
 
 ## 三、path override ↔ 版本依赖的切换时机
@@ -65,6 +65,12 @@ override，统一走版本依赖。
 `comic_motion: ^1.4.0` 并删除 `pubspec_overrides.yaml`，CI 拆除
 pre-publish window 临时 wire 步骤，恢复测 pub.dev 真实产物。
 
+**执行记录（2026-10-22）**：engine 1.5.0 经 tag `v1.5.0` 触发 OIDC 自动
+发布至 pub.dev（pub.dev API 确认 latest = 1.5.0）；server 侧 `^1.5.0`
+已可由 hosted 解析，删除 `pubspec_overrides.yaml` 并重跑 `dart pub get`
+刷新 lock（analyze 无 issue、18 例测试全绿），CI 再次拆除 pre-publish
+window 的两处临时 wire 步骤。
+
 ## 四、pub.dev score 优化清单
 
 | 计分项 | 现状 | 动作 |
@@ -77,7 +83,8 @@ pre-publish window 临时 wire 步骤，恢复测 pub.dev 真实产物。
 
 ## 五、发布后动作
 
-1. 给仓库打 tag（`comic_motion-v<version>`），GitHub Release 引用
+1. 给仓库打 tag（引擎用 `v<version>`，伴生包用 `<包名>-v<version>`；tag
+   推送即触发 `publish.yml` 的 OIDC 自动发布），GitHub Release 引用
    CHANGELOG 该节。
 2. server 切回版本依赖（见第三节），跑两包全量测试。
 3. README badge / 安装片段核对 `^<version>` 与发布值一致。

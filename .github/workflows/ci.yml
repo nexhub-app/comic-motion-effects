@@ -28,18 +28,6 @@ jobs:
         with:
           sdk: 3.13.0
 
-      # comic_motion 1.5.0（X3）发布 pub.dev 前的临时窗口：server 测试需要
-      # 引擎的 anchors 侧车 API。与 1.4.0 时的同一先例——运行时生成 path
-      # override（该文件被 .gitignore 显式排除，不入库），发布后删除本步。
-      - name: Wire server to workspace engine until 1.5.0 publishes
-        if: matrix.package == 'comic_motion_server'
-        run: |
-          cat > pubspec_overrides.yaml <<'YAML'
-          dependency_overrides:
-            comic_motion:
-              path: ../comic_motion
-          YAML
-
       - name: Install dependencies
         run: dart pub get
 
@@ -68,16 +56,6 @@ jobs:
       - uses: dart-lang/setup-dart@v1
         with:
           sdk: stable
-
-      # 同上：1.5.0 发布前的 server → workspace 接线（前瞻通道同口径）。
-      - name: Wire server to workspace engine until 1.5.0 publishes
-        if: matrix.package == 'comic_motion_server'
-        run: |
-          cat > pubspec_overrides.yaml <<'YAML'
-          dependency_overrides:
-            comic_motion:
-              path: ../comic_motion
-          YAML
 
       - name: Install dependencies
         run: dart pub get
