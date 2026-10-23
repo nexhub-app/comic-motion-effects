@@ -7,7 +7,55 @@ and `dart run bin/comic_motion.dart --version` share one version constant.
 > The full changelog in Chinese — including all historical entries — lives in
 > [doc/CHANGELOG_zh-CN.md](doc/CHANGELOG_zh-CN.md).
 
-## Unreleased
+## 1.6.0 (2026-10-23)
+
+External depth estimation for subject/background layering, opt-in end to end.
+**The serialized shape of the default config and its `configHash` are
+untouched** — a `DepthEstimator` is an execution-time dependency, and the new
+post-process only activates when one is injected. Default-path pixels stay
+byte-identical (locked by the byte-contract suite and the v1.4.0 polarity
+digest anchor).
+
+### `DepthEstimator` interface and background-isolate factory
+
+`MotionPipeline` now takes an optional `depthEstimator` (models output a
+`DepthMap`, 0 = far / 1 = near, any resolution — the engine resamples to the
+working resolution). The background entry points `processFileInBackground` /
+`processBytesInBackground` take a `depthEstimatorFactory` instead of an
+instance: the model and any native runtime must be created *inside* the
+pipeline isolate, and a throwing factory propagates to the caller like any
+pipeline error. Omitting both keeps output byte-identical to 1.5.x
+(tests pin explicit-heuristic == default bytes).
+
+### `RegionCoherentDepthEstimator` — pure-Dart region-coherent post-process
+
+Smooth ML depth fields get cut by the 3-layer quantization: flat colour
+regions (speech bubbles, banners) and line art fragment across layers, so
+text ghosts during parallax. This wrapper makes depth piecewise constant per
+connected same-colour region (5-bit quantization, 8-connectivity union-find
+over non-ink pixels) and per ink component: ink pixels are filled by
+multi-source BFS from their component's nearest non-ink owners, and regions
+smaller than `detailMinArea` (light lettering, screen-tone details) inherit
+the value of the nearest large region — including ink components, so a small
+caption inside a dark banner moves with the banner instead of snapping
+through it to the page background. Cost is one extra pure-Dart pass per page
+(tens of ms at 720 px working resolution, desktop). Measured on a 30-page
+sample: `detailMinArea: 64` brings fragment metrics from heuristic 0.221 to
+0.003 mean and tearing to 0.000, with 93% of pages better-or-equal
+(97% on the ink-dense subset).
+
+### `DepthMap.constantValued` — hard thresholds for piecewise-constant fields
+
+Region-constant depth values are dense: neighbouring region means can differ
+by ~1e-3, so the layer splitter's ±0.03 membership ramp always covers a
+threshold on both sides and whole regions render translucent — the base
+image bleeds through and text doubles (one parallax offset per layer). The
+estimator now flags such maps (`constantValued = true`), and the splitter
+responds with midpoint thresholds plus hard 0/1 membership; soft edges come
+from the existing spatial feathering. The default (`false`) keeps the soft
+ramp and byte-identical output for smooth fields. External estimator authors
+producing piecewise-constant maps should set the flag too (see
+`doc/external-depth.md`).
 
 ### Part motion: every part rests on the first frame (`handMotion`)
 

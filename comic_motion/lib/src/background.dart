@@ -27,6 +27,7 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'cancellation.dart';
+import 'depth_splitter.dart';
 import 'effect_config.dart';
 import 'pipeline.dart';
 
@@ -47,6 +48,7 @@ Future<PipelineResult> processFileInBackground(
   bool keepPartial = false,
   bool includeFirstFrame = false,
   String? partMotion,
+  DepthEstimator Function()? depthEstimatorFactory,
 }) async {
   final r = await _runInBackground(
     boot: _BackgroundBoot(
@@ -61,6 +63,7 @@ Future<PipelineResult> processFileInBackground(
       includeFirstFrame: includeFirstFrame,
       wantFrameEvents: onFrame != null,
       partMotion: partMotion,
+      depthEstimatorFactory: depthEstimatorFactory,
     ),
     cancelToken: cancelToken,
     forwardProgress: onProgress,
@@ -83,6 +86,7 @@ Future<MemoryPipelineResult> processBytesInBackground({
   bool keepPartial = false,
   bool includeFirstFrame = false,
   String? partMotion,
+  DepthEstimator Function()? depthEstimatorFactory,
 }) async {
   final r = await _runInBackground(
     boot: _BackgroundBoot(
@@ -96,6 +100,7 @@ Future<MemoryPipelineResult> processBytesInBackground({
       includeFirstFrame: includeFirstFrame,
       wantFrameEvents: onFrame != null,
       partMotion: partMotion,
+      depthEstimatorFactory: depthEstimatorFactory,
     ),
     cancelToken: cancelToken,
     forwardProgress: onProgress,
@@ -119,6 +124,7 @@ class _BackgroundBoot {
     this.includeFirstFrame = false,
     this.wantFrameEvents = false,
     this.partMotion,
+    this.depthEstimatorFactory,
   });
 
   late final SendPort ack;
@@ -144,6 +150,11 @@ class _BackgroundBoot {
   /// 一次性下发；解析在后台 isolate 构造管线时进行，因此坏侧车的告警也在那里
   /// 产生，随 [PipelineResult.warnings] 回到调用方。
   final String? partMotion;
+
+  /// 深度估算器工厂：在后台 isolate 内调用一次，产物随管线复用。必须可跨
+  /// isolate 发送（顶层/静态函数、或只捕获可发送值的闭包）；模型与原生句柄
+  /// 只能在该 isolate 内创建，不能作为已构造实例传入。null = 内置启发式。
+  final DepthEstimator Function()? depthEstimatorFactory;
 }
 
 /// 后台 isolate 入口：本地 token 承接控制通道的取消命令，progress 回传，
@@ -153,21 +164,25 @@ Future<void> _backgroundEntry(_BackgroundBoot boot) async {
   boot.ack.send(control.sendPort);
   final localToken = MotionCancelToken();
   control.listen((_) => localToken.cancel());
-  final pipeline = MotionPipeline(
-    boot.config,
-    parallel: boot.parallel,
-    memoryBudgetMb: boot.memoryBudgetMb,
-    cancelToken: localToken,
-    timeout: boot.timeout,
-    keepPartial: boot.keepPartial,
-    onProgress: (done, total) => boot.progress.send(<int>[done, total]),
-    // 帧流回调：PNG 字节经 SendPort 回传调用方（回调本体执行在调用方 isolate）。
-    onFrame: boot.wantFrameEvents
-        ? (index, png) => boot.frames.send(<Object>[index, png])
-        : null,
-    partMotion: boot.partMotion,
-  );
   try {
+    // 工厂在后台 isolate 内执行：模型/原生运行时在这里初始化，主 isolate
+    // 只传「怎么造」的函数，不传已构造的实例。
+    final depthEstimator = boot.depthEstimatorFactory?.call();
+    final pipeline = MotionPipeline(
+      boot.config,
+      parallel: boot.parallel,
+      memoryBudgetMb: boot.memoryBudgetMb,
+      cancelToken: localToken,
+      timeout: boot.timeout,
+      keepPartial: boot.keepPartial,
+      onProgress: (done, total) => boot.progress.send(<int>[done, total]),
+      // 帧流回调：PNG 字节经 SendPort 回传调用方（回调本体执行在调用方 isolate）。
+      onFrame: boot.wantFrameEvents
+          ? (index, png) => boot.frames.send(<Object>[index, png])
+          : null,
+      partMotion: boot.partMotion,
+      depthEstimator: depthEstimator,
+    );
     final result = boot.fileMode
         ? await pipeline.processFile(boot.inputPath!, boot.outputDir!,
             includeFirstFrame: boot.includeFirstFrame)

@@ -33,6 +33,71 @@ final result = await pipeline.processFile(input, outDir);
 Omitting the parameter keeps pixel output byte-identical to versions
 before the interface existed (locked by tests).
 
+## Background-isolate entry points
+
+The `processFileInBackground` / `processBytesInBackground` helpers take an
+optional **estimator factory** instead of an estimator instance — the model
+and any native runtime must be created *inside* the background isolate:
+
+```dart
+final result = await processBytesInBackground(
+  input: pageBytes,
+  config: config,
+  depthEstimatorFactory: () => RegionCoherentDepthEstimator(
+    inner: OnnxDepthEstimator.load(modelPath), // your model, loaded here
+    detailMinArea: 64,
+  ),
+);
+```
+
+The factory is called once per background run; its closure must be sendable
+(top-level/static functions, or closures capturing only sendable values —
+a `String` model path is fine, an open native handle is not). If the factory
+throws, the error propagates to the caller like any pipeline error.
+
+## Region-coherent post-process (recommended wrapper)
+
+Smooth ML depth fields get cut by the engine's 3-layer quantization: flat
+colour regions (speech bubbles, banners) and line art fragment across
+layers, so text ghosts during parallax. `RegionCoherentDepthEstimator` is a
+pure-Dart wrapper that makes depth **piecewise constant per connected
+same-colour region** and per ink component, which removes that tearing
+while keeping subject/background separation:
+
+```dart
+final estimator = RegionCoherentDepthEstimator(
+  inner: myModelEstimator, // any DepthEstimator
+  colorBits: 5,            // colour quantization (5 => 32768 buckets)
+  inkThreshold: 100,       // BT.601 luminance below this = ink
+  detailMinArea: 64,       // small regions inherit the nearest large region
+);
+```
+
+- Values keep the inner estimator's scale (region means are affine-invariant);
+  normalize your model output to [0,1] before wrapping.
+- `detailMinArea > 0` snaps small regions (light lettering, screen-tone
+  details) onto the surrounding large region so they move with it; `0`
+  reproduces the raw region-mean behaviour.
+- Cost is one extra pure-Dart pass per page (tens of ms at 720 px working
+  resolution, measured on desktop).
+
+### The `constantValued` flag (layer-split contract)
+
+The wrapper sets `DepthMap.constantValued = true` on its output. The layer
+splitter reads this flag to pick threshold semantics suited to
+**piecewise-constant** depth fields: thresholds fall on the midpoint
+between neighbouring distinct values, and layer membership is hard 0/1
+instead of the ±0.03 soft ramp. Without it, a constant-valued region whose
+mean sits near a threshold lands *entirely* on the ramp — the whole region
+goes translucent, the base image bleeds through, and text doubles during
+parallax (each layer applies its own offset).
+
+If your estimator also produces piecewise-constant maps (region means,
+segmentation-style quantization), set the flag on the returned `DepthMap`
+the same way. Smooth continuous depth fields must leave it `false` — the
+default keeps the soft-ramp behaviour and stays byte-identical to the
+pre-flag engine.
+
 ## Implementing a tflite adapter (App side)
 
 The model runs in your app (e.g. `tflite_flutter` plugin), produces a

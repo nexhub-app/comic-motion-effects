@@ -14,6 +14,12 @@ class DepthMap {
   final int height;
   final List<double> data;
 
+  /// 输出为「区域恒值」场（同色平涂区域一个值）时由估算器置 true：
+  /// 分层阈值改取分位值两侧最近不同取值的中点，避免整块恒值区域骑在层
+  /// membership 过渡带上（半透明、底图透出重影）。默认 false，平滑深度场
+  /// 保持原分位阈值行为（与接口化前逐字节一致）。
+  bool constantValued = false;
+
   double at(int x, int y) => data[y * width + x];
   void set(int x, int y, double v) => data[y * width + x] = v.clamp(0.0, 1.0);
 
@@ -226,16 +232,42 @@ class LayerSplitter {
     // back to quantiles when a band would be empty.
     final sorted = List<double>.from(depth.data)..sort();
     double q(double p) => sorted[(p * (sorted.length - 1)).round()];
-    final t1 = math.max(q(0.35), 0.30); // far | mid boundary
-    final t2 = math.max(q(0.72), t1 + 0.05); // mid | near boundary
+
+    // 恒值安全阈值（[DepthMap.constantValued] 时启用）：分位值可能恰是某块
+    // 区域恒值的取值，整块区域骑在 ±0.03 的 membership 过渡带上——层 alpha
+    // 半透明、底图透出（黑框白字重影）。阈值改取分位值两侧最近不同取值的
+    // 中点后，恒值区域内部必然落在过渡带外；平滑深度场取值稠密，中点与
+    // 分位值几乎重合。
+    double gap(double p) {
+      final i = (p * (sorted.length - 1)).round();
+      final v = sorted[i];
+      var lo = i, hi = i;
+      while (lo > 0 && sorted[lo - 1] == v) lo--;
+      while (hi < sorted.length - 1 && sorted[hi + 1] == v) hi++;
+      if (lo == 0 && hi == sorted.length - 1) return v;
+      if (lo == 0) return (v + sorted[hi + 1]) / 2;
+      if (hi == sorted.length - 1) return (sorted[lo - 1] + v) / 2;
+      return (sorted[lo - 1] + sorted[hi + 1]) / 2;
+    }
+
+    final safe = depth.constantValued;
+    final t1 = math.max(safe ? gap(0.35) : q(0.35), 0.30); // far | mid
+    final t2 =
+        math.max(safe ? gap(0.72) : q(0.72), t1 + 0.05); // mid | near
 
     final smooth = tier.atLeastStandard;
     final featherPasses =
         smooth && featherPx > 0 ? (featherPx / 3).ceil().clamp(1, 4) : 0;
     final stretch = smooth ? edgeStretchPx.clamp(0, 16) : 0;
+    // 恒值场用硬阈值：恒值区域的取值是稠密的（相邻区域均值可差 ~1e-3），
+    // ±0.03 的 membership 过渡带总会罩住阈值两侧的邻近区域，整块半透明、
+    // 底图透出（黑框白字重影）。0/1 membership 后区域内部必然实心，软边
+    // 交给随后的空间羽化（_featherAlpha）。
+    final hard = depth.constantValued;
     final layers = <LayerImage>[];
     for (var li = 0; li < layerCount; li++) {
-      final layer = _extract(img, depth, li, t1, t2, smooth: smooth);
+      final layer = _extract(img, depth, li, t1, t2,
+          smooth: smooth, hard: hard);
       if (featherPasses > 0) _featherAlpha(layer, featherPasses);
       if (stretch > 0) _stretchEdges(layer, stretch);
       layers.add(LayerImage(layer, li));
@@ -245,7 +277,7 @@ class LayerSplitter {
 
   RgbaImage _extract(
       RgbaImage img, DepthMap depth, int li, double t1, double t2,
-      {required bool smooth}) {
+      {required bool smooth, required bool hard}) {
     final layer = RgbaImage(width: img.width, height: img.height);
     final w = img.width, h = img.height;
     final sx = depth.width / w, sy = depth.height / h;
@@ -258,7 +290,10 @@ class LayerSplitter {
           d = depth.at((x * sx).floor().clamp(0, depth.width - 1),
               (y * sy).floor().clamp(0, depth.height - 1));
         }
-        final a = _membership(d, li, t1, t2).clamp(0.0, 1.0);
+        final a = (hard
+                ? _hardMembership(d, li, t1, t2)
+                : _membership(d, li, t1, t2))
+            .clamp(0.0, 1.0);
         if (a <= 0.01) continue;
         final i = (y * w + x) * 4;
         final o = (y * layer.width + x) * 4;
@@ -349,6 +384,18 @@ class LayerSplitter {
       }
       if (filled == 0) return;
       live = next;
+    }
+  }
+
+  /// 硬 membership（恒值场）：区域内部整块实心，层间过渡完全落在区域边界。
+  static double _hardMembership(double d, int li, double t1, double t2) {
+    switch (li) {
+      case 0:
+        return d <= t1 ? 1.0 : 0.0;
+      case 1:
+        return (d > t1 && d <= t2) ? 1.0 : 0.0;
+      default:
+        return d > t2 ? 1.0 : 0.0;
     }
   }
 

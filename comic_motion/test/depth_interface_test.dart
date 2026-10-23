@@ -23,6 +23,25 @@ class LinearDepthEstimator implements DepthEstimator {
   }
 }
 
+/// 捕获一个 double 的估算器：用于验证后台工厂闭包跨 isolate 传递。
+class OffsetLinearDepthEstimator implements DepthEstimator {
+  const OffsetLinearDepthEstimator(this.offset);
+
+  final double offset;
+
+  @override
+  DepthMap estimate(RgbaImage img) {
+    final dm = DepthMap(img.width, img.height);
+    for (var y = 0; y < img.height; y++) {
+      for (var x = 0; x < img.width; x++) {
+        dm.data[y * img.width + x] =
+            (y / (img.height - 1) * 0.6 + offset).clamp(0.0, 1.0);
+      }
+    }
+    return dm;
+  }
+}
+
 /// W6：AI 深度接口化 —— DepthEstimator 抽象接口、注入、exportLayers 纹理集。
 ///
 /// 红线锚点：显式注入默认启发式 == 隐式缺省（逐字节）；自定义 estimator
@@ -84,6 +103,56 @@ void main() {
       final injected = MotionPipeline(EffectConfig(),
           depthEstimator: const LinearDepthEstimator());
       expect(injected.effectiveDepthEstimator, isA<LinearDepthEstimator>());
+    });
+  });
+
+  group('后台 isolate 深度工厂', () {
+    test('工厂闭包（捕获 double）在后台生效，且两次运行逐字节一致', () async {
+      final bytes =
+          Uint8List.fromList(ImageIO.encodePngFrame(gradientRaster()));
+      final base = await processBytesInBackground(
+          input: bytes, config: EffectConfig.fromJson(cfgJson()));
+      final offset = 0.2;
+      final injected = await processBytesInBackground(
+        input: bytes,
+        config: EffectConfig.fromJson(cfgJson()),
+        depthEstimatorFactory: () => OffsetLinearDepthEstimator(offset),
+      );
+      expect(injected.gifBytes, isNot(base.gifBytes),
+          reason: '后台工厂返回的估算器必须真的被用于分层');
+      final again = await processBytesInBackground(
+        input: bytes,
+        config: EffectConfig.fromJson(cfgJson()),
+        depthEstimatorFactory: () => OffsetLinearDepthEstimator(offset),
+      );
+      expect(again.gifBytes, injected.gifBytes, reason: '工厂路径必须可复现');
+    });
+
+    test('显式工厂返回启发式 == 缺省（逐字节）', () async {
+      final bytes =
+          Uint8List.fromList(ImageIO.encodePngFrame(gradientRaster()));
+      final implicit = await processBytesInBackground(
+          input: bytes, config: EffectConfig.fromJson(cfgJson()));
+      final explicit = await processBytesInBackground(
+        input: bytes,
+        config: EffectConfig.fromJson(cfgJson()),
+        depthEstimatorFactory: () => const HeuristicDepthEstimator(),
+      );
+      expect(explicit.gifBytes, implicit.gifBytes,
+          reason: '工厂接缝不得改变默认像素路径');
+    });
+
+    test('工厂抛错原样回传调用方', () async {
+      final bytes =
+          Uint8List.fromList(ImageIO.encodePngFrame(gradientRaster()));
+      await expectLater(
+        processBytesInBackground(
+          input: bytes,
+          config: EffectConfig.fromJson(cfgJson()),
+          depthEstimatorFactory: () => throw StateError('factory boom'),
+        ),
+        throwsA(isA<StateError>()),
+      );
     });
   });
 

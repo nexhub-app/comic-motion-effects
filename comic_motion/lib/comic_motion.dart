@@ -30,6 +30,7 @@ export 'src/param_catalog.dart';
 export 'src/panel_splitter.dart';
 export 'src/part_motion.dart';
 export 'src/pipeline.dart';
+export 'src/region_depth.dart';
 export 'src/render/envelope.dart';
 export 'src/render/mesh_warper.dart';
 export 'src/render/quality.dart';
