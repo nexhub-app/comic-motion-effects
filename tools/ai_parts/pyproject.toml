@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "comic-motion-ai-parts"
+version = "0.1.0"
+description = "Hand part_motion.json producer for comic-motion-effects (separate AI sidecar project)"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "numpy>=2.0",
+  "opencv-python>=4.10",
+  "pillow>=11.0",
+  "onnxruntime>=1.20",
+]
+
+[project.optional-dependencies]
+models = [
+  "torch>=2.4",
+  "safetensors>=0.4",
+  "segment-anything @ git+https://github.com/facebookresearch/segment-anything.git@dca509fe793f601edb92606367a655c15ac00fdf",
+]
+test = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+ai-parts = "ai_parts.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "models: requires downloaded model weights and the optional 'models' dependencies",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
