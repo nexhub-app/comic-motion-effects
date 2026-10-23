@@ -34,8 +34,8 @@ class StreamingApngBuilder {
   /// [exactDelay] = true 时（W3）帧延迟写精确分数 delay_num = 1、
   /// delay_den = [fps]（fcTL 为 16.16 定点数，60fps 精确表达 16.67ms）；
   /// 默认 false 保持厘秒口径（delay_num = (100/fps).round()、den = 100），
-  /// 输出与 v1.3 逐字节一致。exact 模式下 [addFrame]/[addEncodedPngFrame]
-  /// 的 [delayCs] 覆盖不生效（厘秒表达不了精确分数，两者互斥）。
+  /// 输出与 v1.3 逐字节一致。exact 模式下未显式传 [delayCs] 的帧写精确
+  /// 分数；显式传 [delayCs] 的帧（静息保持帧）按厘秒写（逐帧 den 可不同）。
   StreamingApngBuilder(this.width, this.height,
       {required int fps, bool exactDelay = false, bool loopForever = true})
       : _fps = fps,
@@ -62,7 +62,7 @@ class StreamingApngBuilder {
   Uint8List _ihdrPayload = Uint8List(0);
 
   /// 提交一帧（栅格入口）。[delayCs] 可覆盖默认帧延迟（厘秒；exact 模式
-  /// 下忽略——精确分数与厘秒覆盖互斥）。
+  /// 下同样生效——静息保持帧按厘秒写，未传 delayCs 的帧保持 1/fps 精确分数）。
   void addFrame(RgbaImage frame, {int? delayCs}) {
     if (frame.width != width || frame.height != height) {
       throw ArgumentError(
@@ -84,7 +84,8 @@ class StreamingApngBuilder {
   /// 只编码该区域的 PNG 并在 fcTL 写入区域与偏移。dispose = NONE +
   /// blend = SOURCE 语义下，区域帧直接覆盖其矩形、其余像素保留上一帧内容
   /// ——首帧必须已是全画布帧。引擎帧渲染是确定性的，逐字节差分安全。
-  void addRectFrame(RgbaImage fullFrame, {required PixelRect region}) {
+  /// [delayCs] 覆盖帧延迟（静息保持帧用，语义同 [addFrame]）。
+  void addRectFrame(RgbaImage fullFrame, {required PixelRect region, int? delayCs}) {
     if (fullFrame.width != width || fullFrame.height != height) {
       throw ArgumentError(
           '帧尺寸 ${fullFrame.width}x${fullFrame.height} 与编码器 ${width}x$height 不一致');
@@ -101,7 +102,7 @@ class StreamingApngBuilder {
         ..data[3] = px[3];
       _submit(Uint8List.fromList(ImageIO.encodePngFrame(stub)),
           region: const PixelRect(0, 0, 0, 0),
-          delayCs: null,
+          delayCs: delayCs,
           delayNum: null,
           delayDen: null);
       return;
@@ -115,7 +116,7 @@ class StreamingApngBuilder {
           dstBase, dstBase + r.width * 4, fullFrame.data, srcBase);
     }
     _submit(Uint8List.fromList(ImageIO.encodePngFrame(crop)),
-        region: r, delayCs: null, delayNum: null, delayDen: null);
+        region: r, delayCs: delayCs, delayNum: null, delayDen: null);
   }
 
   void _submit(Uint8List pngBytes,
@@ -138,9 +139,14 @@ class StreamingApngBuilder {
         }
       }
     }
-    // fcTL 延迟：exact 模式 1/fps 精确分数；厘秒模式（num=cs, den=100）。
-    final num = _exactDelay ? 1 : (delayCs ?? defaultDelayCs).clamp(1, 0xffff);
-    final den = _exactDelay ? _fps : 100;
+    // fcTL 延迟：exact 模式下未显式覆盖的帧写精确分数 1/fps（fcTL 为 16.16
+    // 定点数，厘秒表达不了精确分数）；厘秒模式 num=cs、den=100。显式传
+    // [delayCs] 的帧（v1.6 静息保持帧）两种模式下都按厘秒写——保持段是
+    // 静息时段，不参与动效相位契约，厘秒精度足够。APNG 允许逐帧不同 den。
+    final num = _exactDelay && delayCs == null
+        ? 1
+        : (delayCs ?? defaultDelayCs).clamp(1, 0xffff);
+    final den = _exactDelay && delayCs == null ? _fps : 100;
     final fcTL = <int>[
       ..._be32(_sequence++),
       ..._be32(region?.width ?? width),

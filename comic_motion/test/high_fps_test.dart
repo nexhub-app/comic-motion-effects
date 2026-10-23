@@ -53,17 +53,20 @@ void main() {
       expect(_be16(legacyFcTL.data, 22), _be16(fcTL.data, 22));
     });
 
-    test('exact 与厘秒覆盖互斥：exact 模式下 delayCs 不生效', () {
+    test('exact 模式未传 delayCs 的帧写 1/fps；显式 delayCs（静息保持帧）按厘秒写', () {
       final b = StreamingApngBuilder(16, 16, fps: 60, exactDelay: true);
       b.addFrame(flatFrame(16, 16));
       b.addEncodedPngFrame(
           Uint8List.fromList(ImageIO.encodePngFrame(flatFrame(16, 16, shift: 3))),
           delayCs: 50);
-      final fctls = _parseChunks(Uint8List.fromList(b.finish())).where((c) => c.type == 'fcTL');
-      for (final c in fctls) {
-        expect(_be16(c.data, 20), 1);
-        expect(_be16(c.data, 22), 60);
-      }
+      final fctls = _parseChunks(Uint8List.fromList(b.finish())).where((c) => c.type == 'fcTL').toList();
+      // 未覆盖帧：精确分数 1/60（v1.4 W3 契约，未传覆盖的路径逐字节不变）。
+      expect(_be16(fctls[0].data, 20), 1);
+      expect(_be16(fctls[0].data, 22), 60);
+      // 显式覆盖帧（v1.6 holdSec 静息保持）：厘秒 num=50、den=100——保持段
+      // 是静息时段，不参与动效相位契约；APNG 允许逐帧不同 den。
+      expect(_be16(fctls[1].data, 20), 50);
+      expect(_be16(fctls[1].data, 22), 100);
     });
   });
 

@@ -54,7 +54,10 @@ class GifFrameEncoder {
   }
 
   /// 该帧在 GIF 数据流中的完整片段：图形控制扩展 + 图像描述符 + LZW 子块。
-  Uint8List encodeFrameBody(RgbaImage frame) {
+  /// [delayCs] 覆盖构造时的帧延迟（静息保持帧用更长延迟，其余路径不传、
+  /// 与原行为逐字节一致）。
+  Uint8List encodeFrameBody(RgbaImage frame, {int? delayCs}) {
+    final d = delayCs ?? this.delayCs;
     if (frame.width != width || frame.height != height) {
       throw ArgumentError(
           '帧尺寸 ${frame.width}x${frame.height} 与编码器 ${width}x$height 不一致');
@@ -67,8 +70,8 @@ class GifFrameEncoder {
       0xF9,
       0x04,
       0x00,
-      delayCs & 0xff,
-      (delayCs >> 8) & 0xff,
+      d & 0xff,
+      (d >> 8) & 0xff,
       0x00,
       0x00,
     ]);
@@ -456,6 +459,14 @@ class StreamingGifBuilder {
     if (indexed.length != width * height) {
       throw ArgumentError('索引图长度 ${indexed.length} 与画布不符');
     }
+    final r = _diffRect(indexed);
+    _body.add(_encodeRectBody(indexed, r.$1, r.$2, r.$3, r.$4));
+    _prevIndexed = Uint8List.fromList(indexed);
+    _frames++;
+  }
+
+  /// 与上一帧比较，返回变化矩形 (left, top, w, h)；无变化时 1x1 占位。
+  (int, int, int, int) _diffRect(Uint8List indexed) {
     var left = 0, top = 0, w = width, h = height;
     final prev = _prevIndexed;
     if (prev != null && rectDiff) {
@@ -483,22 +494,43 @@ class StreamingGifBuilder {
         h = 1;
       }
     }
-    _body.add(_encodeRectBody(indexed, left, top, w, h));
-    _prevIndexed = Uint8List.fromList(indexed);
+    return (left, top, w, h);
+  }
+
+  /// 静息保持帧（v1.6 EffectConfig.holdSec）：内容与传入帧（管线传 t=0 静息
+  /// 帧）相同，GCE delay 用 [holdCs] 厘秒——单帧即可表达任意时长（16 位上限
+  /// 655.35s），rect 模式下与上一帧的差分矩形照常最小化。全帧/rect 两模式
+  /// 字节形状与常规帧完全一致，只是延迟不同。
+  void addHoldFrame(RgbaImage frame, {required int holdCs}) {
+    if (!hasPalette) throw StateError('Palette has not been primed');
+    if (rectDiff) {
+      // rect 模式统一走差分入口（与 addIndexedFrame 同构），保持 _prevIndexed
+      // 状态连贯（hold 是最后一帧，之后无后续帧，但状态一致便于测试推理）。
+      final indexed = newFrameEncoder().quantizeIndices(frame);
+      final r = _diffRect(indexed);
+      _body.add(_encodeRectBody(indexed, r.$1, r.$2, r.$3, r.$4,
+          delayCs: holdCs));
+      _prevIndexed = Uint8List.fromList(indexed);
+    } else {
+      _body.add(newFrameEncoder().encodeFrameBody(frame, delayCs: holdCs));
+    }
     _frames++;
   }
 
   /// 矩形帧片段：GCE（disposal 1）+ 图像描述符（left/top/w/h）+ 子矩形 LZW。
   /// 子矩形取行主序索引，调色板沿用全局板（无局部色表，与全帧路径一致）。
-  Uint8List _encodeRectBody(Uint8List indexed, int left, int top, int w, int h) {
+  /// `delayCs` 覆盖构建器默认延迟（静息保持帧用）。
+  Uint8List _encodeRectBody(Uint8List indexed, int left, int top, int w, int h,
+      {int? delayCs}) {
+    final d = delayCs ?? this.delayCs;
     final body = BytesBuilder();
     body.add([
       0x21,
       0xF9,
       0x04,
       0x04, // disposal = 1 (do not dispose), 无透明色
-      delayCs & 0xff,
-      (delayCs >> 8) & 0xff,
+      d & 0xff,
+      (d >> 8) & 0xff,
       0x00,
       0x00,
     ]);

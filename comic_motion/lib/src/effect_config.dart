@@ -1633,6 +1633,7 @@ class EffectConfig {
     Map<EffectKind, RegionParams>? effectRegions,
     this.fps = 24,
     this.durationSec = 4.0,
+    this.holdSec = 0.0,
     this.depthMode = DepthMode.autoLayers,
     this.layerCount = 3,
     this.outputFormat = OutputFormat.both,
@@ -1713,6 +1714,9 @@ class EffectConfig {
     if (durationSec <= 0) {
       throw ConfigException('durationSec must be > 0, got $durationSec');
     }
+    if (holdSec < 0) {
+      throw ConfigException('holdSec must be >= 0, got $holdSec');
+    }
     if (layerCount < 1 || layerCount > 8) {
       throw ConfigException('layerCount must be in [1, 8], got $layerCount');
     }
@@ -1791,6 +1795,15 @@ class EffectConfig {
 
   final int fps;
   final double durationSec;
+
+  /// 静息保持（v1.6「需要动效时才展示动效」）：`> 0` 时容器输出 = 完整动效
+  /// 循环 + **静息首帧**保持 holdSec 秒。静息帧即 t=0 帧（rest 红线：与
+  /// 原画一致），保持段逐字节为零动效、零撕裂；循环点 = 静息 → 动效起点
+  /// （t=0 也静息），天然无缝。动效帧数/波形/周期对齐**全部不变**——只影响
+  /// 容器写帧，不触碰渲染路径。默认 0（现状）；条件序列化（R32 习语）：
+  /// 默认不写键 ⇒ 出厂 configHash 键集一字不动。
+  final double holdSec;
+
   final DepthMode depthMode;
   final int layerCount;
   final OutputFormat outputFormat;
@@ -1923,6 +1936,8 @@ class EffectConfig {
           },
         'fps': fps,
         'durationSec': durationSec,
+        // v1.6 静息保持：默认 0 不写键（出厂 configHash 键集与旧版一致）。
+        if (holdSec > 0) 'holdSec': holdSec,
         'depthMode': depthMode.name,
         'layerCount': layerCount,
         'outputFormat': outputFormat.name,
@@ -2011,6 +2026,7 @@ class EffectConfig {
         quality: quality,
         fps: fps,
         durationSec: durationSec,
+      holdSec: holdSec,
         depthMode: depthMode,
         layerCount: layerCount,
         outputFormat: outputFormat,
@@ -2233,6 +2249,7 @@ class EffectConfig {
             },
       fps: (j['fps'] as num?)?.toInt() ?? 24,
       durationSec: (j['durationSec'] as num?)?.toDouble() ?? 4.0,
+      holdSec: (j['holdSec'] as num?)?.toDouble() ?? 0.0,
       depthMode: depthMode,
       layerCount: (j['layerCount'] as num?)?.toInt() ?? 3,
       outputFormat: outputFormat,

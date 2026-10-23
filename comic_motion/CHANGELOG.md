@@ -7,6 +7,38 @@ and `dart run bin/comic_motion.dart --version` share one version constant.
 > The full changelog in Chinese — including all historical entries — lives in
 > [doc/CHANGELOG_zh-CN.md](doc/CHANGELOG_zh-CN.md).
 
+## 1.7.0 (2026-10-23)
+
+Rest-hold container output for the "motion only when it matters" reading
+experience. **The serialized shape of the default config and its `configHash`
+are untouched** — `holdSec` defaults to 0 and the key is omitted from
+`toJson()` unless explicitly raised (conditional-serialization idiom), so
+existing configs hash byte-identically.
+
+### `EffectConfig.holdSec` — full motion cycle + first-frame rest hold
+
+`holdSec > 0` appends ONE rest frame (the t=0 frame, pixel-identical to the
+author's drawing) after the complete motion cycle, with a per-frame delay of
+`(holdSec * 100).round()` centiseconds (the 16-bit GIF/APNG delay expresses
+up to 655.35 s). Motion frames — count, waveforms, period alignment — are
+untouched; only container writing changes. The loop seam is rest →
+motion-start (t=0 is also rest), so the seamless-loop contract holds without
+touching the render path. `reducedMotion` keeps its single-static-frame
+contract: hold is skipped when both are set. Rect diff modes carry the hold
+frame as a minimal diff rect (GIF quantizes in-writer via
+`StreamingGifBuilder.addHoldFrame`; APNG diffs the RGBA like motion frames,
+including in `apngRect` mode).
+
+### APNG exact-delay carve-out
+
+`encoding.apngDelay == 'exact'` previously ignored per-frame `delayCs`
+overrides entirely. An explicit override now wins in both modes (written as
+centiseconds — per-frame denominators are legal in APNG, and the rest-hold
+segment is a static period outside the motion-phase contract); frames
+without an override still write the 1/fps exact fraction byte-identically.
+The `high_fps_test.dart` contract was updated accordingly — tightened, not
+loosened: both branches are now pinned separately.
+
 ## 1.6.0 (2026-10-23)
 
 External depth estimation for subject/background layering, opt-in end to end.

@@ -743,6 +743,9 @@ class MotionPipeline {
     // paletteProbeIndices 给出、经插入序 Map 去重 ⇒ primePalette 入参确定。
     final presolved = <int, FrameOutput>{};
     RgbaImage? firstFrameRgba;
+    // v1.6 静息保持（EffectConfig.holdSec > 0）：t=0 静息帧，容器收尾时
+    // 以 holdSec 延迟追加（复用探针/预渲染的同一份栅格，零额外渲染成本）。
+    RgbaImage? restFrame;
     if (gif != null) {
       final probes = <int, RgbaImage>{};
       checkCancel(); // 探针帧渲染前检查
@@ -754,6 +757,8 @@ class MotionPipeline {
       }
       // 首帧封面：直接复用探针帧 0 的同一份栅格，零额外渲染成本（T2）。
       if (includeFirstFrame) firstFrameRgba = probes[0];
+      // 探针帧 0 即 t=0 静息帧（paletteProbeIndices 恒含 0），同一份栅格。
+      if (config.holdSec > 0) restFrame = probes[0];
       gif.primePalette(probes.values.toList());
       final enc = gif.newFrameEncoder();
       final frameCb = onFrame;
@@ -768,11 +773,13 @@ class MotionPipeline {
         );
       });
       probes.clear();
-    } else if (includeFirstFrame) {
+    } else if (includeFirstFrame || config.holdSec > 0) {
       // frames-only / apng 路径没有探针段：主 isolate 预渲染第 0 帧充当
-      // 封面帧并记入 presolved（派工跳过该帧），与 GIF 路径一样只渲染一次。
+      // 封面帧（includeFirstFrame）或静息保持帧（holdSec）并记入 presolved
+      // （派工跳过该帧），与 GIF 路径一样只渲染一次。
       checkCancel(); // 探针帧渲染前检查
       firstFrameRgba = compositor.renderFrame(0);
+      if (config.holdSec > 0) restFrame = firstFrameRgba;
       if (wantFrames) ImageIO.writePngFrame(frameDir, 0, firstFrameRgba);
       // apng 模式需要帧 PNG 字节进容器（onFrame 回调同样复用）。
       // apng rect 模式首帧仍走全画布 PNG 字节进容器，rgba 供差分状态初始化。
@@ -919,6 +926,37 @@ class MotionPipeline {
           await runner.run(allIndices, presolved, (i, out) => emit(out));
         } finally {
           await runner.dispose();
+        }
+      }
+    }
+    // v1.6 静息保持（EffectConfig.holdSec）：全部动效帧出完后追加一帧 t=0
+    // 静息帧，GIF GCE / APNG fcTL 延迟 = holdCs（厘秒，16 位上限 655.35s）。
+    // 静息帧即首帧（rest 红线：与原画一致），保持段零动效、零撕裂；循环点
+    // = 静息 → 动效起点（t=0 亦静息），无缝契约不破。rect 模式与动效帧同路
+    // 差分：GIF 走 addHoldFrame（内部量化 + 差分矩形），APNG 与上一帧
+    // RGBA 逐字节差分出区域帧——保持段体积最小化。帧数/进度/回调只统计
+    // 动效帧，hold 不派工、不进 onFrame。reducedMotion 契约是「输出单帧
+    // 静态图」，静息帧即其唯一帧，hold 追加跳过（两开关叠加以它为准）。
+    if (config.holdSec > 0 &&
+        !config.reducedMotion &&
+        (gif != null || apng != null)) {
+      final holdCs = (config.holdSec * 100).round().clamp(2, 65535);
+      final rest = restFrame!;
+      if (gif != null) {
+        gif.addHoldFrame(rest, holdCs: holdCs);
+      }
+      if (apng != null) {
+        if (apngRect) {
+          final prev = apngPrev;
+          if (prev == null) {
+            apng.addFrame(rest, delayCs: holdCs);
+          } else {
+            apng.addRectFrame(rest,
+                region: _diffRect(prev, rest.data, working.width, working.height),
+                delayCs: holdCs);
+          }
+        } else {
+          apng.addFrame(rest, delayCs: holdCs);
         }
       }
     }
