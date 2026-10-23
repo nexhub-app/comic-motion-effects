@@ -166,18 +166,24 @@ class FrameCompositor {
 
   /// 部件 i 在 t 秒的摆角（度，指尖处最大，沿根→尖线性衰减到 0）。
   ///
-  /// 相位载体刻意用 [MotionMath.wave]（纯正弦）而不是 §6.2 的 `snapWave`：
+  /// 波形刻意用 [MotionMath.wave]（纯正弦）而不是 §6.2 的 `snapWave`：
   /// `snapWave(0) = 0.42/1.24 ≈ 0.3387` 并非 0，用它当形变通道会把「原画姿态」
   /// 预旋三分之一幅度——首帧就不是作者画的那只手。张力来自 taper 空间分布
   /// （掌根不动、指尖走满弧）与幅度本身，不来自波形尖度。
-  /// 周期按 §6.3 对齐到 duration 的整分频 ⇒ 无缝；`i * π/4` 的逐部件错相是
-  /// 确定性的（无时钟无随机），避免多只手同频同相的机械感。
-  double _handAngle(int i, double tSec) => config.handMotion.ampDeg *
-      MotionMath.wave(
-          tSec,
-          periodSec: MotionMath.alignedPeriodSec(
-              config.durationSec, config.handMotion.periodSec),
-          phase: i * math.pi / 4);
+  /// 周期按 §6.3 对齐到 duration 的整分频 ⇒ 无缝。逐部件错相仍用确定性的
+  /// `i * π/4`（无时钟无随机），但先扣掉该相位的静息值 `sin(φ)`：否则只有
+  /// 0 号在 t=0 归零，多只手会在首帧摆出不同姿态。扣直流后波形峰值变为
+  /// `1 + |sin φ|`，再除掉它，`ampDeg` 才仍是每个部件的峰值摆角。
+  double _handAngle(int i, double tSec) {
+    final phase = i * math.pi / 4;
+    final swing = MotionMath.wave(
+            tSec,
+            periodSec: MotionMath.alignedPeriodSec(
+                config.durationSec, config.handMotion.periodSec),
+            phase: phase) -
+        math.sin(phase);
+    return config.handMotion.ampDeg * swing / (1 + math.sin(phase).abs());
+  }
 
   /// 测试/调参钩子：部件 i 在 t 秒的摆角。index 越界即调用方建表数搞错。
   double debugHandAngleDeg(int index, double tSec) =>

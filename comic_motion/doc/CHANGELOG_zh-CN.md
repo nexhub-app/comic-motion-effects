@@ -2,6 +2,18 @@
 
 本项目版本记录。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)，`pubspec.yaml`、`lib/src/version.dart` 与 `dart run bin/comic_motion.dart --version` 使用同一常量。
 
+## 未发布
+
+### 部位动作：多部件首帧静置（handMotion）
+
+逐部件错相此前直接把 `i·π/4` 塞进正弦相位，只有 0 号部件在 `t=0` 归零——
+一页两只手时首帧已有一只预旋 `8·sin(π/4)≈5.7°`，违反「静帧 = 原画姿态」。
+现在每个部件先扣掉自身相位的静息值 `sin(φ)`，再按扣直流后的峰值
+`1+|sin φ|` 归一化：所有部件在 `t=0` 与 `t=duration` 都回到静息位，错相仍
+体现在摆动时机与方向上，`ampDeg` 依旧是峰值摆角。单部件输出不变；
+`hand_acceptance` 的双部件页由 rest=fail 转为 4/4 全绿。侧车与配置指纹
+均不受影响。
+
 ## 1.5.0（2026-10-07）
 
 省资源 + 精确识别 + 动作动效。**默认配置的序列化形状与
@@ -130,7 +142,7 @@ AnchorMap（同一遍 max 扫描顺带求均值，零额外扫描）。
 
 - **`part_motion.json` 契约**（`lib/src/part_motion.dart`）：`version: 1`、最多 8 个部件，`kind: head|hand|arm|torso|hair|garment` 一次列全但只实现 `hand`（`PartKind.isImplemented`，其余解析通过、渲染跳过）。归一化 0..1 多边形 + `anchor{x,y,joint}`；落在多边形外的锚点钳到最近顶点并记告警；旋转杠杆的另一段由「离锚点最远的顶点」确定性推出（`tipPoint`，等距按顶点序取最靠前者）。`PartMotionParser.parse` **永不抛**：坏 JSON 或不认识的版本 ⇒ 「无部件 + 告警」，一份写坏的侧车不可能把渲染拖崩。
 - **`MeshWarper`**（`lib/src/render/mesh_warper.dart`）：只有 contained 模式、2 px 羽化的衰减旋转——摆角从指尖线性衰减到腕根处的 0，因此关节不会撕裂。`buildPlan` 对退化多边形返回 `WarpPlan.empty()`，且**每次渲染只付一次**而不是每帧一次；`apply` 只写 RGB、从不碰 alpha，混合式是 `dst + (sample - dst) * mix`，所以「不造色」「不改蒙版」是结构性保证，不是靠测试兜着。
-- **`HandMotionParams(ampDeg: 8.0, periodSec: 2.0)`** + `EffectKind.handMotion`（目录 32 → 33）由多源锁步守卫覆盖：构造默认 == `fromJson` 缺键 == `fromJson` 显式 null、`toJson` 的键集合**恰好**这两个参数（没有消费方的旋钮不许进契约）、目录文案里的「N 种」按 `EffectKind.values.length` 断言。相位走 `MotionMath.wave`（t=0 精确为 0——用 `snapWave` 会让静置帧预先转起来），周期按整循环对齐（`alignedPeriodSec` 对非有限值或 ≤0 有回落 1.0 s 的护栏），第 i 个部件偏移 `i·π/4`，因此**只有 0 号部件在 t=0 处于静置**。序列化受门控：出厂默认 JSON 不写 `handMotion` 段，效果未启用时改参数既不进 JSON 也不进 `configHash`。
+- **`HandMotionParams(ampDeg: 8.0, periodSec: 2.0)`** + `EffectKind.handMotion`（目录 32 → 33）由多源锁步守卫覆盖：构造默认 == `fromJson` 缺键 == `fromJson` 显式 null、`toJson` 的键集合**恰好**这两个参数（没有消费方的旋钮不许进契约）、目录文案里的「N 种」按 `EffectKind.values.length` 断言。相位走 `MotionMath.wave`（t=0 精确为 0——用 `snapWave` 会让静置帧预先转起来），周期按整循环对齐（`alignedPeriodSec` 对非有限值或 ≤0 有回落 1.0 s 的护栏），第 i 个部件偏移 `i·π/4`，因此**只有 0 号部件在 t=0 处于静置**（多部件静置已在「未发布」节修正）。序列化受门控：出厂默认 JSON 不写 `handMotion` 段，效果未启用时改参数既不进 JSON 也不进 `configHash`。
 - **侧车是运行期输入，绝不进配置**：`MotionPipeline(partMotion:)`（与 `depthEstimator` 同级）、服务端 `process` 的 `--part-motion <路径>` 与 HTTP 任务的 `partMotionBase64`；经 `FrameJobSpec.parts` 送达 worker。它改变像素，但**不进** `EffectConfig`、**不参与** `configHash`；文本指纹 `partMotionDigest`（8 位十六进制）随结果上报，并追加到服务端任务目录名，使「同一张图换一份侧车」不会在缓存里撞名。告警冒泡顺序：配置 → 侧车 → 内存预算 → 结果 → 台账 → HTTP 回显 → CLI。
 - **三道门都是刻意的**：不给侧车 ⇒ 一个像素都不动、既有通路逐字节不变；`tier: legacy` ⇒ 部件形变整块跳过（H2 的回滚承诺）；`processStrip` 与 `BatchRunner` 完全不接这条通道（切片后归一化坐标指向的是某一段切片，而多边形是在整页上画的；一份侧车也不可能对应整个目录）。
 - **`HeuristicHandLocator` 随包发布但未接入管线**（`lib/src/hand_locator.dart`）：真实漫画语料召回≈0，因为手的白区与背景是边界连通的，不是被墨线封住的封闭分量。部件**只**来自侧车——这就是三期的边界，代码和文档都写明了。

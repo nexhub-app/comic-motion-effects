@@ -119,7 +119,7 @@ dart run bin/comic_motion.dart serve --port 8787 --data-dir DELIVERY/data
 | `contentAware` | bool | `true` | **v1.4 新增，默认开**（R30/R36）：落位改用显著性分析（主体框/焦点/活动度），粒子与 focusLines/impactRings 锚到主体侧。多格页口径：逐格粒子**数量**按格面积均衡（R8/R9），活动度只在每格内部偏置**位置**——「锚到主体侧」对单格页是字面成立，对多格页是位置偏置。显式 `false` = 回滚到 v1.3 均匀落位。与 `quality.tier` 正交 |
 | `panelAware` | bool | `true` | **v1.4 默认开**（R39）：多格图逐格独立分层，根除跨格串色；单格图自动回退整页。显式 `false` = 回滚 |
 | `handMotion.ampDeg` | 任意数（无通用 clamp） | `8.0` | **v1.4 Plan B**：指尖摆幅（度），按「离锚点远近」线性衰减到腕根处的 0。**只在 standard+ 档生效**，且必须同时把 `handMotion` 放进 `effects` 并给出 `partMotionBase64`——缺一就一个像素都不动。越界按原值线性放大（负值 = 反方向摆），`0` 逐字节等价于不挂该效果 |
-| `handMotion.periodSec` | 秒 | `2.0` | 摆动周期，渲染前对齐到时长 `durationSec` 的整分频以保证无缝；非有限值或 ≤0 由护栏回落成 `1.0` s。多部件时第 i 个偏移 `i·π/4`，因此只有 0 号部件在 t=0 处于静置 |
+| `handMotion.periodSec` | 秒 | `2.0` | 摆动周期，渲染前对齐到时长 `durationSec` 的整分频以保证无缝；非有限值或 ≤0 由护栏回落成 `1.0` s。多部件时第 i 个偏移 `i·π/4`，扣除该相位的静息值并按峰值归一化 ⇒ 所有部件在 t=0 都处于静置位，错相只体现在摆动时机/方向上；峰值摆角仍为 `ampDeg` |
 | `quality.edgeStretchPx` | 0-16 | `6` | 层边缘色外扩，消除视差露底双边（standard+） |
 | `quality.mipLevels` | 1-2 | `2` | 预留字段，尚无消费方 |
 | `moodScript.mood` | `tension`\|`calm`\|`eerie`\|`burst` | `tension` | 未知值回落 `calm` 并写 `warnings` |

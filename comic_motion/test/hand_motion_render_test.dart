@@ -9,9 +9,10 @@ import 'package:comic_motion/comic_motion.dart';
 /// 四条不变量，逐条有门：
 /// 1. **默认惰性**——没有 `part_motion.json`（parts=null）、没开效果、legacy
 ///    档、reducedMotion 四种情形都必须与「完全没有这个功能」逐字节相同；
-/// 2. **静止姿态 = 原画**——0 号部件在 t=0 的摆角是精确 0.0，因此首帧像素与
-///    无部件一致。这条决定了相位载体只能用 `MotionMath.wave`（sin，0 处为
-///    0），不能用 `snapWave`（u=0 处 ≈0.3387，会把原画预旋 1/3 个幅度）；
+/// 2. **静止姿态 = 原画**——每个部件在 t=0 的摆角都是精确 0.0（逐部件相位
+///    偏移在波形上扣掉其静息值），因此首帧像素与无部件一致。相位载体仍用
+///    `MotionMath.wave`（sin），不能用 `snapWave`（u=0 处 ≈0.3387，会把原画
+///    预旋 1/3 个幅度）；
 /// 3. **局部**——改动像素只落在部件 bbox（含羽化与最大位移余量）里；
 /// 4. **无缝 + 确定**——首尾帧逐字节一致，同 config 同 parts 两次合成一致。
 const w = 120, h = 200;
@@ -172,7 +173,7 @@ void main() {
   });
 
   group('非空形变', () {
-    test('t=0 是原画姿态：0 号部件摆角精确 0，像素与无部件一致', () {
+    test('t=0 是原画姿态：单部件摆角精确 0，像素与无部件一致', () {
       expect(comp(cfg(), parts: [handA()]).debugHandAngleDeg(0, 0.0), 0.0);
       expect(comp(cfg(), parts: [handA()]).debugHandAngleDeg(0, 0.5),
           closeTo(8.0 * math.sin(2 * math.pi * 0.5 / 2.0), 1e-12));
@@ -225,19 +226,43 @@ void main() {
       expect(changed(_cropRow(none, 124, 168), _cropRow(out, 124, 168)), 0);
     });
 
-    test('逐部件相位错开（两只手不同步）', () {
+    test('所有部件 t=0 静置，之后逐部件错相', () {
       final c = comp(cfg(), parts: [handA(), handB()]);
-      final a0 = c.debugHandAngleDeg(0, 0.0);
-      final b0 = c.debugHandAngleDeg(1, 0.0);
-      expect(a0, 0.0);
-      expect(b0, isNot(0.0),
-          reason: '若两部件同相，这里会同时为 0 —— 看起来像贴图不是像挥手');
-      final none = comp(cfg(on: false)).renderFrame(0.5);
-      final both = c.renderFrame(0.5);
+      expect(c.debugHandAngleDeg(0, 0.0), 0.0);
+      expect(c.debugHandAngleDeg(1, 0.0), 0.0,
+          reason: '两只手都必须从原画姿态起摆，不能只有 0 号');
+      // t=0.5 = 1/4 周期：0 号取满，1 号因相位不同而不同时同幅。
+      final a = c.debugHandAngleDeg(0, 0.5);
+      final b = c.debugHandAngleDeg(1, 0.5);
+      expect(a, isNot(closeTo(b, 1e-9)),
+          reason: '两只手同相同时同幅，看起来像贴图不是像挥手');
+      // t=0.75 两者都离开静息位且方向相反，两条带都应有改动。
+      final a75 = c.debugHandAngleDeg(0, 0.75);
+      final b75 = c.debugHandAngleDeg(1, 0.75);
+      expect(a75.abs(), greaterThan(0.5));
+      expect(b75.abs(), greaterThan(0.5));
+      expect(a75 * b75, lessThan(0.0),
+          reason: '错相应表现为方向/时机差异，而非幅度差');
+      final none = comp(cfg(on: false)).renderFrame(0.75);
+      final both = c.renderFrame(0.75);
       expect(changed(_cropRow(none, 44, 88), _cropRow(both, 44, 88)),
           greaterThan(0));
       expect(changed(_cropRow(none, 124, 168), _cropRow(both, 124, 168)),
           greaterThan(0));
+    });
+
+    test('每个部件的峰值不超过 ampDeg，且峰值确实取到', () {
+      final c = comp(cfg(ampDeg: 8.0), parts: [handA(), handB()]);
+      for (var i = 0; i < 2; i++) {
+        var peak = 0.0;
+        for (var k = 0; k <= 64; k++) {
+          final a = c.debugHandAngleDeg(i, 2.0 * k / 64).abs();
+          if (a > peak) peak = a;
+        }
+        expect(peak, lessThanOrEqualTo(8.0 + 1e-9));
+        expect(peak, closeTo(8.0, 1e-3),
+            reason: '归一化后每个部件都应取满 ampDeg，否则幅度被相位吞掉');
+      }
     });
 
     test('只实现 hand：其余 kind 解析通过但渲染跳过', () {

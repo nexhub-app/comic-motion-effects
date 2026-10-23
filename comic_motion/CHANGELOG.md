@@ -7,6 +7,21 @@ and `dart run bin/comic_motion.dart --version` share one version constant.
 > The full changelog in Chinese — including all historical entries — lives in
 > [doc/CHANGELOG_zh-CN.md](doc/CHANGELOG_zh-CN.md).
 
+## Unreleased
+
+### Part motion: every part rests on the first frame (`handMotion`)
+
+The per-part offset used to be fed straight into the sine phase as `i·π/4`,
+so only part 0 was at zero at `t=0`. On a page with two hands the first frame
+already pre-rotated one of them by `8·sin(π/4) ≈ 5.7°`, breaking the
+"rest frame == author's drawing" red line. Each part now subtracts the rest
+value of its own phase (`sin(φ)`) and divides by the resulting peak
+(`1+|sin φ|`): every part returns to rest at both `t=0` and `t=duration`,
+desynchronization still shows up as different timing and direction, and
+`ampDeg` remains the peak swing. Single-part output is unchanged; the
+two-hand page in `hand_acceptance` goes from rest=fail to 4/4 green. Neither
+the sidecar nor any config hash is affected.
+
 ## 1.5.0 (2026-10-07)
 
 Cheaper rendering, sharper recognition, action effects. **The serialized shape
@@ -278,7 +293,8 @@ freezes the interface the phase-3 AI sidecar will feed.
   Phase runs on `MotionMath.wave` (exactly 0 at t=0 — `snapWave` would pre-rotate
   the rest pose), with period aligned to whole cycles (`alignedPeriodSec`
   falls back to 1.0 s for non-finite or ≤0 input) and part *i* offset by `i·π/4`,
-  so **only part 0 rests at t=0**. Serialization is gated: the shipping default
+  so **only part 0 rests at t=0** (corrected for every part in the Unreleased
+  section). Serialization is gated: the shipping default
   JSON writes no `handMotion` segment, and while the effect is off the params
   enter neither the JSON nor `configHash`.
 - **Sidecar is a runtime input**, never config: `MotionPipeline(partMotion:)`

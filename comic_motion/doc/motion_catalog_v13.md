@@ -157,7 +157,7 @@ v1.3 解决「有没有动效」，v1.4 解决「动得像不像」：**该动�
 
 - **契约**：`part_motion.json`（`version: 1`，≤8 部件，归一化多边形轮廓 + 锚点）。`kind` 预留 `head|hand|arm|torso|hair|garment`，**本期只实现 `hand`**——其余 kind 解析通过但渲染侧跳过。
 - **输入通道**：`MotionPipeline(config, partMotion: '<json 文本>')`，与 `DepthEstimator` 同级的运行时侧车；**不进 `EffectConfig`、不进 `configHash`**，因此开启它不会改动任何既有指纹。`partMotionDigest` 落 ledger，产物目录带 `_<digest8>` 标签，调用方可证这次渲染用的是哪一份侧车。服务端入口：CLI `--part-motion <path>`（仅 `process`；`batch` 带该参数直接退出 64）与 HTTP `partMotionBase64`。
-- **形变**：`MeshWarper` 绕锚点的**衰减旋转**——手腕锚点固定、位移随到锚点的距离递增，配合 `featherPx = 2` 边缘羽化，观感是「挥手/示意」级节律摆动而非抬手。相位为 `i·π/4`，所以只有第 0 个部件在 `t=0` 处于静息位。
+- **形变**：`MeshWarper` 绕锚点的**衰减旋转**——手腕锚点固定、位移随到锚点的距离递增，配合 `featherPx = 2` 边缘羽化，观感是「挥手/示意」级节律摆动而非抬手。相位为 `i·π/4`；每个部件先扣掉该相位的静息值 `sin(φ)`，再按扣直流后的峰值 `1+|sin φ|` 归一化 ⇒ **所有部件在 `t=0` 都处于静息位**，错相只体现在摆动的时机与方向上，`ampDeg` 仍是每个部件的峰值摆角。
 - **波形选择**：走 `MotionMath.wave`（sin，`t=0` 恰为 0）而**不是** §7.3 的 `snapWave`——后者 `snapWave(0)≈0.34`，会把静帧预先拧歪，破坏「phase=0 ≡ 静帧」红线。
 - **只在 standard+ 生效**：整条通路在合成器 `_aa` 门控之后，legacy 档直接跳过 ⇒ v1.2 字节承诺不破。
 - **不传侧车 = 零成本**：`_initPartWarps` 在 parts 为 null/空、或效果未列出时早退；两侧基准（单页与两格页）的 GIF 摘要与并行扫描 FNV 与本特性合入前**逐字节相同**。
