@@ -28,6 +28,18 @@ const Duration _kUnfocusDuration = Duration(milliseconds: 280);
 const Duration _kBreathDuration = Duration(milliseconds: 2400);
 const Cubic _kFocusCurve = Cubic(0.2, 0, 0, 1);
 
+/// 页面动效模式（v1.6「需要动效时才展示动效」）。
+enum PageMotionMode {
+  /// 现状行为：聚焦期间呼吸光晕持续循环。
+  always,
+
+  /// 触发式：聚焦入场播一轮呼吸（约 2.4s）后静息为常亮轮廓，失焦再聚焦
+  /// 重播。GIF 本体的「播完归静」由引擎 v1.6 `EffectConfig.holdSec` 在
+  /// 容器层承担；陀螺仪/触摸视差（ParallaxGyroView）属用户输入驱动，
+  /// 不受本开关影响。
+  onDemand,
+}
+
 /// 分格聚焦互动层。
 class InteractivePageLayer extends StatefulWidget {
   const InteractivePageLayer({
@@ -47,6 +59,7 @@ class InteractivePageLayer extends StatefulWidget {
     this.respectReducedMotion = true,
     this.pauseWhenNotVisible = true,
     this.enableMotion,
+    this.motionMode = PageMotionMode.always,
     this.focusDuration = const Duration(milliseconds: 220),
     this.revealDuration = const Duration(milliseconds: 420),
     this.onFocusChanged,
@@ -105,6 +118,11 @@ class InteractivePageLayer extends StatefulWidget {
   /// App 动效策略钩子（W4）。
   final bool Function()? enableMotion;
 
+  /// 页面动效模式（[PageMotionMode]）。默认 [PageMotionMode.always] 与
+  /// 旧版行为逐帧一致；[PageMotionMode.onDemand] 下呼吸光晕只在聚焦入场
+  /// 播一轮，之后静息为常亮轮廓。
+  final PageMotionMode motionMode;
+
   /// 聚焦过渡时长。
   final Duration focusDuration;
 
@@ -158,6 +176,7 @@ class InteractivePageLayerState extends State<InteractivePageLayer>
       duration: widget.revealDuration,
     );
     _breathCtrl = AnimationController(vsync: this, duration: _kBreathDuration);
+    _breathCtrl.addStatusListener(_handleBreathStatus);
     _focusCtrl.addStatusListener(_handleFocusAnimationStatus);
     _controller.addListener(_handleFocusChange);
     _lastNotifiedFocus = _controller.primaryId;
@@ -198,6 +217,14 @@ class InteractivePageLayerState extends State<InteractivePageLayer>
     if (oldWidget.respectReducedMotion != widget.respectReducedMotion) {
       _applyReducedMotion(_computeReducedMotion());
     }
+    if (oldWidget.motionMode != widget.motionMode) {
+      // didUpdateWidget 之后必跟一次 build，无需显式 setState 翻转光晕。
+      if (widget.motionMode == PageMotionMode.onDemand) {
+        _breathCtrl.stop();
+      } else {
+        _startBreath();
+      }
+    }
     if (oldWidget.pauseWhenNotVisible != widget.pauseWhenNotVisible ||
         oldWidget.enableMotion != widget.enableMotion) {
       reassessMotion();
@@ -227,6 +254,9 @@ class InteractivePageLayerState extends State<InteractivePageLayer>
 
   /// 当前逻辑聚焦格（失焦为 null）。
   String? get focusedId => _controller.primaryId;
+
+  /// 呼吸光晕是否在播（onDemand 模式一轮播完即 false）。
+  bool get breathing => _breathCtrl.isAnimating;
 
   /// 全局坐标点击：换算到层内坐标并走命中/切换；消费本次点击返回 true。
   bool handleTap(Offset globalPosition) {
@@ -301,7 +331,22 @@ class InteractivePageLayerState extends State<InteractivePageLayer>
 
   void _startBreath() {
     if (_reducedMotion || !motionActive || _displayId == null) return;
+    if (widget.motionMode == PageMotionMode.onDemand) {
+      // 触发式（v1.6）：入场播一轮（去程+回程）即静息，见 _handleBreathStatus。
+      _breathCtrl.forward(from: 0);
+      return;
+    }
     if (!_breathCtrl.isAnimating) _breathCtrl.repeat(reverse: true);
+  }
+
+  void _handleBreathStatus(AnimationStatus status) {
+    if (widget.motionMode != PageMotionMode.onDemand) return;
+    if (status == AnimationStatus.completed) {
+      _breathCtrl.reverse();
+    } else if (status == AnimationStatus.dismissed && mounted) {
+      // 一轮播完：光晕回静息态（pulse 恒 1.0，不再脉动）。
+      setState(() {});
+    }
   }
 
   @override

@@ -3,6 +3,23 @@
 All notable changes to this project are documented in this file. Versioning
 follows [SemVer](https://semver.org/).
 
+## 0.3.0 (2026-10-23)
+
+### `PageMotionMode` — motion only when it matters (interactive layer)
+
+`InteractivePageLayer` gains `motionMode` (default `PageMotionMode.always` —
+previous behavior unchanged):
+
+- `onDemand`: the breathing glow plays ONE cycle (~2.4 s forward + reverse)
+  on each focus entrance, then rests as a steady outline; unfocus + refocus
+  replays it. The page GIF's own rest-after-motion is handled at container
+  level by the engine's `EffectConfig.holdSec` (1.7.0).
+- New `InteractivePageLayerState.breathing` getter exposes the glow state.
+- Runtime mode switches stop/restore the glow (`didUpdateWidget`).
+- Gyro/touch parallax (`ParallaxGyroView`) is user-input-driven and
+  unaffected by this switch.
+- Example app: choice chips toggle both modes live.
+
 ## 0.2.0 (2026-10-23)
 
 - **Interactive reading entrypoint** (`package:comic_motion_flutter/reader.dart`,

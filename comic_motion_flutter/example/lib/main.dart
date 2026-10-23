@@ -47,6 +47,7 @@ class _ExamplePageState extends State<ExamplePage> {
   InteractionFrameSet? _panFrames;
   String? _error;
   bool _playing = true;
+  PageMotionMode _motionMode = PageMotionMode.always;
 
   @override
   void initState() {
@@ -154,11 +155,33 @@ class _ExamplePageState extends State<ExamplePage> {
                   ),
                   const SizedBox(height: 24),
                   const _SectionTitle('InteractivePageLayer：点按聚焦 + 撕开揭示'),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text('动效模式：'),
+                      ChoiceChip(
+                        label: const Text('持续 (always)'),
+                        selected:
+                            _motionMode == PageMotionMode.always,
+                        onSelected: (_) => setState(
+                            () => _motionMode = PageMotionMode.always),
+                      ),
+                      const SizedBox(width: 8),
+                      ChoiceChip(
+                        label: const Text('触发式 (onDemand)'),
+                        selected:
+                            _motionMode == PageMotionMode.onDemand,
+                        onSelected: (_) => setState(
+                            () => _motionMode = PageMotionMode.onDemand),
+                      ),
+                    ],
+                  ),
                   AspectRatio(
                     aspectRatio: 1,
                     child: InteractivePageLayer(
                       interactive: true,
                       fit: BoxFit.cover,
+                      motionMode: _motionMode,
                       gifBytes: _gif!,
                       firstFramePng: _firstFrame,
                       child: _firstFrame == null
@@ -169,7 +192,9 @@ class _ExamplePageState extends State<ExamplePage> {
                   const SizedBox(height: 8),
                   const Text(
                     '点按页面聚焦并撕开揭示动效，再点收回；'
-                    '系统减弱动态时只保留首帧与聚焦轮廓。',
+                    '系统减弱动态时只保留首帧与聚焦轮廓。'
+                    'onDemand：聚焦入场只播一轮呼吸光晕，之后静息为常亮轮廓，'
+                    '再点同格收回、重新点入即重播。',
                     style: TextStyle(color: Colors.black54),
                   ),
                   const SizedBox(height: 24),

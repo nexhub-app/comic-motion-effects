@@ -40,6 +40,7 @@ InteractivePageLayer _layer({
   GlobalKey<InteractivePageLayerState>? key,
   bool reduced = false,
   bool interactive = false,
+  PageMotionMode motionMode = PageMotionMode.always,
   Widget? child,
   void Function(String?)? onFocusChanged,
 }) =>
@@ -49,6 +50,7 @@ InteractivePageLayer _layer({
       firstFramePng: _pngBytes,
       respectReducedMotion: reduced,
       interactive: interactive,
+      motionMode: motionMode,
       onFocusChanged: onFocusChanged,
       child: child,
     );
@@ -350,5 +352,107 @@ void main() {
     expect(key.currentState!.focusedId, 'a');
     key.currentState!.unfocus();
     expect(key.currentState!.focusedId, isNull);
+  });
+
+  // ---- motionMode（v1.6「需要动效时才展示动效」）----
+
+  /// 500ms 步进推进直至呼吸停止（上限 [maxSteps]）。
+  ///
+  /// 不用零程 pump / 大步长 pump：测试绑定下动画时钟与零程帧的对齐有
+  /// 偏差（探针实测 reverse 段会被拉长一倍），步进推进只锁契约不锁帧。
+  Future<void> pumpUntilRested(WidgetTester tester,
+      {int maxSteps = 14}) async {
+    for (var i = 0; i < maxSteps; i++) {
+      await tester.pump(const Duration(milliseconds: 500));
+      if (!tester.state<InteractivePageLayerState>(
+              find.byType(InteractivePageLayer))
+          .breathing) {
+        return;
+      }
+    }
+  }
+
+  testWidgets('onDemand：聚焦入场播一轮呼吸后静息，不再循环', (tester) async {
+    final key = GlobalKey<InteractivePageLayerState>();
+    await tester.pumpWidget(
+        _host(_layer(key: key, motionMode: PageMotionMode.onDemand)));
+    await tester.pump();
+
+    final box = tester.renderObject<RenderBox>(
+        find.byType(InteractivePageLayer));
+    key.currentState!.handleTap(box.localToGlobal(const Offset(50, 50)));
+    await tester.pump();
+    expect(key.currentState!.breathing, isTrue, reason: '入场播一轮呼吸');
+
+    await pumpUntilRested(tester);
+    expect(key.currentState!.breathing, isFalse,
+        reason: '一轮（去程+回程）播完静息');
+
+    for (var i = 0; i < 12; i++) {
+      await tester.pump(const Duration(milliseconds: 500));
+    }
+    expect(key.currentState!.breathing, isFalse, reason: '静息后不再循环');
+  });
+
+  testWidgets('onDemand：失焦再聚焦重播一轮', (tester) async {
+    final key = GlobalKey<InteractivePageLayerState>();
+    await tester.pumpWidget(
+        _host(_layer(key: key, motionMode: PageMotionMode.onDemand)));
+    await tester.pump();
+
+    final box = tester.renderObject<RenderBox>(
+        find.byType(InteractivePageLayer));
+    key.currentState!.handleTap(box.localToGlobal(const Offset(50, 50)));
+    await tester.pump();
+    await pumpUntilRested(tester);
+    expect(key.currentState!.breathing, isFalse);
+
+    key.currentState!.handleTap(box.localToGlobal(const Offset(50, 50)));
+    // 失焦：focus reverse（280ms）在测试绑定时钟下按 ~2 倍对齐（见
+    // _pumpUntilRested 注），两帧 500ms 确保 dismissed 落地、displayId 清空，
+    // 否则再点同格不触发 _beginFocus、无重播。
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(milliseconds: 500));
+    key.currentState!.handleTap(box.localToGlobal(const Offset(50, 50)));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(key.currentState!.breathing, isTrue, reason: '重新入场重播');
+  });
+
+  testWidgets('always（默认）：聚焦期间呼吸持续循环', (tester) async {
+    final key = GlobalKey<InteractivePageLayerState>();
+    await tester.pumpWidget(_host(_layer(key: key)));
+    await tester.pump();
+
+    final box = tester.renderObject<RenderBox>(
+        find.byType(InteractivePageLayer));
+    key.currentState!.handleTap(box.localToGlobal(const Offset(50, 50)));
+    await tester.pump();
+
+    await tester.pump(const Duration(milliseconds: 2400));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 2400));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump();
+    expect(key.currentState!.breathing, isTrue, reason: '默认行为不变：持续呼吸');
+  });
+
+  testWidgets('motionMode 运行时切换：onDemand 停呼吸，切回 always 恢复', (tester) async {
+    final key = GlobalKey<InteractivePageLayerState>();
+    await tester.pumpWidget(_host(_layer(key: key)));
+    await tester.pump();
+
+    final box = tester.renderObject<RenderBox>(
+        find.byType(InteractivePageLayer));
+    key.currentState!.handleTap(box.localToGlobal(const Offset(50, 50)));
+    await tester.pump();
+    expect(key.currentState!.breathing, isTrue);
+
+    await tester.pumpWidget(
+        _host(_layer(key: key, motionMode: PageMotionMode.onDemand)));
+    expect(key.currentState!.breathing, isFalse, reason: '切到 onDemand 立即静息');
+
+    await tester.pumpWidget(_host(_layer(key: key)));
+    expect(key.currentState!.breathing, isTrue, reason: '切回 always 恢复持续呼吸');
   });
 }
