@@ -93,6 +93,39 @@ PageCurlView(
 )
 ```
 
+### InteractivePageLayer — focus-and-tear interactive reading
+
+Opt-in overlay from a separate entrypoint
+(`package:comic_motion_flutter/reader.dart`). Tap the center of a page or
+panel: the focused region stays sharp and animated while the rest dims, and
+the animation is revealed with a 420ms zigzag tear. Tap again to dismiss.
+Three tiers:
+
+- **T0 whole page** — no manifest; uses the existing full-page GIF;
+- **T1 panels** — `comic_panels` JSON with normalized rects; focus one panel,
+  dim the rest, clip the full-page GIF to the focused panel;
+- **T2 per-panel clips** — manifest `clip.asset` plus host-loaded bytes.
+
+```dart
+InteractivePageLayer(
+  gifBytes: gif,
+  firstFramePng: cover,
+  child: page,            // omit for a pure overlay (host already draws the page)
+  // manifest: PanelManifest.fromBytes(jsonBytes),
+  // imageSize: pageSize, // required for T1
+  // controller: focusController,
+  // gazeStream: gaze,    // normalized [0,1] page coordinates
+  // interactive: true,   // host has no gesture layer
+)
+```
+
+Hosts that own the reader gesture layer call
+`state.handleTap(globalPosition)` through a `GlobalKey` instead of enabling
+`interactive`. Reduced motion keeps the static first frame and the focus
+outline without tear/breathing/scale; power suppression pauses GIF playback
+and breathing. `PanelManifest`, `PanelLayout`, and `PanelFocusController` are
+plain-Dart pieces and unit-testable without a widget tree.
+
 ## Pure-Dart helpers (unit-testable without Flutter)
 
 - `loadInteractionSets(dir)` — load `<...>_interactive/` from disk;
@@ -113,7 +146,7 @@ PageCurlView(
 
 ```yaml
 dependencies:
-  comic_motion_flutter: ^0.1.0
+  comic_motion_flutter: ^0.2.0
 ```
 
 Inside this monorepo the packages wire up with `pubspec_overrides.yaml`

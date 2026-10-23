@@ -11,6 +11,7 @@ import 'dart:typed_data';
 
 import 'package:comic_motion/comic_motion.dart';
 import 'package:comic_motion_flutter/comic_motion_flutter.dart';
+import 'package:comic_motion_flutter/reader.dart';
 import 'package:flutter/material.dart';
 
 void main() => runApp(const ExampleApp());
@@ -150,6 +151,26 @@ class _ExamplePageState extends State<ExamplePage> {
                         icon: const Icon(Icons.replay),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 24),
+                  const _SectionTitle('InteractivePageLayer：点按聚焦 + 撕开揭示'),
+                  AspectRatio(
+                    aspectRatio: 1,
+                    child: InteractivePageLayer(
+                      interactive: true,
+                      fit: BoxFit.cover,
+                      gifBytes: _gif!,
+                      firstFramePng: _firstFrame,
+                      child: _firstFrame == null
+                          ? const ColoredBox(color: Colors.black12)
+                          : Image.memory(_firstFrame!, fit: BoxFit.cover),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '点按页面聚焦并撕开揭示动效，再点收回；'
+                    '系统减弱动态时只保留首帧与聚焦轮廓。',
+                    style: TextStyle(color: Colors.black54),
                   ),
                   const SizedBox(height: 24),
                   if (_panFrames != null) ...[

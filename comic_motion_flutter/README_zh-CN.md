@@ -85,6 +85,36 @@ PageCurlView(
 )
 ```
 
+### InteractivePageLayer —— 聚焦撕开式互动阅读
+
+独立入口（`package:comic_motion_flutter/reader.dart`）提供的可选覆盖层。
+点按页面/分格中心：聚焦区域保持清晰并播放动效，其余区域压暗，动效以
+420ms 斜锯齿撕开揭示；再点收回。三层体验：
+
+- **T0 整页**——无需清单，复用现成整页 GIF；
+- **T1 分格**——`comic_panels` JSON 提供归一化矩形，聚焦格裁剪整页 GIF，
+  其余压暗；
+- **T2 格素材**——清单 `clip.asset` + 宿主加载的每格字节。
+
+```dart
+InteractivePageLayer(
+  gifBytes: gif,
+  firstFramePng: cover,
+  child: page,            // 宿主已画静态页时省略，作纯覆盖层
+  // manifest: PanelManifest.fromBytes(jsonBytes),
+  // imageSize: pageSize, // T1 必填
+  // controller: focusController,
+  // gazeStream: gaze,    // 归一化 [0,1] 页面坐标
+  // interactive: true,   // 外层无手势层时
+)
+```
+
+外层已有阅读器手势层时不要开 `interactive`，改用 `GlobalKey` 调
+`state.handleTap(globalPosition)`。系统减弱动态下保留静帧与聚焦轮廓，
+无撕开/呼吸/缩放；功耗抑制时暂停 GIF 与呼吸。`PanelManifest`、
+`PanelLayout`、`PanelFocusController` 均为纯 Dart 构件，可脱离 widget
+树单测。
+
 ## 纯 Dart 辅助工具（不依赖 Flutter 即可单测）
 
 - `loadInteractionSets(dir)`——从磁盘加载 `<...>_interactive/` 目录；
@@ -104,7 +134,7 @@ PageCurlView(
 
 ```yaml
 dependencies:
-  comic_motion_flutter: ^0.1.0
+  comic_motion_flutter: ^0.2.0
 ```
 
 monorepo 内各包以 `pubspec_overrides.yaml` 的 path 依赖互联，见

@@ -3,6 +3,29 @@
 All notable changes to this project are documented in this file. Versioning
 follows [SemVer](https://semver.org/).
 
+## 0.2.0 (2026-10-23)
+
+- **Interactive reading entrypoint** (`package:comic_motion_flutter/reader.dart`,
+  kept separate from the main exports): `PanelManifest` / `PanelSpec`
+  (`comic_panels` JSON with strict validation), `PanelLayout` (all `BoxFit`
+  modes, q0–q3 rotation mapping, smallest-panel hit test), and
+  `PanelFocusController` (exclusive/multi focus, tap toggle, gaze dwell and
+  release with manual takeover, timer-safe disposal).
+- **`InteractivePageLayer`** — three tiers: T0 whole page (no manifest, uses
+  the existing full-page GIF), T1 panels (`comic_panels` rects clip the
+  full-page GIF to the focused panel), T2 per-panel clips via `panelClips`.
+  Tap center to focus and tear-reveal, tap again to dismiss; the rest dims.
+  Optional `hoverToFocus`, normalized `gazeStream`, external controller, and
+  `handleTap(globalPosition)` for hosts that own the gesture layer (avoids
+  fighting a transparent reader overlay).
+- **Motion**: 220ms focus (`Cubic(0.2, 0, 0, 1)`), 0.42 dim, 0.22 glow with
+  2.4s breathing, 1.012 panel scale, 420ms zigzag tear with a 1.5px
+  highlight, 280ms unfocus. Reduced motion keeps the static first frame and
+  the focus outline without tear/breathing/scale (no GIF decode); power
+  awareness stops GIF playback and breathing when suppressed.
+- Tests: manifest validation/round-trip, layout across fit modes and
+  rotations, focus timers, T0/T1/T2 widget behavior, reduced motion, dispose.
+
 ## 0.1.1 (2026-09-29)
 
 - **Dependencies**: `sensors_plus` `^6.1.1` → `^7.0.0`. The 7.0.0 breaking

@@ -16,6 +16,9 @@
 ///
 /// 核心包保持纯 Dart（零 Flutter 依赖），本包单向依赖它——见核心包
 /// README「生态」。
+///
+/// 互动阅读（分格聚焦 / 撕开揭示）在独立入口 `reader.dart`，不混入本
+/// 命名空间。
 library;
 
 export 'src/motion_gif_view.dart';
