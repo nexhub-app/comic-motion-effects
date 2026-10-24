@@ -1,0 +1,19 @@
+name: comic_motion_depth_onnx
+description: >-
+  ONNX (MiDaS) on-device depth estimator for comic_motion: implements the
+  engine's DepthEstimator seam with onnxruntime_v2. Opt-in; keep the core
+  engine free of native dependencies.
+version: 0.1.0
+publish_to: 'none'
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+dependencies:
+  flutter:
+    sdk: flutter
+  comic_motion: ^1.8.0
+  onnxruntime_v2: ^1.23.2+2
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  test: ^1.25.0
+  lints: ^4.0.0
