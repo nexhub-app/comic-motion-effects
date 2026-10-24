@@ -240,4 +240,119 @@ void main() {
       }
     });
   });
+
+  group('motionGateFactory（v1.8）：后台 isolate 内创建并生效', () {
+    Map<String, dynamic> gateCfgJson() => <String, dynamic>{
+          'effects': ['parallax'],
+          'fps': 12,
+          'durationSec': 0.5,
+          'maxDimension': 120,
+          'layerCount': 3,
+          'panelAware': false,
+          'outputFormat': 'gif',
+          'seed': 7,
+        };
+
+    test('压制语义穿透后台入口：平坦深度 → 单帧 + warning', () async {
+      final bytes =
+          Uint8List.fromList(ImageIO.encodePngFrame(gradientRaster()));
+      final r = await processBytesInBackground(
+        input: bytes,
+        config: EffectConfig.fromJson(gateCfgJson()),
+        depthEstimatorFactory: () => const FlatConstantDepthEstimator(),
+        motionGateFactory: () => const DepthSpreadGate(minSpread: 0.08),
+      );
+      expect(r.frameCount, 1);
+      expect(r.warnings.join('\n'), contains('motion gate'));
+    });
+
+    test('不传 motionGateFactory：同一平坦深度照常全帧（默认路径零变化）', () async {
+      final bytes =
+          Uint8List.fromList(ImageIO.encodePngFrame(gradientRaster()));
+      final r = await processBytesInBackground(
+        input: bytes,
+        config: EffectConfig.fromJson(gateCfgJson()),
+        depthEstimatorFactory: () => const FlatConstantDepthEstimator(),
+      );
+      expect(r.frameCount, 6);
+    });
+  });
+
+  group('scene/panelMotionJudgeFactory（v1.9）：后台 isolate 内创建并生效', () {
+    /// 全页文字主导图（白底 + 密集小暗斑）：内置启发式判静。
+    RgbaImage textRaster() {
+      final img = RgbaImage(width: 120, height: 120);
+      for (var y = 0; y < 120; y++) {
+        for (var x = 0; x < 120; x++) {
+          img.setPixel(x, y, 255, 255, 255);
+        }
+      }
+      for (var gy = 2; gy < 118; gy += 7) {
+        for (var gx = 2; gx < 118; gx += 7) {
+          for (var dy = 0; dy < 3; dy++) {
+            for (var dx = 0; dx < 3; dx++) {
+              img.setPixel(gx + dx, gy + dy, 30, 30, 30);
+            }
+          }
+        }
+      }
+      return img;
+    }
+
+    Map<String, dynamic> sceneCfgJson() => <String, dynamic>{
+          'effects': ['parallax'],
+          'fps': 12,
+          'durationSec': 0.5,
+          'maxDimension': 120,
+          'layerCount': 3,
+          'panelAware': false,
+          'outputFormat': 'gif',
+          'seed': 7,
+        };
+
+    test('judge 工厂穿透后台入口：文字主导页 → 单帧 + scene gate warning',
+        () async {
+      final bytes =
+          Uint8List.fromList(ImageIO.encodePngFrame(textRaster()));
+      final r = await processBytesInBackground(
+        input: bytes,
+        config: EffectConfig.fromJson(sceneCfgJson()),
+        panelMotionJudgeFactory: () => const HeuristicPanelMotionJudge(),
+      );
+      expect(r.frameCount, 1);
+      expect(r.warnings.join('\n'), contains('scene gate'));
+    });
+
+    test('scene 侧车穿透后台入口：判静文字格 → 单帧', () async {
+      final bytes =
+          Uint8List.fromList(ImageIO.encodePngFrame(textRaster()));
+      final r = await processBytesInBackground(
+        input: bytes,
+        config: EffectConfig.fromJson(sceneCfgJson()),
+        scene:
+            '{"version":1,"panels":[{"x":0,"y":0,"w":1,"h":1,"motion":false}]}',
+      );
+      expect(r.frameCount, 1);
+      expect(r.sceneDigest, isNotNull);
+    });
+
+    test('两者皆缺省：同一文字页照常全帧（默认路径零变化）', () async {
+      final bytes =
+          Uint8List.fromList(ImageIO.encodePngFrame(textRaster()));
+      final r = await processBytesInBackground(
+        input: bytes,
+        config: EffectConfig.fromJson(sceneCfgJson()),
+      );
+      expect(r.frameCount, 6);
+    });
+  });
+}
+
+/// 恒值（全 0）深度估算器：动效门槛判定为「深度平坦」。
+class FlatConstantDepthEstimator implements DepthEstimator {
+  const FlatConstantDepthEstimator();
+
+  @override
+  DepthMap estimate(RgbaImage img) =>
+      DepthMap(img.width, img.height)..constantValued = true;
 }

@@ -14,6 +14,30 @@
 `hand_acceptance` 的双部件页由 rest=fail 转为 4/4 全绿。侧车与配置指纹
 均不受影响。
 
+## 1.8.0（2026-10-24）
+
+动效门槛：「页面有值得动的深度才动」。**纯执行期依赖——不进
+`EffectConfig`，configHash 逐字节不变；不传 gate 的默认路径逐字节零变化。**
+
+### `MotionGate` 接缝 + 内置 `DepthSpreadGate`
+
+`MotionPipeline` 新增可选 `motionGate` 参数（完全镜像 `depthEstimator`
+接缝）。管线在深度估算之后、帧渲染之前询问「该页该不该动」；判定否决时
+把输出钳到单帧静态图——与 `reducedMotion` 同一输出形态（探针/派工/进度
+全部按 n=1 自然退化，零新路径）。内置 `DepthSpreadGate` 以深度分位跨度
+（p90−p10，最近秩分位，与切层阈值同口径）判定平坦；panelAware 多格路径
+任一格达标即动画。默认阈值 `kDefaultDepthSpreadMin`（0.11）来自 30 页
+样本的分布勘察（region-wrapped MiDaS 深度）：样本内没有平坦页（最低内容
+页 spread 0.2256），故取其一半作安全余量，不对任何单页调参。被压制的页
+面携带 `motion gate: depth too flat, rendered static frame` 告警；压制页
+跳过 `holdSec`（单帧无需静息保持）。
+
+### 后台入口新增 `motionGateFactory`
+
+`processFileInBackground` / `processBytesInBackground` 新增
+`motionGateFactory`，传递语义与 `depthEstimatorFactory` 完全一致：工厂在
+后台 isolate 内调用一次，必须可跨 isolate 发送。null（默认）= 永远动画。
+
 ## 1.5.0（2026-10-07）
 
 省资源 + 精确识别 + 动作动效。**默认配置的序列化形状与

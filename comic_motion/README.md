@@ -377,6 +377,13 @@ layering byte-identical to `panelAware: false`. Orthogonal with strip mode (each
 slice runs the standard pipeline, panel detection applies within the
 slice). Nested vertical sub-panels are future work.
 
+Depth itself is pluggable: pass any `DepthEstimator` to the pipeline (the
+region-coherent wrapper shipped since v1.6 keeps ML depth stable inside
+author-drawn regions), and pair it with the `MotionGate` seam (v1.8) to
+render flat-depth pages as a single static frame. For on-device ML depth
+see the opt-in companion package `comic_motion_depth_onnx` (MiDaS v2.1
+small 256 via onnxruntime_v2; the core engine stays native-free).
+
 ### High-fps APNG (opt-in, 60 fps)
 
 `outputFormat: apng` supports two extra encoding knobs (see

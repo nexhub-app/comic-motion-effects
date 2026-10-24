@@ -38,6 +38,7 @@ import 'frame_compositor.dart';
 import 'image_io.dart';
 import 'image_model.dart';
 import 'pipeline.dart';
+import 'text_sharp.dart';
 
 /// 视差采样轴。
 enum InteractionAxis { horizontal, vertical, both }
@@ -211,8 +212,14 @@ Future<InteractionExportResult> _runInteractionExport(
     // 位移重算图层」的实时通路，而部位动作是预渲染通路的性质（只预渲染裁定）。
     // 形变计划绑定的是静态多边形坐标，实时拖拽下没有意义，接上只会让两条通路
     // 对同一张图给出不同画面。
-    final compositor =
-        FrameCompositor(layers, working, cfg, anchors: anchors);
+    // text sharp（v1.10）：交互帧同样消费文字掩码——分数相位位移（用户
+    // 手驱 phase ∈ [-1,1] 连续值）不再对文字做插值。
+    final textSnapMask =
+        cfg.quality.textSharp && cfg.quality.tier.atLeastStandard
+            ? detectTextSnapMask(working)
+            : null;
+    final compositor = FrameCompositor(layers, working, cfg,
+        anchors: anchors, textSnapMask: textSnapMask);
 
     // 均匀采样 [-1, 1]，含两端点：phases[i] = -1 + 2i/(steps-1)。
     final phases = <double>[

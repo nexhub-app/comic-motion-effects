@@ -25,3 +25,26 @@ double snapWave(double u) {
       0.18 * math.sin(3 * w);
   return raw / _peak;
 }
+
+/// snapWave 在 u=0（与 u=0.5，rank·π 视差相位的两个静息点）的直流值
+/// 0.42 / 1.24 —— v1.9 及之前 t=0 帧因此带 ~34% 幅度的分数位移（首帧/
+/// 静息帧整页被重采样，文字发虚的直接根源之一）。
+const double kSnapWaveRestOffset = 0.42 / _peak;
+
+/// 静息归零的张力波形（文字保真 v1.10）：`restSnapWave(u, uRest)` 在
+/// `u == uRest` 处精确为 0，其余形状与 [snapWave] 同族。
+///
+/// 每条通道（每层的横/竖视差）以自己的 t=0 相位 [uRest] 为静息点：位移
+/// `d(t) = (snapWave(u(t)) − snapWave(uRest)) / (1 + |snapWave(uRest)|)`。
+/// - t=0 ⇒ u=uRest ⇒ 位移精确 0（首帧/静息帧 = 原画，逐字节不再重采样）；
+/// - 无缝：一个动效周期内 u 推进整数圈 ⇒ u(dur)=u(0)=uRest，端点相等；
+/// - 峰值归一：除以 `1 + |snapWave(uRest)|`（最坏 uRest=直流点时 1.339），
+///   通道峰值仍 ≤1，amplitude 参数语义（峰值像素幅度）保持；
+/// - 纯函数、无状态，确定性不受影响。
+///
+/// uRest 恒取各通道 t=0 的相位（视差 rank·π/相位跟随偏移/节奏周期都只
+/// 平移 u），因此每条通道独立归零，混合层栈在 t=0 整体归位。
+double restSnapWave(double u, double uRest) {
+  final base = snapWave(uRest);
+  return (snapWave(u) - base) / (1.0 + base.abs());
+}

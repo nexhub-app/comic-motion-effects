@@ -1383,6 +1383,7 @@ class QualityParams {
     this.tier = RenderTier.standard,
     this.mipLevels = 2,
     this.edgeStretchPx = 6,
+    this.textSharp = false,
   });
 
   /// 误差扩散抖动：减轻 GIF 256 色渐变色带，但把 GIF 字节乘 2.2–2.4×（高频噪声
@@ -1407,8 +1408,24 @@ class QualityParams {
   /// 层边缘色外扩像素（0..16），消除视差位移时的露底双边。
   final int edgeStretchPx;
 
+  /// 文字保真（text sharp，v1.10，默认关闭 = 既有路径逐字节不变）：开启时
+  /// （standard+ 档；legacy 冻结不接，静默无操作）两件事生效——
+  /// 1. **文字整数采样**：对工作分辨率底图检测文字笔画区域（`text_sharp.dart`
+  ///    分布定值阈值），掩码命中像素在层贴图时整数取整采样，视差/呼吸的分数
+  ///    位移不再对文字做插值（半像素混合是文字发虚的直接根源）；
+  /// 2. **静息归零波形**：时间驱动视差/震屏的 snapWave 载体改走
+  ///    [restSnapWave]（以各通道 t=0 相位为静息点）——t=0 静息帧/hold 帧
+  ///    位移精确 0，首帧与静息保持帧 = 原画（v1.9 及之前 snapWave(0)≈0.3387
+  ///    的直流偏置让最常展示的 hold 帧整页被重采样）。
+  ///
+  /// 显式 opt-in（默认 false）：默认翻转会改写所有动画页的输出像素，按
+  /// 「哈希即身份」红线必须在版本收口（Phase F re-baseline）时与版本号一起
+  /// 裁决，不在本参数引入时静默发生。
+  final bool textSharp;
+
   /// 省略哨兵（v1.4 裁决 R32，R38 同步 dither 一源）：全等于**当前默认**
-  /// （standard/sierra/**false** + mipLevels 2 / edgeStretchPx 6）才整段不序列化。
+  /// （standard/sierra/**false** + mipLevels 2 / edgeStretchPx 6 /
+  /// textSharp false）才整段不序列化。
   ///
   /// 「等于默认就不写」这个习语只有在 **省略哨兵 == 缺键兜底 == 构造默认**
   /// 三者锁步时 JSON 才是无损的。Task 3.6 的 R24 只翻了构造默认与缺键兜底、
@@ -1430,20 +1447,23 @@ class QualityParams {
       ditherMode == 'sierra' &&
       tier == RenderTier.standard &&
       mipLevels == 2 &&
-      edgeStretchPx == 6;
+      edgeStretchPx == 6 &&
+      !textSharp;
 
   QualityParams copyWith(
           {bool? dither,
           String? ditherMode,
           RenderTier? tier,
           int? mipLevels,
-          int? edgeStretchPx}) =>
+          int? edgeStretchPx,
+          bool? textSharp}) =>
       QualityParams(
         dither: dither ?? this.dither,
         ditherMode: ditherMode ?? this.ditherMode,
         tier: tier ?? this.tier,
         mipLevels: mipLevels ?? this.mipLevels,
         edgeStretchPx: edgeStretchPx ?? this.edgeStretchPx,
+        textSharp: textSharp ?? this.textSharp,
       );
 
   /// 逐键条件序列化（R32，R38 把 dither 一并纳入逐键口径）：**每个键都
@@ -1459,6 +1479,7 @@ class QualityParams {
         if (tier != RenderTier.standard) 'tier': tier.name,
         if (mipLevels != 2) 'mipLevels': mipLevels,
         if (edgeStretchPx != 6) 'edgeStretchPx': edgeStretchPx,
+        if (textSharp) 'textSharp': true,
       };
 
   /// 缺键兜底与构造默认**锁步**（R24），且与 `isDefault`/`toJson` 的**省略
@@ -1480,6 +1501,7 @@ class QualityParams {
         mipLevels: ((j['mipLevels'] as num?)?.toInt() ?? 2).clamp(1, 2),
         edgeStretchPx:
             ((j['edgeStretchPx'] as num?)?.toInt() ?? 6).clamp(0, 16),
+        textSharp: j['textSharp'] as bool? ?? false,
       );
 }
 

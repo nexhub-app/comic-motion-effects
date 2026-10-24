@@ -7,6 +7,37 @@ and `dart run bin/comic_motion.dart --version` share one version constant.
 > The full changelog in Chinese — including all historical entries — lives in
 > [doc/CHANGELOG_zh-CN.md](doc/CHANGELOG_zh-CN.md).
 
+## 1.8.0 (2026-10-24)
+
+Motion gate: "render motion only when the page has depth worth animating."
+**Execution-time dependency only — nothing enters `EffectConfig`, the
+`configHash` is byte-identical, and the default path (no gate passed) is
+unchanged byte for byte.**
+
+### `MotionGate` seam + built-in `DepthSpreadGate`
+
+`MotionPipeline` accepts an optional `motionGate` (mirrors the
+`depthEstimator` seam). After depth estimation and before frame rendering the
+pipeline asks the gate "should this page animate?"; a `false` verdict clamps
+the output to a single static frame — the same output shape `reducedMotion`
+already produces (probe / dispatch / progress all degrade naturally at n=1,
+no new code path). The built-in `DepthSpreadGate` judges flatness by the
+depth spread (p90−p10, nearest-rank quantiles, same convention as the layer
+thresholds); panel-aware paths animate if ANY panel passes. The default
+threshold `kDefaultDepthSpreadMin` (0.11) comes from a distribution survey of
+30 sample pages (region-wrapped MiDaS depth): the sample contains no flat
+pages (lowest content-page spread 0.2256), so the threshold takes half that
+minimum as a safety margin rather than tuning to any single page. Suppressed
+pages carry a `motion gate: depth too flat, rendered static frame` warning;
+`holdSec` is skipped on a suppressed page (a single frame needs no rest hold).
+
+### `motionGateFactory` on the background entries
+
+`processFileInBackground` / `processBytesInBackground` accept
+`motionGateFactory` with exactly the transfer semantics of
+`depthEstimatorFactory`: the factory runs once inside the background isolate
+and must be sendable. Null (default) = always animate.
+
 ## 1.7.0 (2026-10-23)
 
 Rest-hold container output for the "motion only when it matters" reading

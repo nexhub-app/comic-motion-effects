@@ -28,8 +28,18 @@ class FrameCompositor {
   FrameCompositor(this.layers, this.base, this.config,
       {AnchorMap? anchors,
       List<PartMotion>? parts,
-      bool enableStaticCache = true})
-      : w = base.width,
+      bool enableStaticCache = true,
+      this.depthSpreadScale = 1.0,
+      List<double>? layerMotionScales,
+      List<double>? layerPhaseOffsets,
+      List<double>? layerTempoScales,
+      this.textSnapMask})
+      : layerMotionScales = layerMotionScales,
+        layerPhaseOffsets = layerPhaseOffsets,
+        layerTempoScales = layerTempoScales,
+        _restAligned = config.quality.textSharp &&
+            config.quality.tier.atLeastStandard,
+        w = base.width,
         h = base.height,
         _anchors = anchors,
         _staticCompositeCacheable =
@@ -55,6 +65,14 @@ class FrameCompositor {
                         layers[i].depthRank /
                         math.max(1, maxRank)
                 : 0.25 + 0.75 * i / math.max(1, layers.length - 1));
+    // 动效画面判断（v1.9）：格级裁决乘入层倍率。null = 不参与（零变化）；
+    // 长度不足的层按 1.0（管线是唯一生产者且保证等长，此处只作防御）。
+    final lms = layerMotionScales;
+    if (lms != null) {
+      for (var i = 0; i < _mult.length && i < lms.length; i++) {
+        _mult[i] *= lms[i];
+      }
+    }
     _rng = DeterministicRandom(config.seed);
     // Reference the rasters directly — they are read-only for the whole
     // animation (frames render into fresh buffers), so copying would just
@@ -92,6 +110,10 @@ class FrameCompositor {
     AnchorMap? anchors,
     List<PartMotion>? parts,
     bool enableStaticCache = true,
+    List<double>? layerMotionScales,
+    List<double>? layerPhaseOffsets,
+    List<double>? layerTempoScales,
+    Uint8List? textSnapMask,
   }) {
     final ls = [
       for (var i = 0; i < layers.length; i++)
@@ -101,7 +123,13 @@ class FrameCompositor {
     ];
     return FrameCompositor(
         ls, RgbaImage.fromBytes(width: w, height: h, data: base), config,
-        anchors: anchors, parts: parts, enableStaticCache: enableStaticCache);
+        anchors: anchors,
+        parts: parts,
+        enableStaticCache: enableStaticCache,
+        layerMotionScales: layerMotionScales,
+        layerPhaseOffsets: layerPhaseOffsets,
+        layerTempoScales: layerTempoScales,
+        textSnapMask: textSnapMask);
   }
 
   // ---- v1.1 新动效状态（各自独立随机流，不扰动经典路径的 _rng 序列）----
@@ -634,8 +662,12 @@ class FrameCompositor {
     // Task 3.4（§6.2/R17）：standard+ 用 snapWave 张力波替换正弦载体。θ =
     // 2π·_shakeRattle·pos，折成 u = θ/2π = _shakeRattle·pos（频率与相位逐字
     // 保持，3·shakes 整数周期 ⇒ 循环仍闭合）。legacy 分支冻结为原 sin 表达式。
-    final osc =
-        _aa ? snapWave(_shakeRattle * pos) : math.sin(2 * math.pi * _shakeRattle * pos);
+    // text sharp 静息归零：t=0（pos=0，首爆点 env=1）不再带 34% 直流位移。
+    final osc = _aa
+        ? (_restAligned
+            ? restSnapWave(_shakeRattle * pos, 0.0)
+            : snapWave(_shakeRattle * pos))
+        : math.sin(2 * math.pi * _shakeRattle * pos);
     final amp = p.amplitude.clamp(0.0, 0.12) * w * env * osc;
     final b = bursts[k];
     return (b.dirX * amp, b.dirY * amp);
@@ -905,13 +937,46 @@ class FrameCompositor {
   /// 本帧生效的包络因子，由 [renderFrame] 在入口处刷新一次。
   EnvelopeFactors _env = EnvelopeFactors.identity;
 
+  /// 深度自适应幅度（v1.9）：时间驱动视差的 ampPx 统一乘数，来源 =
+  /// clamp(region-wrapped 深度 spread / kDepthSpreadRef, 0, 1)（管线按
+  /// constantValued 计算后传入）。默认 1.0 = 既有字节逐位不变；交互式
+  /// 视差（parallaxOverride）与静帧/导出路径不受影响。
+  final double depthSpreadScale;
+
+  /// 动效画面判断的逐层幅度乘数（v1.9，与 [layers] 等长；null = 不参与，
+  /// 既有路径逐字节零变化）。来源 = 管线的格级裁决（scene 侧车优先、
+  /// 未命中格回落 [HeuristicPanelMotionJudge]，见 `scene_motion.dart`），
+  /// 层序映射到格（层 clip 与格矩形恒等）。构造期乘入 [_mult]——语义是
+  /// 「该格的层不该动」，只作用于时间驱动视差位移。
+  final List<double>? layerMotionScales;
+
+  /// Phase D6 主体层相位跟随：逐层视差相位偏移（弧度）。主体层 −π → 与
+  /// 相邻背景带同相（随动+领跑，替代反相对滑的贴纸感）。null/0 = 零变化。
+  final List<double>? layerPhaseOffsets;
+
+  /// Phase E 画面自适应：逐层节奏乘数（>1 加快、<1 放慢）。整数周期数
+  /// 口径（无缝循环契约不破）；1.0 走原表达式逐字节不变。
+  final List<double>? layerTempoScales;
+
   late List<double> _mult;
   late DeterministicRandom _rng;
   late List<_Particle> _particles;
-  late List<Uint8List>
-      _layerPixels; // per-layer cached raster (no per-frame copy)
+  late List<Uint8List> _layerPixels; // per-layer cached raster (no per-frame copy)
   late List<PixelRect?> _layerClips; // W5 分格裁剪（null = 全画布）
   late Uint8List _basePixels;
+
+  /// 文字保真（text sharp v1.10）：位打包源坐标文字掩码（`text_sharp.dart`）。
+  /// 非 null 时层贴图对掩码命中像素整数取整采样（分数位移不产生插值中间灰）。
+  /// null = 通道关闭（零变化）。随 [FrameJobSpec] 跨 isolate 下发，worker 侧
+  /// [FrameCompositor.fromRasters] 重建时携带。
+  final Uint8List? textSnapMask;
+
+  /// 静息归零波形门（text sharp 模式的第二半）：config `quality.textSharp` 且
+  /// standard+ 档时，时间驱动视差/震屏的 snapWave 载体改走 [restSnapWave]
+  /// （以各通道 t=0 相位为静息点）——t=0 静息帧/hold 帧位移精确 0，整页
+  /// 不再被分数位移重采样（首帧/静息帧 = 原画）。false = snapWave 原样
+  /// （既有路径逐字节不变，含其 DC 偏置契约）。
+  final bool _restAligned;
 
   // ---- X2（v1.5）：静态层栈合成缓存 ----
   //
@@ -946,11 +1011,12 @@ class FrameCompositor {
     final buf = RgbaImage(width: w, height: h);
     final tier = config.quality.tier;
     _drawLayer(buf, _basePixels, base.width, base.height, 0, 0, 1.0,
-        _anchorY(), tier);
+        _anchorY(), tier,
+        snapMask: textSnapMask);
     for (var li = 0; li < layers.length; li++) {
       _drawLayer(buf, _layerPixels[li], layers[li].image.width,
           layers[li].image.height, 0, 0, 1.0, _anchorY(), tier,
-          clip: _layerClips[li]);
+          clip: _layerClips[li], snapMask: textSnapMask);
     }
     return buf;
   }
@@ -1145,7 +1211,8 @@ class FrameCompositor {
     final baseCover =
         1.0 + (shakeX.abs() + shakeY.abs()) * 2.0 / math.min(w, h);
     _drawLayer(frame, _basePixels, base.width, base.height, shakeX, shakeY,
-        zoom * baseCover, _anchorY(), tier);
+        zoom * baseCover, _anchorY(), tier,
+        snapMask: textSnapMask);
 
     // Layers far-to-near with parallax offsets.
     final p = config.effects.contains(EffectKind.parallax);
@@ -1169,31 +1236,42 @@ class FrameCompositor {
           dx += ampPx * pOverride.phaseX;
           dy += ampPx * config.parallax.verticalRatio * pOverride.phaseY;
         } else {
-          final ampPx = config.parallax.amplitude * _env.motion * w * _mult[li];
-          final phase = 2 * math.pi * tSec / alignedPeriod;
-          // v1.4 硬张力（规格 §6.1）：相邻深度层反相（相位步进 rank·π），
-          // 奇数层与偶数层反向摆动，相邻层相对位移翻倍且肉眼可见；
-          // 旧 li*0.35 同向微差在摆幅内互相对销，看不出纵深。
-          // Task 3.4（§6.2/R17）：standard+ 载体换成 snapWave，θ/(2π) 折算
-          // 保持 3.2 的 rank·π 反相步进（奇数层 u+0.5 → 反瓣）；legacy 分支
-          // 冻结为原 sin 表达式。多幅度项（ampPx/dxDir/verticalRatio/dyDir）不动。
-          // Task 3.6d（F2 / R39）：奇偶的**来源**从扁平层下标 `li` 改为
-          // `depthRank`。tier 契约冻结的是**波形**（legacy=sin、standard=
-          // snapWave），不是「由哪个下标供给奇偶」——若两条 arm 各用一种下标，
-          // 选档就会连带改变空间行为，与本轮一路在拆的 tier×几何耦合（R6/R36：
-          // 落位门 ⊥ 渲染档门）相违，故四Occurrences 一并改。
-          // 为什么必须改：panelAware 开启时层按「格序 × 格内 rank 序」排布
-          // （pipeline.dart `_splitPerPanel`），2 格 × 3 层 ⇒ li=0..5 对上
-          // depthRank=0,1,2,0,1,2，格 B 的 rank0 落在 li=3（奇）⇒ 与格 A 的
-          // rank0（偶）**反号摆动**，两格同深度层互相滑开 = 投诉 #2 的形态。
-          // 幅度倍率 `_mult`（构造器）早已按 rank 归一（「同 rank 同幅度，跨格
-          // 一致」），相位与幅度必须同源，否则半个修复。
-          // 代价：panelAware 关闭路径 li == depthRank（整页分层按 rank 顺序生成
-          // ——depth_splitter.dart `layers.add(LayerImage(layer, li))`），本改动
-          // 在该路径上是恒等式 ⇒ 旧默认产物逐字节不动。
-          final parity = layers[li].depthRank * math.pi;
+          // 深度自适应幅度（v1.9）：ampPx 统一乘 depthSpreadScale——浅深度
+          // 页面按比例少动（管线按 constantValued 场的 spread 计算传入；
+          // 默认 1.0 逐位不变）。交互式视差分支不乘：用户手驱幅度不改。
+          final ampPx = config.parallax.amplitude *
+              depthSpreadScale *
+              _env.motion *
+              w *
+              _mult[li];
+          // Phase E 画面自适应：逐层节奏（整数周期数口径，R19 同款——
+          // durationSec/整周期保证无缝循环）。1.0 走原 alignedPeriod /
+          // cycles 表达式（逐字节不变）；≠1 时 dyCycles 同式随 liCycles
+          // 走，横纵比 0.8 的非整倍率代价与原路径相同（无缝优先）。
+          final tempos = layerTempoScales;
+          final tempo =
+              tempos != null && li < tempos.length ? tempos[li] : 1.0;
+          final liCycles =
+              tempo == 1.0 ? cycles : math.max(1, (cycles * tempo).round());
+          final liPeriod = liCycles == cycles
+              ? alignedPeriod
+              : config.durationSec / liCycles;
+          final phase = 2 * math.pi * tSec / liPeriod;
+          // Phase D6 主体层相位跟随：parity += 逐层相位偏移。主体层 −π →
+          // 与相邻背景带同相（随动+领跑，替代反相对滑的贴纸感）；远带仍
+          // 反相，纵深线索保留。偏移 null/0 走原表达式（逐字节不变）。
+          var parity = layers[li].depthRank * math.pi;
+          final offsets = layerPhaseOffsets;
+          if (offsets != null && li < offsets.length && offsets[li] != 0.0) {
+            parity += offsets[li];
+          }
           final snapDx = _aa
-              ? snapWave((phase + parity) / (2 * math.pi))
+              ? (_restAligned
+                  // text sharp 静息归零：t=0 相位（parity/(2π)）处精确 0，
+                  // 静息帧/hold 帧位移为 0，不再被分数位移重采样。
+                  ? restSnapWave(
+                      (phase + parity) / (2 * math.pi), parity / (2 * math.pi))
+                  : snapWave((phase + parity) / (2 * math.pi)))
               : math.sin(phase + parity);
           // R19：竖向基底频率用整数 cycleCount 替代非整 0.8 倍率，
           // 保证 dyCycles 整周期闭合（directionDeg≠0/180 时竖向不再跳缝）。
@@ -1206,11 +1284,14 @@ class FrameCompositor {
           // 下竖向半轴只有 1.0–1.4px ⇒ 明显的大方向角要用户自己选。
           // 代价：cycles % 5 ≠ 0 时精确的 0.8 横纵比不再保持——无缝循环优先，
           // 理由与整引擎用 _loopU 同源。
-          final dyCycles = math.max(1, (cycles * 0.8).round());
+          final dyCycles = math.max(1, (liCycles * 0.8).round());
           final dyPhase =
               2 * math.pi * tSec * dyCycles / config.durationSec;
           final snapDy = _aa
-              ? snapWave((dyPhase + parity + 0.9) / (2 * math.pi))
+              ? (_restAligned
+                  ? restSnapWave((dyPhase + parity + 0.9) / (2 * math.pi),
+                      (parity + 0.9) / (2 * math.pi))
+                  : snapWave((dyPhase + parity + 0.9) / (2 * math.pi)))
               : math.sin(dyPhase + parity + 0.9);
           dx += snapDx * ampPx * dxDir;
           dy += snapDy * ampPx * config.parallax.verticalRatio * dyDir;
@@ -1220,7 +1301,7 @@ class FrameCompositor {
       final cover = 1.0 + 2 * (dx.abs() + dy.abs()) / math.min(w, h);
       _drawLayer(frame, _layerPixels[li], layers[li].image.width,
           layers[li].image.height, dx, dy, zoom * cover, _anchorY(), tier,
-          clip: _layerClips[li]);
+          clip: _layerClips[li], snapMask: textSnapMask);
     }
   }
 
@@ -1257,7 +1338,8 @@ class FrameCompositor {
     // 减弱动态降级：单帧静态底图，无任何动效。
     if (config.reducedMotion) {
       _drawLayer(frame, _basePixels, base.width, base.height, 0, 0, 1.0,
-          _anchorY(), tier);
+          _anchorY(), tier,
+          snapMask: textSnapMask);
       return frame;
     }
 
@@ -1406,7 +1488,7 @@ class FrameCompositor {
   }
 
   /// 层贴图：重采样按质量档分派（legacy=逐字节双线性，standard+=Catmull-Rom），
-  /// 实现见 `render/resampler.dart`。
+  /// 实现见 `render/resampler.dart`。text sharp 掩码仅 standard+ 通路消费。
   static void _drawLayer(
           RgbaImage dst,
           Uint8List srcData,
@@ -1417,9 +1499,9 @@ class FrameCompositor {
           double scale,
           double anchorY,
           RenderTier tier,
-          {PixelRect? clip}) =>
+          {PixelRect? clip, Uint8List? snapMask}) =>
       drawLayer(dst, srcData, sw, sh, dx, dy, scale, anchorY,
-          tier: tier, clip: clip);
+          tier: tier, clip: clip, snapMask: snapMask);
 
   void _drawParticles(RgbaImage frame, double tSec) {
     final amb = config.ambient;

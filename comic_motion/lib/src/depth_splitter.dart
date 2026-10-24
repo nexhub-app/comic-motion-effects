@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'apng_writer.dart' show PixelRect;
 import 'image_model.dart';
 import 'render/quality.dart';
+import 'subject_segmenter.dart' show SubjectMask;
 
 /// Estimated per-pixel depth proxy in [0,1]: high = likely foreground.
 class DepthMap {
@@ -226,7 +227,18 @@ class LayerSplitter {
   /// standard+ 档把层的不透明色向外推这么多像素（0 = 关闭）。
   final int edgeStretchPx;
 
-  List<LayerImage> split(RgbaImage img, DepthMap depth) {
+  /// 主体带覆盖（D5，可选）：[subjectMask] + [subjectMedians]（[clampSubjectDepth]
+  /// 的返回值，与 mask.blobs 对齐）给定时，主体像素的 membership 在
+  /// [_extract] 中**直接覆盖**为其 blob 中位数所在带的 1/0——分位阈值即使
+  /// 落在主体平台上也不再撕开主体（阈值追平台的结构性解法）；主体像素同时
+  /// 受羽化保护（轮廓实心），背景过渡带照常羽化。null（默认）= 既有路径
+  /// 逐字节不变。[subjectStretchPx] 给定时，含主体的层用
+  /// `min(16, subjectStretchPx)` 替代 [edgeStretchPx] 外扩（主体位移量大、
+  /// 需要更宽的边缘色储备）。
+  List<LayerImage> split(RgbaImage img, DepthMap depth,
+      {SubjectMask? subjectMask,
+      List<double?>? subjectMedians,
+      int? subjectStretchPx}) {
     // Thresholds chosen so background dominates flat areas and near layer
     // covers salient subjects; guarantee every layer is non-empty by falling
     // back to quantiles when a band would be empty.
@@ -255,21 +267,74 @@ class LayerSplitter {
     final t2 =
         math.max(safe ? gap(0.72) : q(0.72), t1 + 0.05); // mid | near
 
+    // 主体带覆盖数据（D5）：逐像素 label 表 + label → 目标带（-1 = 无中位
+    // 数，不覆盖）。掩码与图分辨率可不同（估算器/分割器各自降采样），最近
+    // 邻映射到图坐标。
+    Int32List? subjLabels;
+    Int32List? subjBand;
+    List<bool>? subjLayers;
+    if (subjectMask != null &&
+        subjectMask.hasSubjects &&
+        subjectMedians != null &&
+        subjectMedians.length == subjectMask.blobs.length) {
+      final nBlobs = subjectMask.blobs.length;
+      final band = Int32List(nBlobs + 1)..fillRange(0, nBlobs + 1, -1);
+      final inLayer = List<bool>.filled(layerCount, false);
+      for (var b = 0; b < nBlobs; b++) {
+        final m = subjectMedians[b];
+        if (m == null) continue;
+        final li = (m <= t1 ? 0 : (m <= t2 ? 1 : 2)).clamp(0, layerCount - 1);
+        band[b + 1] = li;
+        inLayer[li] = true;
+      }
+      final mw = subjectMask.width, mh = subjectMask.height;
+      final labels = Int32List(img.width * img.height);
+      final sxm = mw / img.width, sym = mh / img.height;
+      var any = false;
+      for (var y = 0; y < img.height; y++) {
+        final my = ((y + 0.5) * sym - 0.5).clamp(0.0, mh - 1.0).round();
+        for (var x = 0; x < img.width; x++) {
+          final mx = ((x + 0.5) * sxm - 0.5).clamp(0.0, mw - 1.0).round();
+          final label = subjectMask.labelAt(mx, my);
+          if (label > 0 && band[label] >= 0) {
+            labels[y * img.width + x] = label;
+            any = true;
+          }
+        }
+      }
+      if (any) {
+        subjLabels = labels;
+        subjBand = band;
+        subjLayers = inLayer;
+      }
+    }
+
     final smooth = tier.atLeastStandard;
     final featherPasses =
         smooth && featherPx > 0 ? (featherPx / 3).ceil().clamp(1, 4) : 0;
     final stretch = smooth ? edgeStretchPx.clamp(0, 16) : 0;
     // 恒值场用硬阈值：恒值区域的取值是稠密的（相邻区域均值可差 ~1e-3），
     // ±0.03 的 membership 过渡带总会罩住阈值两侧的邻近区域，整块半透明、
-    // 底图透出（黑框白字重影）。0/1 membership 后区域内部必然实心，软边
-    // 交给随后的空间羽化（_featherAlpha）。
+    // 底图透出（黑框白字重影）。0/1 membership 后区域内部必然实心。
     final hard = depth.constantValued;
     final layers = <LayerImage>[];
     for (var li = 0; li < layerCount; li++) {
       final layer = _extract(img, depth, li, t1, t2,
-          smooth: smooth, hard: hard);
-      if (featherPasses > 0) _featherAlpha(layer, featherPasses);
-      if (stretch > 0) _stretchEdges(layer, stretch);
+          smooth: smooth, hard: hard,
+          subjLabels: subjLabels, subjBand: subjBand);
+      // 恒值场（区域一致深度）跳过空间羽化（v1.9 C1）：层边界与作者画的
+      // 色块/线稿边界重合，跨区羽化把边界 alpha 拉成过渡带，视差位移时透出
+      // 底图（重影，Phase 1 目检结论：ghosting 是 alpha 现象）。硬
+      // membership 已保证区域内部实心；平滑深度场（内置启发式）保留羽化，
+      // 契约逐字节不变。D5：主体像素受羽化保护（轮廓实心），背景照常羽化。
+      if (featherPasses > 0 && !hard) _featherAlpha(layer, featherPasses, subjLabels);
+      // D5：主体所在层外扩加厚（位移露出量 ~ 视差幅度），其余层不变。
+      final liStretch = (subjLayers != null &&
+              subjLayers[li] &&
+              subjectStretchPx != null)
+          ? math.max(stretch, subjectStretchPx.clamp(0, 16))
+          : stretch;
+      if (liStretch > 0) _stretchEdges(layer, liStretch);
       layers.add(LayerImage(layer, li));
     }
     return layers;
@@ -277,12 +342,28 @@ class LayerSplitter {
 
   RgbaImage _extract(
       RgbaImage img, DepthMap depth, int li, double t1, double t2,
-      {required bool smooth, required bool hard}) {
+      {required bool smooth,
+      required bool hard,
+      Int32List? subjLabels,
+      Int32List? subjBand}) {
     final layer = RgbaImage(width: img.width, height: img.height);
     final w = img.width, h = img.height;
     final sx = depth.width / w, sy = depth.height / h;
     for (var y = 0; y < h; y++) {
       for (var x = 0; x < w; x++) {
+        // 主体带覆盖（D5）：主体像素 membership 直接 1/0，绕过软/硬隶属
+        // 函数——blob 中位数所在带整体实心，其余带处全透明。
+        final label = subjLabels?[y * w + x] ?? 0;
+        if (label > 0) {
+          if (subjBand![label] != li) continue;
+          final i = (y * w + x) * 4;
+          final o = (y * layer.width + x) * 4;
+          layer.data[o] = img.data[i];
+          layer.data[o + 1] = img.data[i + 1];
+          layer.data[o + 2] = img.data[i + 2];
+          layer.data[o + 3] = 255;
+          continue;
+        }
         final double d;
         if (smooth) {
           d = depth.sampleBilinear((x + 0.5) * sx - 0.5, (y + 0.5) * sy - 0.5);
@@ -311,7 +392,9 @@ class LayerSplitter {
   /// 真羽化：对 alpha 通道做 [passes] 次可分离 `[1 2 1]/4` 卷积，边界复制。
   ///
   /// 只碰 alpha：RGB 保持源色，合成时层与层之间的过渡带才不会混进灰边。
-  static void _featherAlpha(RgbaImage layer, int passes) {
+  /// [protect] 非零像素跳过写入（D5 主体羽化保护：轮廓保持 255 实心，
+  /// 邻居卷积仍读取其原值作为卷积源）。
+  static void _featherAlpha(RgbaImage layer, int passes, Int32List? protect) {
     final w = layer.width, h = layer.height, d = layer.data;
     final tmp = Uint8List(w * h);
     for (var p = 0; p < passes; p++) {
@@ -329,6 +412,8 @@ class LayerSplitter {
         final dn = y < h - 1 ? y + 1 : h - 1;
         final row = y * w * 4;
         for (var x = 0; x < w; x++) {
+          final p = y * w + x;
+          if (protect != null && protect[p] != 0) continue;
           d[row + x * 4 + 3] =
               (tmp[u * w + x] + 2 * tmp[y * w + x] + tmp[dn * w + x] + 2) >> 2;
         }

@@ -101,14 +101,19 @@ void _spanSums(Uint8List src, int base, int i0, int i1, double a, double b,
 /// [clip]（画布坐标）：目标像素钳制矩形——只有矩形内的画布像素会被
 /// 写入（分格感知层的格边界裁剪）；null = 全画布，循环范围与旧实现相同
 /// （既有路径逐字节零变化）。
+/// [snapMask]（text sharp v1.10，位打包源坐标文字掩码，见 `text_sharp.dart`）：
+/// 非 null 时，逆映射命中文本掩码的目标像素改走**整数取整采样**（nearest）——
+/// 文字笔画逐帧都是源字形的整像素平移拷贝，分数位移不再产生插值中间灰。
+/// 仅 standard+ 通路消费（legacy 逐字节冻结）；null = 既有路径零变化。
 /// 注意：scale 远小于 0.5 时 Catmull-Rom 会欠采样——本引擎的 scale 恒在
 /// `1±呼吸幅度` 与 `cover(>=1)` 区间，真正的降采样由 [boxDownscale] 一次性完成。
 void drawLayer(RgbaImage dst, Uint8List srcData, int sw, int sh, double dx,
     double dy, double scale, double anchorY,
-    {required RenderTier tier, PixelRect? clip}) {
+    {required RenderTier tier, PixelRect? clip, Uint8List? snapMask}) {
   if (scale <= 0) return;
   if (tier.atLeastStandard) {
-    _drawCatmullRom(dst, srcData, sw, sh, dx, dy, scale, anchorY, clip: clip);
+    _drawCatmullRom(dst, srcData, sw, sh, dx, dy, scale, anchorY,
+        clip: clip, snapMask: snapMask);
     return;
   }
   _drawBilinear(dst, srcData, sw, sh, dx, dy, scale, anchorY, clip: clip);
@@ -190,9 +195,13 @@ void _drawBilinear(RgbaImage dst, Uint8List srcData, int sw, int sh, double dx,
 /// 关键在于列向映射 `sx(x)` 与 y 无关，于是同一源行的横向结果能被相邻输出行反复
 /// 复用（本引擎 scale≈1，每个源行实际只滤一次）。边界语义与逐点版一致：
 /// 越界抽点权重记 0，越界源行整条跳过。
+///
+/// [snapMask]（text sharp）：非 null 时写入循环里逐像素查掩码——逆映射最近
+/// 源纹素命中文字掩码的像素直接取该纹素原值（整数采样），其余照常 CR 混合。
+/// 查表 O(1)（位移/与/或），掩码稀疏（文字占比小）时分支预测友好。
 void _drawCatmullRom(RgbaImage dst, Uint8List srcData, int sw, int sh,
     double dx, double dy, double scale, double anchorY,
-    {PixelRect? clip}) {
+    {PixelRect? clip, Uint8List? snapMask}) {
   final w = dst.width, h = dst.height;
   final inv = 1.0 / scale;
   final dstData = dst.data;
@@ -206,6 +215,8 @@ void _drawCatmullRom(RgbaImage dst, Uint8List srcData, int sw, int sh,
   // sx 随 x 单调递增 => 命中源区的列是一段连续区间，区间外整列跳过。
   final colOff = Int32List(w * 4);
   final colW = Float64List(w * 4);
+  // text sharp：每列的最近源纹素 x（掩码查表用；未处理列的值不被读）。
+  final colNx = Int32List(w);
   final wt = Float64List(4);
   var xFirst = -1, xLast = -1;
   for (var x = xStart; x < xEnd; x++) {
@@ -214,6 +225,8 @@ void _drawCatmullRom(RgbaImage dst, Uint8List srcData, int sw, int sh,
     _fillCrWeights(sx - sx0, wt);
     final ox0 = sx0 - 1;
     if (ox0 >= sw || ox0 + 3 < 0) continue;
+    // 最近纹素 = floor(sx + 0.5)（纹素中心约定与 CR 权重一致）。
+    colNx[x] = (sx + 0.5).floor();
     final b = x * 4;
     for (var i = 0; i < 4; i++) {
       final xx = ox0 + i;
@@ -239,6 +252,9 @@ void _drawCatmullRom(RgbaImage dst, Uint8List srcData, int sw, int sh,
     _fillCrWeights(sy - sy0, wt);
     final oy0 = sy0 - 1;
     if (oy0 >= sh || oy0 + 3 < 0) continue;
+    // text sharp：本行的最近源纹素 y（越界 = 该行不命中掩码）。
+    final ny = (sy + 0.5).floor();
+    final snapRow = snapMask != null && ny >= 0 && ny < sh;
     acc.fillRange(from, to, 0.0);
     for (var j = 0; j < 4; j++) {
       final wj = wt[j];
@@ -257,6 +273,20 @@ void _drawCatmullRom(RgbaImage dst, Uint8List srcData, int sw, int sh,
     }
     for (var x = xFirst; x <= xLast; x++) {
       final b = x * 4;
+      if (snapRow) {
+        final nx = colNx[x];
+        if (nx >= 0 && nx < sw) {
+          final p = ny * sw + nx;
+          if ((snapMask[p >> 3] >> (p & 7)) & 1 != 0) {
+            // 整数采样：直接取源纹素原值（alpha 合成算式与 CR 共用）。
+            final o = p * 4;
+            _composite(dst, dstData, (y * w + x) * 4, srcData[o].toDouble(),
+                srcData[o + 1].toDouble(), srcData[o + 2].toDouble(),
+                srcData[o + 3].toDouble());
+            continue;
+          }
+        }
+      }
       _composite(dst, dstData, (y * w + x) * 4, acc[b], acc[b + 1], acc[b + 2],
           acc[b + 3]);
     }

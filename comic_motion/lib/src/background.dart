@@ -29,7 +29,10 @@ import 'dart:typed_data';
 import 'cancellation.dart';
 import 'depth_splitter.dart';
 import 'effect_config.dart';
+import 'motion_gate.dart';
 import 'pipeline.dart';
+import 'scene_motion.dart';
+import 'subject_segmenter.dart';
 
 /// 后台 isolate 版 [MotionPipeline.processFile]。参数语义与同步版一致，
 /// 全部为执行期参数（不参与 configHash）。
@@ -49,6 +52,11 @@ Future<PipelineResult> processFileInBackground(
   bool includeFirstFrame = false,
   String? partMotion,
   DepthEstimator Function()? depthEstimatorFactory,
+  SubjectSegmenter Function()? subjectSegmenterFactory,
+  MotionGate Function()? motionGateFactory,
+  String? scene,
+  PanelMotionJudge Function()? panelMotionJudgeFactory,
+  PanelStrategyJudge Function()? panelStrategyJudgeFactory,
 }) async {
   final r = await _runInBackground(
     boot: _BackgroundBoot(
@@ -64,6 +72,11 @@ Future<PipelineResult> processFileInBackground(
       wantFrameEvents: onFrame != null,
       partMotion: partMotion,
       depthEstimatorFactory: depthEstimatorFactory,
+      subjectSegmenterFactory: subjectSegmenterFactory,
+      motionGateFactory: motionGateFactory,
+      scene: scene,
+      panelMotionJudgeFactory: panelMotionJudgeFactory,
+      panelStrategyJudgeFactory: panelStrategyJudgeFactory,
     ),
     cancelToken: cancelToken,
     forwardProgress: onProgress,
@@ -87,6 +100,11 @@ Future<MemoryPipelineResult> processBytesInBackground({
   bool includeFirstFrame = false,
   String? partMotion,
   DepthEstimator Function()? depthEstimatorFactory,
+  SubjectSegmenter Function()? subjectSegmenterFactory,
+  MotionGate Function()? motionGateFactory,
+  String? scene,
+  PanelMotionJudge Function()? panelMotionJudgeFactory,
+  PanelStrategyJudge Function()? panelStrategyJudgeFactory,
 }) async {
   final r = await _runInBackground(
     boot: _BackgroundBoot(
@@ -101,6 +119,11 @@ Future<MemoryPipelineResult> processBytesInBackground({
       wantFrameEvents: onFrame != null,
       partMotion: partMotion,
       depthEstimatorFactory: depthEstimatorFactory,
+      subjectSegmenterFactory: subjectSegmenterFactory,
+      motionGateFactory: motionGateFactory,
+      scene: scene,
+      panelMotionJudgeFactory: panelMotionJudgeFactory,
+      panelStrategyJudgeFactory: panelStrategyJudgeFactory,
     ),
     cancelToken: cancelToken,
     forwardProgress: onProgress,
@@ -125,6 +148,11 @@ class _BackgroundBoot {
     this.wantFrameEvents = false,
     this.partMotion,
     this.depthEstimatorFactory,
+    this.subjectSegmenterFactory,
+    this.motionGateFactory,
+    this.scene,
+    this.panelMotionJudgeFactory,
+    this.panelStrategyJudgeFactory,
   });
 
   late final SendPort ack;
@@ -155,6 +183,28 @@ class _BackgroundBoot {
   /// isolate 发送（顶层/静态函数、或只捕获可发送值的闭包）；模型与原生句柄
   /// 只能在该 isolate 内创建，不能作为已构造实例传入。null = 内置启发式。
   final DepthEstimator Function()? depthEstimatorFactory;
+
+  /// 主体分割器工厂（Phase D）：同 [depthEstimatorFactory] 的传递语义——
+  /// 后台 isolate 内调用一次，必须可跨 isolate 发送。模型与原生句柄只能在
+  /// 该 isolate 内创建。null = 不分割（通道关闭）。
+  final SubjectSegmenter Function()? subjectSegmenterFactory;
+
+  /// 动效门槛工厂：同 [depthEstimatorFactory] 的传递语义——后台 isolate 内
+  /// 调用一次，必须可跨 isolate 发送。null = 永远动画。
+  final MotionGate Function()? motionGateFactory;
+
+  /// `scene.json` 侧车原文（v1.9 动效画面判断）：随启动消息一次性下发，
+  /// 解析在后台 isolate 构造管线时进行。null = 不启用。语义同 [partMotion]。
+  final String? scene;
+
+  /// 格级动效判断工厂（v1.9）：同 [motionGateFactory] 的传递语义——后台
+  /// isolate 内调用一次，必须可跨 isolate 发送。null = 不判断（通道关闭，
+  /// 除非给了 [scene]）。
+  final PanelMotionJudge Function()? panelMotionJudgeFactory;
+
+  /// 画面自适应策略判断工厂（Phase E）：同 [panelMotionJudgeFactory] 的
+  /// 传递语义。null = 不判断。
+  final PanelStrategyJudge Function()? panelStrategyJudgeFactory;
 }
 
 /// 后台 isolate 入口：本地 token 承接控制通道的取消命令，progress 回传，
@@ -168,6 +218,10 @@ Future<void> _backgroundEntry(_BackgroundBoot boot) async {
     // 工厂在后台 isolate 内执行：模型/原生运行时在这里初始化，主 isolate
     // 只传「怎么造」的函数，不传已构造的实例。
     final depthEstimator = boot.depthEstimatorFactory?.call();
+    final subjectSegmenter = boot.subjectSegmenterFactory?.call();
+    final motionGate = boot.motionGateFactory?.call();
+    final panelMotionJudge = boot.panelMotionJudgeFactory?.call();
+    final panelStrategyJudge = boot.panelStrategyJudgeFactory?.call();
     final pipeline = MotionPipeline(
       boot.config,
       parallel: boot.parallel,
@@ -182,6 +236,11 @@ Future<void> _backgroundEntry(_BackgroundBoot boot) async {
           : null,
       partMotion: boot.partMotion,
       depthEstimator: depthEstimator,
+      subjectSegmenter: subjectSegmenter,
+      motionGate: motionGate,
+      panelMotionJudge: panelMotionJudge,
+      panelStrategyJudge: panelStrategyJudge,
+      scene: boot.scene,
     );
     final result = boot.fileMode
         ? await pipeline.processFile(boot.inputPath!, boot.outputDir!,

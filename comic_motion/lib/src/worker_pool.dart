@@ -75,6 +75,10 @@ class FrameJobSpec {
     this.layerClips,
     this.anchors,
     this.parts,
+    this.layerMotionScales,
+    this.layerPhaseOffsets,
+    this.layerTempoScales,
+    this.textSnapMask,
   });
 
   factory FrameJobSpec.fromLayers({
@@ -88,6 +92,10 @@ class FrameJobSpec {
     bool wantRgba = false,
     AnchorMap? anchors,
     List<PartMotion>? parts,
+    List<double>? layerMotionScales,
+    List<double>? layerPhaseOffsets,
+    List<double>? layerTempoScales,
+    Uint8List? textSnapMask,
   }) =>
       FrameJobSpec(
         width: base.width,
@@ -109,6 +117,12 @@ class FrameJobSpec {
         // 未启用（既有路径零变化，产物逐字节不变）。
         anchors: anchors,
         parts: parts,
+        // v1.9 动效画面判断：逐层幅度乘数随作业下发，worker 重建的合成器
+        // 与主 isolate 对同一帧产出逐字节相同。null = 通道关闭。
+        layerMotionScales: layerMotionScales,
+        layerPhaseOffsets: layerPhaseOffsets,
+        layerTempoScales: layerTempoScales,
+        textSnapMask: textSnapMask,
       );
 
   final int width;
@@ -149,6 +163,25 @@ class FrameJobSpec {
   /// 与 [anchors] 同机制随 spec 跨 isolate 下发，worker 侧在合成器构造期建
   /// 形变计划表；数据全部来自 `part_motion.json` 解析结果，纯不可变值。
   final List<PartMotion>? parts;
+
+  /// v1.9 动效画面判断：逐层视差幅度乘数（与 [layerRanks] 等长；null =
+  /// 通道关闭，既有路径零变化）。主 isolate 裁决后随 spec 下发，worker 侧
+  /// [FrameCompositor.fromRasters] 重建时乘入层倍率。
+  final List<double>? layerMotionScales;
+
+  /// Phase D6 主体层相位跟随：逐层视差相位偏移（弧度，与 [layerMotionScales]
+  /// 等长；null/0 = 零变化）。主体层 −π → 与相邻背景带同相（随动 + 领跑，
+  /// 替代反相对滑的贴纸感）。随 spec 跨 isolate 下发。
+  final List<double>? layerPhaseOffsets;
+
+  /// Phase E 画面自适应：逐层节奏乘数（与 [layerMotionScales] 等长；null =
+  /// 通道关闭）。>1 加快、<1 放慢，整数周期数口径（无缝循环契约不破）。
+  final List<double>? layerTempoScales;
+
+  /// text sharp（v1.10）：位打包源坐标文字掩码（`text_sharp.dart`；null =
+  /// 通道关闭）。随 spec 跨 isolate 下发，worker 侧重建合成器时携带——层贴
+  /// 图对掩码命中像素整数取整采样，分数位移不糊文字。
+  final Uint8List? textSnapMask;
 
   /// 每个 worker 常驻的栅格字节数（底图 + 各层 + 在途帧 + 索引帧）。
   int get rasterBytesPerWorker => width * height * 4 * (layerPixels.length + 3);
@@ -210,6 +243,10 @@ class FrameJob {
           clips: s.layerClips,
           anchors: s.anchors,
           parts: s.parts,
+          layerMotionScales: s.layerMotionScales,
+          layerPhaseOffsets: s.layerPhaseOffsets,
+          layerTempoScales: s.layerTempoScales,
+          textSnapMask: s.textSnapMask,
         ),
         pngDir: s.pngDir,
         encoder: s.gif?.build(),
