@@ -1,5 +1,6 @@
 import json
 import math
+from pathlib import Path
 
 import numpy as np
 
@@ -158,9 +159,31 @@ def dumps_json(data: dict) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
 
 
-def write_json(path, data: dict) -> None:
-    with open(path, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(dumps_json(data))
+def write_json(path, data: dict, *, base_dir=None) -> None:
+    """写 JSON 侧车文件（路径安全护栏）。
+
+    - 拒绝包含 ``..`` 分量的穿越路径；
+    - 解析规范化（符号链接跟随到真实位置）后必须落在允许目录内——
+      [base_dir] 给定时用它（CLI 子命令应传输出基目录），缺省 = 当前
+      工作目录；
+    - 拒绝把已存在的目录当文件写。
+    """
+    p = Path(path)
+    if ".." in p.parts:
+        raise AnchorError(f"输出路径不允许包含 .. 分量：{path}")
+    root = Path(base_dir).resolve() if base_dir is not None else Path.cwd().resolve()
+    safe_path = p.resolve()
+    try:
+        safe_path.relative_to(root)
+    except ValueError as exc:
+        raise AnchorError(
+            f"输出路径越出允许目录 {root}：{path}"
+            "（请把输出放到工作目录/输出目录参数范围内）"
+        ) from exc
+    if safe_path.is_dir():
+        raise AnchorError(f"输出路径是目录：{safe_path}")
+    safe_path.parent.mkdir(parents=True, exist_ok=True)
+    safe_path.write_text(dumps_json(data), encoding="utf-8", newline="\n")
 
 
 def load_json(path) -> dict:

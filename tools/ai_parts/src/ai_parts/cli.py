@@ -83,7 +83,7 @@ def _cmd_detect(args) -> int:
         image = _read_rgb(image_path)
         draft = run_page(image, image_path.name, detector, segmenter, models)
         draft_path = out_dir / f"{image_path.stem}.draft.json"
-        write_json(draft_path, draft)
+        write_json(draft_path, draft, base_dir=out_dir)
         if not args.no_overlay:
             render_overlay(
                 image, draft["parts"], out_path=out_dir / f"{image_path.stem}.overlay.png"
@@ -110,7 +110,9 @@ def _cmd_compose(args) -> int:
     if not isinstance(anchors, dict):
         raise AnchorError("anchors 顶层必须是对象：{part_id: [x, y]}")
     sidecar = compose_sidecar(draft, anchors, allow_skip=args.allow_skip)
-    write_json(args.out, sidecar)
+    # 允许根 = 用户声明的输出目录：文件必须落在该目录解析后的真实位置
+    # （防 .. 分量与符号链接把写盘重定向到别处），目录本身可以是任意绝对路径。
+    write_json(args.out, sidecar, base_dir=Path(args.out).resolve().parent)
     print(f"{args.out}: {len(sidecar['parts'])} 个手部部件")
     return 0
 
@@ -129,7 +131,7 @@ def _cmd_score(args) -> int:
         f"passed={report['passed']}"
     )
     if args.out:
-        write_json(args.out, report)
+        write_json(args.out, report, base_dir=Path(args.out).resolve().parent)
         print(line)
         print(f"报告：{args.out}")
     else:
