@@ -280,6 +280,8 @@ void main() {
 
   group('scene/panelMotionJudgeFactory（v1.9）：后台 isolate 内创建并生效', () {
     /// 全页文字主导图（白底 + 密集小暗斑）：内置启发式判静。
+    /// 斑点**去格点化**（确定性行内抖动）——等距点阵会被 M1 网点周期性
+    /// 特征否决（真实字形不是格点阵）。
     RgbaImage textRaster() {
       final img = RgbaImage(width: 120, height: 120);
       for (var y = 0; y < 120; y++) {
@@ -287,14 +289,29 @@ void main() {
           img.setPixel(x, y, 255, 255, 255);
         }
       }
-      for (var gy = 2; gy < 118; gy += 7) {
-        for (var gx = 2; gx < 118; gx += 7) {
-          for (var dy = 0; dy < 3; dy++) {
-            for (var dx = 0; dx < 3; dx++) {
-              img.setPixel(gx + dx, gy + dy, 30, 30, 30);
+      var state = 20261025;
+      int next(int max) {
+        state = (state * 6364136223846793005 + 1442695040888963407) &
+            0x7fffffffffffffff;
+        return (state >> 33) % max;
+      }
+
+      var gy = 2;
+      while (gy < 116) {
+        var gx = 2 + next(5);
+        while (gx < 114) {
+          final runLen = 1 + next(4);
+          final thick = 2 + next(2);
+          final jx = next(3);
+          for (var dy = 0; dy < thick; dy++) {
+            for (var dx = 0; dx < runLen; dx++) {
+              final px = gx + dx + jx, py = gy + dy;
+              if (px < 118 && py < 118) img.setPixel(px, py, 30, 30, 30);
             }
           }
+          gx += runLen + 3 + next(3);
         }
+        gy += 6 + next(4);
       }
       return img;
     }

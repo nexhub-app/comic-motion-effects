@@ -11,6 +11,7 @@ import 'render/envelope.dart';
 import 'render/mesh_warper.dart';
 import 'render/quality.dart';
 import 'render/raster.dart';
+import 'render/camera.dart';
 import 'render/resampler.dart';
 import 'render/waveform.dart';
 import 'saliency_anchors.dart';
@@ -33,8 +34,10 @@ class FrameCompositor {
       List<double>? layerMotionScales,
       List<double>? layerPhaseOffsets,
       List<double>? layerTempoScales,
-      this.textSnapMask})
-      : layerMotionScales = layerMotionScales,
+      this.textSnapMask,
+      List<CameraRegion>? cameraRegions})
+      : cameraRegions = cameraRegions,
+        layerMotionScales = layerMotionScales,
         layerPhaseOffsets = layerPhaseOffsets,
         layerTempoScales = layerTempoScales,
         _restAligned = config.quality.textSharp &&
@@ -114,6 +117,7 @@ class FrameCompositor {
     List<double>? layerPhaseOffsets,
     List<double>? layerTempoScales,
     Uint8List? textSnapMask,
+    List<CameraRegion>? cameraRegions,
   }) {
     final ls = [
       for (var i = 0; i < layers.length; i++)
@@ -129,7 +133,8 @@ class FrameCompositor {
         layerMotionScales: layerMotionScales,
         layerPhaseOffsets: layerPhaseOffsets,
         layerTempoScales: layerTempoScales,
-        textSnapMask: textSnapMask);
+        textSnapMask: textSnapMask,
+        cameraRegions: cameraRegions);
   }
 
   // ---- v1.1 新动效状态（各自独立随机流，不扰动经典路径的 _rng 序列）----
@@ -971,6 +976,12 @@ class FrameCompositor {
   /// [FrameCompositor.fromRasters] 重建时携带。
   final Uint8List? textSnapMask;
 
+  /// 镜头程序区域（重构方案 M2，`render/camera.dart`）：非 null 时每帧在
+  /// 全部效果渲染完之后对格区域应用仿射镜头（t=0 恒等跳过，首帧逐字节
+  /// = 无镜头渲染）。null = 通道关闭（默认路径零变化——GIF 主线冻结，
+  /// 镜头只由 pack/程序消费方注入）。
+  final List<CameraRegion>? cameraRegions;
+
   /// 静息归零波形门（text sharp 模式的第二半）：config `quality.textSharp` 且
   /// standard+ 档时，时间驱动视差/震屏的 snapWave 载体改走 [restSnapWave]
   /// （以各通道 t=0 相位为静息点）——t=0 静息帧/hold 帧位移精确 0，整页
@@ -1472,6 +1483,20 @@ class FrameCompositor {
     }
     if (config.effects.contains(EffectKind.vignette)) {
       _applyVignette(frame, tSec);
+    }
+    // 镜头 pass（M2）：合成 → 效果 → 镜头（全画布一致仿射，区域内无层间
+    // 撕扯）。t=0 恒等跳过（首帧 = 原画契约）；reducedMotion 分支已在上方
+    // 提前 return（减弱动态 = 无镜头）。
+    final regions = cameraRegions;
+    if (regions != null && regions.isNotEmpty) {
+      applyCameraPass(
+        frame: frame,
+        regions: regions,
+        tSec: tSec,
+        durationSec: config.durationSec,
+        tier: tier,
+        snapMask: textSnapMask,
+      );
     }
     return frame;
   }

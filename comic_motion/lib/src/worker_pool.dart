@@ -13,6 +13,7 @@ import 'gif_writer.dart';
 import 'image_io.dart';
 import 'image_model.dart';
 import 'part_motion.dart';
+import 'render/camera.dart';
 import 'saliency_anchors.dart';
 
 /// 单帧 GIF 编码器的可发送描述（= [GifFrameEncoder] 的构造参数）。
@@ -79,6 +80,7 @@ class FrameJobSpec {
     this.layerPhaseOffsets,
     this.layerTempoScales,
     this.textSnapMask,
+    this.cameraRegions,
   });
 
   factory FrameJobSpec.fromLayers({
@@ -96,6 +98,7 @@ class FrameJobSpec {
     List<double>? layerPhaseOffsets,
     List<double>? layerTempoScales,
     Uint8List? textSnapMask,
+    List<CameraRegion>? cameraRegions,
   }) =>
       FrameJobSpec(
         width: base.width,
@@ -123,6 +126,7 @@ class FrameJobSpec {
         layerPhaseOffsets: layerPhaseOffsets,
         layerTempoScales: layerTempoScales,
         textSnapMask: textSnapMask,
+        cameraRegions: cameraRegions,
       );
 
   final int width;
@@ -182,6 +186,10 @@ class FrameJobSpec {
   /// 通道关闭）。随 spec 跨 isolate 下发，worker 侧重建合成器时携带——层贴
   /// 图对掩码命中像素整数取整采样，分数位移不糊文字。
   final Uint8List? textSnapMask;
+
+  /// 镜头程序区域（M2，`render/camera.dart`；null = 通道关闭）。随 spec 跨
+  /// isolate 下发，worker 侧 [FrameCompositor.fromRasters] 重建时携带。
+  final List<CameraRegion>? cameraRegions;
 
   /// 每个 worker 常驻的栅格字节数（底图 + 各层 + 在途帧 + 索引帧）。
   int get rasterBytesPerWorker => width * height * 4 * (layerPixels.length + 3);
@@ -247,6 +255,7 @@ class FrameJob {
           layerPhaseOffsets: s.layerPhaseOffsets,
           layerTempoScales: s.layerTempoScales,
           textSnapMask: s.textSnapMask,
+          cameraRegions: s.cameraRegions,
         ),
         pngDir: s.pngDir,
         encoder: s.gif?.build(),

@@ -11,6 +11,9 @@ import 'frame_compositor.dart';
 import 'gif_writer.dart';
 import 'depth_splitter.dart';
 import 'motion_gate.dart';
+import 'motion_pack.dart';
+import 'motion_program.dart';
+import 'render/camera.dart';
 import 'image_io.dart';
 import 'image_model.dart';
 import 'anchor_sidecar.dart';
@@ -1672,6 +1675,79 @@ class MotionPipeline {
           ? boxDownscale(src, config.maxDimension)
           : _downscaleTo(src, config.maxDimension);
 
+  /// MotionPack 分析入口（重构方案 M2，`motion_pack.dart` 消费）：与渲染
+  /// 主干同一条降采样 + 深度 + 分层路径（导出与渲染同源契约），一次性带出
+  /// pack 全部原料——工作栅格、层、锚点、逐格深度、格矩形、主体掩码、
+  /// 逐格诊断（内置启发式判定路径）与**已裁决**策略（scene 侧车 > 注入
+  /// 判断器 > 内置启发式，优先级与渲染一致）。纯分析，不渲染、不落盘。
+  PackAnalysis analyzeForPack(RgbaImage src) {
+    final (working, layers, anchors, depths, panels, subjects) =
+        _downscaleAndSplit(src, config.maxDimension);
+    final subjectLayers = _subjectLayerFlagsFor(subjects, layers, panels);
+    final resolved = _panelStrategiesFor(working, panels, subjects) ??
+        [
+          for (var i = 0; i < panels.length; i++) PanelMotionStrategy.neutral,
+        ];
+    // pack v1 诊断固定走内置启发式（分域分布定值路径）；外部判断器只经
+    // [resolved] 的策略优先级生效（其 cls 语义随 tier3 分类器另接）。
+    const heuristicJudge = HeuristicSceneStrategyJudge();
+    final diagnoses = heuristicJudge.diagnose(working, panels, subjects);
+    return PackAnalysis(
+      working: working,
+      layers: layers,
+      anchors: anchors,
+      depths: depths,
+      panels: panels,
+      subjects: subjects,
+      diagnoses: diagnoses,
+      strategies: resolved,
+      subjectLayers: subjectLayers,
+    );
+  }
+
+  /// pack 程序消费的静帧（§7.2 导出路径形态）：与 [_renderStill] 同一条
+  /// 主干 + 逐格镜头 pass（`render/camera.dart`）。t=0 静息帧与无镜头静帧
+  /// **逐字节一致**（首帧对拍契约——镜头程序在 t=0 恒等跳过，测试锁定）。
+  Uint8List renderPackStillFrame({required Uint8List input, double t = 0}) {
+    final src = ImageIO.decode(input);
+    final analysis = analyzeForPack(src);
+    final programs = buildPackPrograms(analysis);
+    final working = analysis.working;
+    final subjectLayers = analysis.subjectLayers;
+    final (scales, tempos) = _layerStrategyFor(
+        working, analysis.panels, analysis.layers, analysis.subjects,
+        subjectLayers);
+    final textSnapMask =
+        config.quality.textSharp && config.quality.tier.atLeastStandard
+            ? detectTextSnapMask(working)
+            : null;
+    final regions = <CameraRegion>[];
+    for (var i = 0; i < analysis.panels.length && i < programs.length; i++) {
+      if (programs[i].camera.type != CameraType.none) {
+        regions.add(CameraRegion(rect: analysis.panels[i], program: programs[i]));
+      }
+    }
+    final frame = FrameCompositor(
+            analysis.layers,
+            _inpaintBase(working, analysis.subjects, analysis.panels),
+            config,
+            anchors: analysis.anchors,
+            parts: effectiveParts,
+            layerMotionScales: scales,
+            layerTempoScales: tempos,
+            textSnapMask: textSnapMask,
+            layerPhaseOffsets:
+                (subjectLayers != null && subjectLayers.any((f) => f))
+                    ? [
+                        for (var li = 0; li < analysis.layers.length; li++)
+                          subjectLayers[li] ? -math.pi : 0.0,
+                      ]
+                    : null,
+            cameraRegions: regions.isEmpty ? null : regions)
+        .renderFrame(math.max(0.0, t));
+    return Uint8List.fromList(ImageIO.encodePngFrame(frame));
+  }
+
   RgbaImage _downscaleTo(RgbaImage src, int maxDim) {
     final maxSide = src.width > src.height ? src.width : src.height;
     if (maxSide <= maxDim) return src;
@@ -1722,4 +1798,38 @@ PixelRect _diffRect(Uint8List prev, Uint8List cur, int width, int height) {
   }
   if (maxX < 0) return const PixelRect(0, 0, 0, 0);
   return PixelRect(minX, minY, maxX - minX + 1, maxY - minY + 1);
+}
+
+/// MotionPack 分析包（`analyzeForPack` 产物）：渲染主干一次走完后的全部
+/// pack 原料。诊断/策略/掩码与 panels 对齐；depths 与分层格序一致
+/// （单格路径恰一个元素）。
+class PackAnalysis {
+  PackAnalysis({
+    required this.working,
+    required this.layers,
+    required this.anchors,
+    required this.depths,
+    required this.panels,
+    required this.subjects,
+    required this.diagnoses,
+    required this.strategies,
+    required this.subjectLayers,
+  });
+
+  /// 工作分辨率栅格（pack 的 sourceDigest 与栅格指纹同源）。
+  final RgbaImage working;
+  final List<LayerImage> layers;
+  final AnchorMap? anchors;
+  final List<DepthMap> depths;
+  final List<PixelRect> panels;
+  final List<SubjectMask> subjects;
+
+  /// 逐格诊断（内置启发式判定路径；序与 [panels] 一致）。
+  final List<PanelDiagnosis> diagnoses;
+
+  /// 已裁决策略（scene 侧车 > 注入判断器 > 内置启发式；序与 [panels] 一致）。
+  final List<PanelMotionStrategy> strategies;
+
+  /// 主体层标记（null = 分割器未注入/无主体层）。
+  final List<bool>? subjectLayers;
 }

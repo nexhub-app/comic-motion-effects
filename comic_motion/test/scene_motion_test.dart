@@ -2,8 +2,9 @@ import 'package:comic_motion/comic_motion.dart';
 import 'package:test/test.dart';
 
 /// 合成画面构造器（确定性，无随机）：
-/// - 文字格：白底 + 网格小暗斑（气泡文字的结构代理：密集小暗连通域、
-///   白底可见、边缘方向散乱）。
+/// - 文字格：白底 + **去格点化**小暗斑（气泡文字的结构代理：密集小暗连
+///   通域、白底可见、边缘方向散乱；位置/行长/行距确定性行内抖动——真实
+///   字形不是等距点阵，格点化夹具会被网点周期性特征否决）。
 /// - 动作格：灰底 + 平行斜线族（速度线/集中线的结构代理：单方向长笔触，
 ///   方向一致性高）。
 /// - 模糊格：均匀灰底（无强特征——「模糊→动」语义的锁）。
@@ -14,15 +15,30 @@ RgbaImage textPanel(int w, int h) {
       img.setPixel(x, y, 255, 255, 255);
     }
   }
-  for (var gy = 2; gy < h - 2; gy += 7) {
-    for (var gx = 2; gx < w - 2; gx += 7) {
-      final jx = (gx * 7 + gy * 3) % 3; // 确定性抖动，模拟字间空白变化
-      for (var dy = 0; dy < 3; dy++) {
-        for (var dx = 0; dx < 3; dx++) {
-          img.setPixel(gx + dx + jx, gy + dy, 30, 30, 30);
+  // 确定性伪随机（LCG，与 tool/synthetic_pages.dart 同族常数）。
+  var state = 20261025;
+  int next(int max) {
+    state = (state * 6364136223846793005 + 1442695040888963407) &
+        0x7fffffffffffffff;
+    return (state >> 33) % max;
+  }
+
+  var gy = 2;
+  while (gy < h - 3) {
+    var gx = 2 + next(5);
+    while (gx < w - 4) {
+      final runLen = 1 + next(4);
+      final thick = 2 + next(2);
+      final jx = next(3);
+      for (var dy = 0; dy < thick; dy++) {
+        for (var dx = 0; dx < runLen; dx++) {
+          final px = gx + dx + jx, py = gy + dy;
+          if (px < w - 2 && py < h - 2) img.setPixel(px, py, 30, 30, 30);
         }
       }
+      gx += runLen + 3 + next(3);
     }
+    gy += 6 + next(4);
   }
   return img;
 }
@@ -129,18 +145,11 @@ void main() {
     test('混合页逐格裁决：文字格静、动作格动', () {
       // 上 60px 文字格 + 下 60px 动作格，两格矩形由调用方给出。
       final img = RgbaImage(width: 120, height: 120);
+      final text = textPanel(120, 60);
       for (var y = 0; y < 60; y++) {
         for (var x = 0; x < 120; x++) {
-          img.setPixel(x, y, 255, 255, 255);
-        }
-      }
-      for (var gy = 2; gy < 58; gy += 7) {
-        for (var gx = 2; gx < 118; gx += 7) {
-          for (var dy = 0; dy < 3; dy++) {
-            for (var dx = 0; dx < 3; dx++) {
-              img.setPixel(gx + dx, gy + dy, 30, 30, 30);
-            }
-          }
+          final o = (y * 120 + x) * 4;
+          img.setPixel(x, y, text.data[o], text.data[o + 1], text.data[o + 2]);
         }
       }
       for (var s = -60; s < 120 + 60; s += 6) {
@@ -160,21 +169,15 @@ void main() {
     test('逐格裁剪：判断只看格内像素（跨格不串）', () {
       // 整图左半文字右半灰底；两格矩形各取半边。
       final img = RgbaImage(width: 120, height: 60);
+      final text = textPanel(60, 60);
       for (var y = 0; y < 60; y++) {
         for (var x = 0; x < 120; x++) {
           if (x < 60) {
-            img.setPixel(x, y, 255, 255, 255);
+            final o = (y * 60 + x) * 4;
+            img.setPixel(
+                x, y, text.data[o], text.data[o + 1], text.data[o + 2]);
           } else {
             img.setPixel(x, y, 160, 160, 160);
-          }
-        }
-      }
-      for (var gy = 2; gy < 58; gy += 7) {
-        for (var gx = 2; gx < 58; gx += 7) {
-          for (var dy = 0; dy < 3; dy++) {
-            for (var dx = 0; dx < 3; dx++) {
-              img.setPixel(gx + dx, gy + dy, 30, 30, 30);
-            }
           }
         }
       }

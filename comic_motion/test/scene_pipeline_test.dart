@@ -15,21 +15,37 @@ RgbaImage twoPanelPage() {
       img.setPixel(x, y, 255, 255, 255);
     }
   }
-  // 上格 y 0..99：白底 + 3x3 暗斑网格 + 两侧棋盘纹理柱（左 16px、右 12px）。
-  // 柱让每一行都有非白像素（斑点行间的白缝若全宽达标，会被 PanelSplitter
-  // 当成分隔白带把格切碎——真实对话格由气泡边框/人物线稿扮演这个角色）；
-  // 斑点网格直接贴进两侧柱区（x 14..225），柱与斑点之间不留全白缝——
-  // 缝宽 ≥1.2px 会被纵向白带检测切成独立格（纯棋盘碎片会被判动）。
-  // 右柱 12px < minPanelFrac×240，即使被切出也会并回上一格。
-  // 棋盘纹理方向中性，不抬 dirCoh。
-  for (var gy = 2; gy < 97; gy += 7) {
-    for (var gx = 14; gx < 226; gx += 7) {
-      for (var dy = 0; dy < 3; dy++) {
-        for (var dx = 0; dx < 3; dx++) {
-          img.setPixel(gx + dx, gy + dy, 30, 30, 30);
+  // 上格 y 0..99：白底 + **去格点化**暗斑 + 两侧棋盘纹理柱（左 16px、右
+  // 12px）。柱让每一行都有非白像素（斑点行间的白缝若全宽达标，会被
+  // PanelSplitter 当成分隔白带把格切碎——真实对话格由气泡边框/人物线稿
+  // 扮演这个角色）；斑点直接贴进两侧柱区（x 14..225），柱与斑点之间不留
+  // 全白缝——缝宽 ≥1.2px 会被纵向白带检测切成独立格（纯棋盘碎片会被判
+  // 动）。右柱 12px < minPanelFrac×240，即使被切出也会并回上一格。
+  // 棋盘纹理方向中性，不抬 dirCoh。斑点**去格点化**（确定性行内抖动）：
+  // 等距点阵会被 M1 网点周期性特征否决（真实字形不是格点阵）。
+  var speckState = 20261025;
+  int speckNext(int max) {
+    speckState = (speckState * 6364136223846793005 + 1442695040888963407) &
+        0x7fffffffffffffff;
+    return (speckState >> 33) % max;
+  }
+
+  var speckGy = 2;
+  while (speckGy < 95) {
+    var speckGx = 14 + speckNext(5);
+    while (speckGx < 222) {
+      final runLen = 1 + speckNext(4);
+      final thick = 2 + speckNext(2);
+      final jx = speckNext(3);
+      for (var dy = 0; dy < thick; dy++) {
+        for (var dx = 0; dx < runLen; dx++) {
+          final px = speckGx + dx + jx, py = speckGy + dy;
+          if (px < 226 && py < 97) img.setPixel(px, py, 30, 30, 30);
         }
       }
+      speckGx += runLen + 3 + speckNext(3);
     }
+    speckGy += 6 + speckNext(4);
   }
   for (var y = 0; y < 100; y++) {
     for (var x = 0; x < 240; x++) {

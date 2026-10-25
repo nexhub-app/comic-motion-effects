@@ -1,4 +1,4 @@
-/// 动效画面判断（v1.9）：按画面内容裁决「这一格该不该动」。
+/// 动效画面判断（v1.9 → M1 几何扩展）：按画面内容裁决「这一格该不该动」。
 ///
 /// 与 [MotionGate]（页级、深度平坦度）互补：本判断是**格级、内容语义**——
 /// 对话气泡文字主导的格不该动（视差会把人物/文字割裂），速度线/集中线
@@ -14,11 +14,26 @@
 /// - 近白占比：分布连续无谷 → 不作判别特征，只作 0.12 的低栏语义护栏
 ///   （气泡白底可见性；低于此为墨线/网点主导，文字斑点不可信）。
 ///
-/// 保守语义「模糊→动」：三条件 AND，任一不满足即满幅。外部 AI 逐格裁决
-/// 走 `scene.json` 侧车（`scene_sidecar.dart`），命中格覆盖启发式。
+/// M1 几何扩展（`motion_redesign_plan_20261025.md` §4.1，修调研 §8.2 实测
+/// 坐实的两处域失效，特征与阈值全部纯几何零 AI、分布定值）：
+/// - **C1 网点否决**：黑白网点域实测 speckDensity 56.6（阈值 3.5 的 16 倍）
+///   ——网点点阵被数成文字笔画。新增 `dotPeriodicity`（暗像素网格自相关
+///   峰值）与 `speckUniformity`（斑点面积 std/mean）两特征：网点=高周期性
+///   ∧高尺寸均匀性，文字=两者皆低。三条件加「网点否决」：网点格不得因
+///   斑点密度判静（`isScreentone`）。
+/// - **C2 会聚检测**：放射集中线的方向均匀分布全 12 bin（实测 dirCoh
+///   0.236 < 动作阈值 0.30）→ 平行族盲点。新增 `convergenceCoh`：强边缘
+///   梯度相对候选灭点的「横向对齐」占比（梯度 ⊥ 笔画轴 ⇒ 笔画轴指向
+///   灭点）；`action = dirCoh ≥ θa ∨ convergenceCoh ≥ θc`。灭点坐标
+///   `vpX/vpY` 顺作镜头程序推镜锚点（一特征两用）。
+///
+/// 保守语义「模糊→静」（E2' 用户裁决）：三条件 AND + 网点否决，任一不
+/// 满足即动。外部 AI 逐格裁决走 `scene.json` 侧车（`scene_sidecar.dart`），
+/// 命中格覆盖启发式。
 library;
 
 import 'dart:math' as math;
+
 
 import 'apng_writer.dart' show PixelRect;
 import 'image_model.dart';
@@ -34,6 +49,41 @@ const double kTextWhiteMin = 0.12;
 /// 不可判静。
 const double kMaxDirCoh = 0.27;
 
+/// 网点周期性下限（C1 网点否决，M1）：暗像素网格自相关峰值 ≥ 此值判网点。
+/// 分布定值依据见 `build/corpus/distribution_report.txt`（M0 勘察）：黑白
+/// 网点域（点阵 2px/周期 6px）峰值 ≈0.95+，彩页 47 格主质量 ≤0.35、
+/// 文字格 ≤0.65（行距整齐的文字伪峰）→ 取谷 0.72。
+const double kScreentonePeriodicityMin = 0.72;
+
+/// 网点判定所需最少斑点数（均匀性分支护栏）：小格子少量斑点不足以构成
+/// 「尺寸均匀的点阵」证据。
+const int kScreentoneSpeckMin = 24;
+
+/// 斑点尺寸均匀性上限（C1 网点否决均匀性分支）：斑点面积 std/mean 低于
+/// 此值 = 等尺寸点阵（网点）。分布定值（M0 勘察 build/corpus）：网点域
+/// ≤0.10（等径点阵），合成/真实文字 ≥0.31/≥0.77（笔画尺寸异质）→ 取
+/// 谷 0.30。
+const double kScreentoneUniformityMax = 0.30;
+
+/// 会聚一致性阈值（C2 放射集中线，M1）：强边缘相对最优灭点的横向对齐
+/// 占比 ≥ 此值判动作格。分布定值（M0 勘察 build/corpus）：合成集中线格
+/// ≥0.616（Bresenham 线族）；真实彩页上尾——c04_p018 格 0 检出 0.62
+///（人工目检确认该格有放射冲击线，旧启发式 dirCoh 盲点判静——**C2 修正
+/// 而非回归**），非动作格上尾 0.5382 → 取谷 0.58。
+const double kActionConvergenceMin = 0.58;
+
+/// 会聚灭点搜索的横向容差（弧度正弦口径）：梯度与「指向灭点方向」的
+/// 夹角 ≥72°（|dot| ≤ sin18°）计为对齐——梯度 ⊥ 笔画轴、笔画轴指向
+/// 灭点的几何口径。
+const double kConvergenceSinTol = 0.309;
+
+/// 会聚灭点粗搜网格边界（归一化格坐标）：灭点常在格外（集中线从格外
+/// 涌入），搜索范围扩到 [−0.6, 1.6]²。
+const double _vpLo = -0.6, _vpHi = 1.6;
+const int _vpSteps = 23; // (hi-lo)/step+1, step=0.1
+const int _maxEdgeSamples = 1800; // 灭点搜索的边缘采样上限（确定性抽样）
+const double _vpBorderMargin = 4.0; // 距格边此距离内的边缘不参与（格框伪会聚）
+
 /// 单格画面特征（工作分辨率口径；与校准探针逐行同源）。
 class PanelMotionFeatures {
   const PanelMotionFeatures({
@@ -41,6 +91,12 @@ class PanelMotionFeatures {
     required this.whiteFrac,
     required this.dirCoherence,
     required this.edgeFrac,
+    this.speckCount = 0,
+    this.speckUniformity = 0.0,
+    this.dotPeriodicity = 0.0,
+    this.convergenceCoh = 0.0,
+    this.vpX = 0.5,
+    this.vpY = 0.5,
   });
 
   /// 小暗连通域密度（斑点数/千像素）——文字笔画的结构代理。
@@ -54,6 +110,25 @@ class PanelMotionFeatures {
 
   /// 强边缘像素占比（辅助观测，不参与判定）。
   final double edgeFrac;
+
+  /// 计入斑点密度的小暗连通域个数（网点否决均匀性分支的量级护栏）。
+  final int speckCount;
+
+  /// 斑点面积 std/mean（M1）：等尺寸点阵 ≈0，笔画群（文字）≥0.5。
+  final double speckUniformity;
+
+  /// 暗像素网格自相关峰值（M1）：min(横向, 纵向) 最优滞后匹配率——
+  /// 点阵 ≈0.95+，文字（间距不齐）≤0.65。
+  final double dotPeriodicity;
+
+  /// 会聚一致性（M1）：强边缘相对最优灭点的横向对齐占比——放射集中线
+  /// ≈0.85+，平行线/普通格 ≤ 基线。
+  final double convergenceCoh;
+
+  /// 最优灭点（归一化格坐标，M1）：动作格镜头程序的推镜锚点。
+  /// 无会聚结构时取格中心。
+  final double vpX;
+  final double vpY;
 }
 
 int _lum(RgbaImage img, int o) =>
@@ -65,19 +140,27 @@ PanelMotionFeatures extractPanelMotionFeatures(RgbaImage panel) {
   final n = w * h;
   var white = 0;
   final isDark = List<bool>.filled(n, false);
+  final darkIdx = <int>[];
   for (var y = 0; y < h; y++) {
     var o = y * w * 4;
     for (var x = 0; x < w; x++, o += 4) {
       final l = _lum(panel, o);
       if (l >= 245) white++;
-      if (l <= 96) isDark[y * w + x] = true;
+      if (l <= 96) {
+        isDark[y * w + x] = true;
+        darkIdx.add(y * w + x);
+      }
     }
   }
 
   // Sobel 强边缘 + 12 bin 无方向直方图（0..π），跳过 1px 边框。
+  // M1：边缘样本（位置 + 单位梯度）延迟收集——先做连通域拿到「大域」
+  // 标记，灭点搜索只用长笔画（线族）的边缘像素（网点小点的边缘会把
+  // 采样池淹没，见网点+集中线叠加夹具的教训）。
   const tau = 120;
   final hist = List<int>.filled(12, 0);
   var edgeCount = 0;
+  final exX = <double>[], exY = <double>[], exU = <double>[], exV = <double>[];
   for (var y = 1; y < h - 1; y++) {
     for (var x = 1; x < w - 1; x++) {
       final o00 = ((y - 1) * w + x - 1) * 4;
@@ -98,25 +181,35 @@ PanelMotionFeatures extractPanelMotionFeatures(RgbaImage panel) {
         final theta = (math.atan2(gy.toDouble(), gx.toDouble()) + math.pi) %
             math.pi;
         hist[(theta / math.pi * 12).floor().clamp(0, 11)]++;
+        exX.add(x.toDouble());
+        exY.add(y.toDouble());
+        exU.add(gx / mag);
+        exV.add(gy / mag);
       }
     }
   }
   final topBin = hist.reduce(math.max);
   final dirCoh = edgeCount == 0 ? 0.0 : topBin / edgeCount;
 
-  // 小暗连通域（4 邻接，面积 2..48 计数）：文字斑点。
+  // 小暗连通域（4 邻接，面积 2..48 计数）：文字斑点。M1 记录面积分布供
+  // 尺寸均匀性特征，并标记点径级像素（面积 ≤16）供网点周期性自相关使用
+  // （文字叠加稀释防护：分母限制在点径级像素上）。
   final visited = List<bool>.filled(n, false);
   final stack = <int>[];
   var specks = 0;
+  final areas = <int>[];
+  final speckPix = List<bool>.filled(n, false);
   for (var i = 0; i < n; i++) {
     if (!isDark[i] || visited[i]) continue;
     var area = 0;
     var overflow = false;
+    final member = <int>[];
     stack.add(i);
     visited[i] = true;
     while (stack.isNotEmpty) {
       final p = stack.removeLast();
       area++;
+      member.add(p);
       if (area > 48) overflow = true; // 色块/线稿连通域，不是文字斑点
       final px = p % w, py = p ~/ w;
       if (px > 0 && isDark[p - 1] && !visited[p - 1]) {
@@ -136,7 +229,203 @@ PanelMotionFeatures extractPanelMotionFeatures(RgbaImage panel) {
         stack.add(p + w);
       }
     }
-    if (!overflow && area >= 2) specks++;
+    if (!overflow && area >= 2) {
+      specks++;
+      areas.add(area);
+      if (area <= 16) {
+        for (final p in member) {
+          speckPix[p] = true;
+        }
+      }
+    }
+  }
+
+  // 大域标记：独立做一遍 **8 连通**洪泛（面积 >16 = 线族/长笔画/色块）。
+  // 4 连通会把 1px 斜线碎成单像素（对角步进），线族的几何连续性在 8
+  // 连通下才成立；斑点/文字语义保持 4 连通口径不变。
+  final large8 = List<bool>.filled(n, false);
+  {
+    final visited8 = List<bool>.filled(n, false);
+    final stack8 = <int>[];
+    for (var i = 0; i < n; i++) {
+      if (!isDark[i] || visited8[i]) continue;
+      var area = 0;
+      final member = <int>[];
+      stack8.add(i);
+      visited8[i] = true;
+      while (stack8.isNotEmpty) {
+        final p = stack8.removeLast();
+        area++;
+        member.add(p);
+        final px = p % w, py = p ~/ w;
+        for (var dy = -1; dy <= 1; dy++) {
+          for (var dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            final nx = px + dx, ny = py + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            final q = ny * w + nx;
+            if (isDark[q] && !visited8[q]) {
+              visited8[q] = true;
+              stack8.add(q);
+            }
+          }
+        }
+      }
+      if (area > 16) {
+        for (final p in member) {
+          large8[p] = true;
+        }
+      }
+    }
+  }
+
+  // 灭点采样资格：**细笔画空旷边缘**——
+  // (a) 邻近 8 连通大域（线族/长笔画的连续性；4 连通碎化 1px 斜线）；
+  // (b) 3×3 局部暗像素 ≤4（笔画在空旷处的边缘；网点簇/实心域/线点相触
+  //     处的密集墨边缘不参与——并入线族的点边缘是叠加夹具稀释会聚分的
+  //     根因，其梯度对任意灭点都是噪声）。
+  bool vpSampleEligible(int p) {
+    final px = p % w, py = p ~/ w;
+    var darkCnt = 0;
+    for (var dy = -1; dy <= 1; dy++) {
+      for (var dx = -1; dx <= 1; dx++) {
+        final nx = px + dx, ny = py + dy;
+        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+        if (isDark[ny * w + nx]) darkCnt++;
+      }
+    }
+    if (darkCnt > 4) return false;
+    if (large8[p]) return true;
+    for (var dy = -1; dy <= 1; dy++) {
+      for (var dx = -1; dx <= 1; dx++) {
+        if (dx == 0 && dy == 0) continue;
+        final nx = px + dx, ny = py + dy;
+        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+        if (large8[ny * w + nx]) return true;
+      }
+    }
+    return false;
+  }
+
+  // M1 网点周期性：暗像素网格自相关峰值。对滞后 L ∈ [2, min(24, 边/4)]，
+  // matchH(L) = 暗像素中向右平移 L 仍为暗的占比，matchV 同理向下；
+  // dotPeriodicity = max_L min(matchH, matchV)——点阵在两轴同时高（旋转
+  // 点阵的轴向滞后仍与格点重合），文字行距伪峰只出现在单轴或低值。
+  // 分母优先取点径级像素（网点抗文字稀释）；点径级像素不足（粗网点相触
+  // 连成大连通域等）时回落全暗像素。
+  var dotPeriodicity = 0.0;
+  var latticeIdx = <int>[];
+  var latticeTotal = 0;
+  for (var i = 0; i < n; i++) {
+    if (speckPix[i]) latticeIdx.add(i);
+  }
+  latticeTotal = latticeIdx.length;
+  if (latticeTotal < 40) {
+    latticeIdx = darkIdx;
+    latticeTotal = darkIdx.length;
+  }
+  if (latticeTotal > 0 && w >= 8 && h >= 8) {
+    final maxLag = math.min(24, math.min(w, h) >> 2);
+    for (var lag = 2; lag <= maxLag; lag++) {
+      var mh = 0, mv = 0;
+      for (final p in latticeIdx) {
+        final px = p % w, py = p ~/ w;
+        if (px + lag < w && isDark[p + lag]) mh++;
+        if (py + lag < h && isDark[p + lag * w]) mv++;
+      }
+      final pair = math.min(mh / latticeTotal, mv / latticeTotal);
+      if (pair > dotPeriodicity) dotPeriodicity = pair;
+    }
+  }
+
+  // M1 斑点尺寸均匀性：std/mean（点阵 ≈0，笔画群 ≥0.5）。
+  var speckUniformity = 0.0;
+  if (areas.length >= 2) {
+    var sum = 0, sumSq = 0;
+    for (final a in areas) {
+      sum += a;
+      sumSq += a * a;
+    }
+    final mean = sum / areas.length;
+    final variance = sumSq / areas.length - mean * mean;
+    if (mean > 0) {
+      speckUniformity = math.sqrt(math.max(0.0, variance)) / mean;
+    }
+  }
+
+  // M1 会聚检测：候选灭点粗搜（23×23 归一化网格 [−0.6,1.6]²）+ 局部精化。
+  // 口径：梯度 ⊥ 笔画轴、笔画轴指向灭点 ⇒ 边缘样本的梯度与「指向灭点
+  // 方向」近正交（|dot| ≤ sin18°）计为会聚支持。采样限制在**大域边缘**
+  // （长笔画线族）——网点小点/文字碎片的边缘不参与（既防稀释也防噪声）；
+  // 格框伪会聚由边界预留压制（见常量文档）。
+  var convergenceCoh = 0.0;
+  var vpX = 0.5, vpY = 0.5;
+  final sampleCount = exX.length;
+  if (sampleCount >= 24) {
+    // 确定性抽样：均匀步长取至多 _maxEdgeSamples 个大域样本。
+    final stride = sampleCount > _maxEdgeSamples
+        ? (sampleCount / _maxEdgeSamples).ceil()
+        : 1;
+    final sx = <double>[], sy = <double>[], su = <double>[], sv = <double>[];
+    final margin = _vpBorderMargin;
+    for (var i = 0; i < sampleCount; i += stride) {
+      final x = exX[i], y = exY[i];
+      if (x < margin || y < margin || x >= w - margin || y >= h - margin) {
+        continue;
+      }
+      if (!vpSampleEligible(y.toInt() * w + x.toInt())) continue;
+      sx.add(x);
+      sy.add(y);
+      su.add(exU[i]);
+      sv.add(exV[i]);
+    }
+    final m = sx.length;
+    if (m >= 24) {
+      // 候选为归一化坐标，样本为像素坐标——打分前换算到像素空间。
+      double scoreAt(double vpx, double vpy) {
+        final vx = vpx * w, vy = vpy * h;
+        var hits = 0;
+        for (var i = 0; i < m; i++) {
+          final dx = vx - sx[i], dy = vy - sy[i];
+          final len = math.sqrt(dx * dx + dy * dy);
+          if (len < 1e-6) continue;
+          final dot = (su[i] * dx + sv[i] * dy) / len;
+          if (dot.abs() <= kConvergenceSinTol) hits++;
+        }
+        return hits / m;
+      }
+
+      var best = -1.0, bx = 0.0, by = 0.0;
+      for (var gy = 0; gy < _vpSteps; gy++) {
+        final vpy = _vpLo + (_vpHi - _vpLo) * gy / (_vpSteps - 1);
+        for (var gx = 0; gx < _vpSteps; gx++) {
+          final vpx = _vpLo + (_vpHi - _vpLo) * gx / (_vpSteps - 1);
+          final s = scoreAt(vpx, vpy);
+          if (s > best) {
+            best = s;
+            bx = vpx;
+            by = vpy;
+          }
+        }
+      }
+      // 局部精化：±0.1 归一化步长 0.025（9×9）。
+      const step = 0.025;
+      for (var dy = -4; dy <= 4; dy++) {
+        for (var dx = -4; dx <= 4; dx++) {
+          final vpx = bx + dx * step;
+          final vpy = by + dy * step;
+          final s = scoreAt(vpx, vpy);
+          if (s > best) {
+            best = s;
+            bx = vpx;
+            by = vpy;
+          }
+        }
+      }
+      convergenceCoh = best;
+      vpX = bx.clamp(0.0, 1.0).toDouble();
+      vpY = by.clamp(0.0, 1.0).toDouble();
+    }
   }
 
   return PanelMotionFeatures(
@@ -144,6 +433,12 @@ PanelMotionFeatures extractPanelMotionFeatures(RgbaImage panel) {
     whiteFrac: white / n,
     dirCoherence: dirCoh,
     edgeFrac: edgeCount / n,
+    speckCount: specks,
+    speckUniformity: speckUniformity,
+    dotPeriodicity: dotPeriodicity,
+    convergenceCoh: convergenceCoh,
+    vpX: vpX,
+    vpY: vpY,
   );
 }
 
@@ -180,14 +475,21 @@ class HeuristicPanelMotionJudge extends PanelMotionJudge {
 
   double _scaleOf(RgbaImage panel) {
     final f = extractPanelMotionFeatures(panel);
-    final still = f.speckDensity >= kTextSpeckMin &&
-        f.whiteFrac >= kTextWhiteMin &&
-        f.dirCoherence <= kMaxDirCoh;
+    final still = isTextStill(f);
     return still ? 0.0 : 1.0;
   }
 
-  /// 文字格三条件判定（Phase E 复用：策略判断器的静格档同规则）。
+  /// 网点判定（C1 否决，M1）：周期性峰值达阈值（点阵格，含点相触连成
+  /// 大连通域的粗网点——CC 特征失效时自相关仍然命中），或斑点量足且
+  /// 尺寸高度均匀（非整周期排布的网点）。命中格不得因斑点密度判静。
+  static bool isScreentone(PanelMotionFeatures f) =>
+      f.dotPeriodicity >= kScreentonePeriodicityMin ||
+      (f.speckCount >= kScreentoneSpeckMin &&
+          f.speckUniformity <= kScreentoneUniformityMax);
+
+  /// 文字格判定（M1 加网点否决）：三条件 AND，网点格被否决。
   static bool isTextStill(PanelMotionFeatures f) =>
+      !isScreentone(f) &&
       f.speckDensity >= kTextSpeckMin &&
       f.whiteFrac >= kTextWhiteMin &&
       f.dirCoherence <= kMaxDirCoh;
@@ -338,12 +640,30 @@ class ClassifierPanelStrategyJudge extends PanelStrategyJudge {
   }
 }
 
-/// 内置张力分档判断器（Phase E）。**用户裁决（2026-10-24）：默认静止，
-/// 只有氛围与张力描绘才需要动态效果**——保守语义自 v1.9 的「模糊→动」
-/// 翻转为「模糊→静」，细节密集的叙事格不再被视差切片。
+/// 逐格诊断（M2 MotionPack 的 panels.json 载荷）：分档类别 + 启发式置信
+/// + 判定用特征 + 生效策略。clsConf ∈ [0,1] 是**决策距阈值比**（判定特征
+/// 越过其阈值的倍数，钳到 1）——启发式没有概率语义，记录的是确定性证据
+/// 强度；小模型分类器接入后由其 softmax 语义另行覆盖。
+class PanelDiagnosis {
+  const PanelDiagnosis({
+    required this.cls,
+    required this.clsConf,
+    required this.features,
+    required this.strategy,
+  });
+
+  final PanelClass cls;
+  final double clsConf;
+  final PanelMotionFeatures features;
+  final PanelMotionStrategy strategy;
+}
+
+/// 内置张力分档判断器（Phase E；M1 扩动作判据）。**用户裁决（2026-10-24）：
+/// 默认静止，只有氛围与张力描绘才需要动态效果**——保守语义自 v1.9 的
+/// 「模糊→动」翻转为「模糊→静」，细节密集的叙事格不再被视差切片。
 /// 分档（阈值全部分布定值，禁止逐页标注调参）：
-/// - 文字格 → scale 0（复用 v1.9 三条件）；
-/// - 张力·动作格（方向笔触族）→ tempo 1.5；
+/// - 文字格 → scale 0（v1.9 三条件 + M1 网点否决：网点格不因斑点密度判静）；
+/// - 张力·动作格（平行速度线族 ∨ 放射集中线族）→ tempo 1.5；
 /// - 张力·特写格（主体域占格大）→ tempo 0.75 + subjectBoost 1.2；
 /// - 氛围格（近空/渐变大场面）→ scale 0.6 + tempo 0.75；
 /// - **其余（叙事/细节格）→ scale 0（默认静止）**。
@@ -355,33 +675,83 @@ class HeuristicSceneStrategyJudge extends PanelStrategyJudge {
       RgbaImage working, List<PixelRect> panels, List<SubjectMask> subjects) {
     return [
       for (var i = 0; i < panels.length; i++)
-        _strategyOf(
+        _diagnose(
+          _cropPanel(working, panels[i]),
+          i < subjects.length ? subjects[i] : SubjectMask.empty(1, 1),
+        ).strategy,
+    ];
+  }
+
+  /// 逐格诊断（M2 pack 生产入口）：分档 + 类别 + 置信一次性产出，
+  /// 与 [panelStrategies] 同一判定路径（策略恒等）。
+  List<PanelDiagnosis> diagnose(
+      RgbaImage working, List<PixelRect> panels, List<SubjectMask> subjects) {
+    return [
+      for (var i = 0; i < panels.length; i++)
+        _diagnose(
           _cropPanel(working, panels[i]),
           i < subjects.length ? subjects[i] : SubjectMask.empty(1, 1),
         ),
     ];
   }
 
-  PanelMotionStrategy _strategyOf(RgbaImage panel, SubjectMask mask) {
+  PanelDiagnosis _diagnose(RgbaImage panel, SubjectMask mask) {
     final f = extractPanelMotionFeatures(panel);
-    if (HeuristicPanelMotionJudge.isTextStill(f)) {
-      return const PanelMotionStrategy(scale: 0.0);
+    // 文字样三条件（未否决=真文字格；被网点否决=网点底假文字信号——
+    // 两者语义都按叙事静格处理，类别记 narrative）。
+    final textLike = f.speckDensity >= kTextSpeckMin &&
+        f.whiteFrac >= kTextWhiteMin &&
+        f.dirCoherence <= kMaxDirCoh;
+    if (textLike) {
+      return PanelDiagnosis(
+        cls: PanelClass.narrative,
+        clsConf: math.min(1.0, f.speckDensity / kTextSpeckMin),
+        features: f,
+        strategy: const PanelMotionStrategy(scale: 0.0),
+      );
     }
-    // 张力·动作：速度线/集中线族。
-    if (f.dirCoherence >= kActionDirCohMin) {
-      return PanelMotionStrategy(tempo: kActionTempo);
+    // 张力·动作：平行速度线族（dirCoh）∨ 放射集中线族（M1 会聚）。
+    final dirAct = f.dirCoherence >= kActionDirCohMin;
+    final convAct = f.convergenceCoh >= kActionConvergenceMin;
+    if (dirAct || convAct) {
+      final ratio = math.max(
+        f.dirCoherence / kActionDirCohMin,
+        f.convergenceCoh / kActionConvergenceMin,
+      );
+      return PanelDiagnosis(
+        cls: PanelClass.action,
+        clsConf: math.min(1.0, ratio),
+        features: f,
+        strategy: PanelMotionStrategy(tempo: kActionTempo),
+      );
     }
     // 张力·特写：大特写本身是戏剧张力（主体领跑）。
     if (mask.hasSubjects && mask.maxBlobFrac >= kCloseupBlobMin) {
-      return PanelMotionStrategy(
-          tempo: kCloseupTempo, subjectBoost: kCloseupBoost);
+      return PanelDiagnosis(
+        cls: PanelClass.closeup,
+        clsConf: math.min(1.0, mask.maxBlobFrac / kCloseupBlobMin),
+        features: f,
+        strategy: PanelMotionStrategy(
+            tempo: kCloseupTempo, subjectBoost: kCloseupBoost),
+      );
     }
     // 氛围：近空/渐变大场面（呼吸感）。
     if (f.edgeFrac <= kAtmosphereEdgeMax) {
-      return PanelMotionStrategy(
-          scale: kAtmosphereScale, tempo: kAtmosphereTempo);
+      return PanelDiagnosis(
+        cls: PanelClass.atmosphere,
+        clsConf: math.min(
+            1.0, kAtmosphereEdgeMax / math.max(f.edgeFrac, 1e-6) * 0.5),
+        features: f,
+        strategy: PanelMotionStrategy(
+            scale: kAtmosphereScale, tempo: kAtmosphereTempo),
+      );
     }
     // 叙事/细节格：默认静止（模糊→静）。
-    return const PanelMotionStrategy(scale: 0.0);
+    return PanelDiagnosis(
+      cls: PanelClass.narrative,
+      clsConf: 0.0,
+      features: f,
+      strategy: const PanelMotionStrategy(scale: 0.0),
+    );
   }
 }
