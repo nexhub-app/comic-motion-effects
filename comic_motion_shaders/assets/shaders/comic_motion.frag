@@ -10,7 +10,8 @@
 // alpha 混合天然不串色，本 shader 无需读 clip 元数据。
 //
 // uniform 布局约定：float uniform 按声明序对应 Dart 侧 setFloat(i, v)
-// 的索引 0..18；sampler 单独按声明序对应 setImageSampler 0..3。
+// 的索引 0..27（M3 镜头主线化 19→28，加性扩展在尾部）；sampler 单独按
+// 声明序对应 setImageSampler 0..3。
 
 #include <flutter/runtime_effect.glsl>
 
@@ -32,6 +33,18 @@ uniform float uVignetteOn;      // 0/1
 uniform float uVignetteStrength; // 压暗强度 0..1
 uniform float uVignetteSoftness; // 过渡柔度 0..1
 uniform vec2  uSize;            // 画布像素尺寸
+// M3 camera 块（19..25）：全画布一致仿射（program.json 的镜头程序）。
+uniform float uCameraOn;        // 0/1
+uniform float uCameraMode;      // 0=pushIn（往返 cos） 1=drift（横移 sin）
+uniform float uCameraAnchorX;   // 焦点 uv x（action=灭点 / closeup=主体质心）
+uniform float uCameraAnchorY;   // 焦点 uv y
+uniform float uCameraZoomSpan;  // 推镜跨度 zoom1−zoom0（zoom0 恒 1）
+uniform float uCameraDriftAmp;  // 漂移幅度（uv 宽度分数，drift 模式）
+uniform float uCameraPhase;     // 镜头相位 0..1（宿主整周期对齐；0=静息恒等）
+// M3 focus 块（26..27）：G-3 焦点升档——动效本体变强（镜头跨度+视差幅度
+// ×乘数），熄焦回落；tempo 乘数在宿主相位处生效，不进 shader。
+uniform float uFocusOn;         // 0/1
+uniform float uFocusScaleMul;   // 幅度乘数（≥1）
 
 uniform sampler2D uTex0;
 uniform sampler2D uTex1;
@@ -63,6 +76,30 @@ vec4 over(vec4 src, vec4 dst) {
 void main() {
   vec2 uv = FlutterFragCoord().xy / uSize;
 
+  // M3 camera：以程序锚点为焦点的整画布仿射（在 breathing 之前应用——
+  // 镜头是合成前的取景变换，视差/呼吸在其后的层空间内发生）。
+  // 相位 0 静息恒等：z=1、d=0 → uv 不变（首帧 = 原画契约）。
+  vec2 cameraShift = vec2(0.0);
+  float cameraZ = 1.0;
+  if (uCameraOn > 0.5) {
+    float span = uCameraZoomSpan;
+    if (uCameraMode < 0.5) {
+      // pushIn：往返推镜（cos 半波，相位 0/1 静息、0.5 处峰值）。
+      cameraZ = 1.0 + span * (0.5 - 0.5 * cos(uCameraPhase * kTwoPi));
+    } else {
+      // drift：横移整周期往返；覆盖放大盖住平移露边（震屏同款公式）。
+      cameraShift = vec2(uCameraDriftAmp * sin(uCameraPhase * kTwoPi), 0.0);
+      cameraZ = 1.0 + 2.0 * abs(cameraShift.x);
+    }
+    // G-3 焦点升档：镜头动效本体变强。
+    if (uFocusOn > 0.5) {
+      cameraZ = 1.0 + (cameraZ - 1.0) * uFocusScaleMul;
+    }
+    vec2 anchor = vec2(uCameraAnchorX, uCameraAnchorY);
+    // dest(p) = src(anchor + (p − d − anchor)/z)（纹素中心约定 −0.5 抵消在 uv 域无标量偏置）。
+    uv = anchor + (uv - anchor - cameraShift) / cameraZ;
+  }
+
   // breathing：围绕中心缩放（zoom>1 = 内容放大 → 采样范围收缩）
   if (uBreathingOn > 0.5) {
     float zoom = 1.0 + uZoom * sin(uPhase * kTwoPi);
@@ -72,6 +109,10 @@ void main() {
   vec2 baseShift = vec2(0.0);
   if (uParallaxOn > 0.5) {
     baseShift = vec2(uParallaxX, uParallaxY);
+    // G-3 焦点升档：视差幅度同步乘数。
+    if (uFocusOn > 0.5) {
+      baseShift *= uFocusScaleMul;
+    }
   }
 
   vec4 acc = vec4(0.0);

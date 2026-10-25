@@ -15,5 +15,7 @@ export 'src/motion_uniforms.dart'
         MotionUniforms,
         kFloatCount,
         kMaxLayers,
+        cameraPhaseFor,
+        withPackProgram,
         sweepPositionFor;
 export 'src/realtime_motion_view.dart' show RealtimeMotionView, kShaderAsset;

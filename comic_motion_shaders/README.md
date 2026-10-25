@@ -35,7 +35,8 @@ time. The layered textures themselves are still exported deterministically.
 
 ## Uniform contract
 
-`assets/shaders/comic_motion.frag` declares 19 float uniforms + 4 samplers;
+`assets/shaders/comic_motion.frag` declares 28 float uniforms + 4 samplers
+(M3 camera mainline: 19 -> 28, additive tail — indices 0..18 unchanged);
 `MotionUniforms.toFloats()` serializes them in the index order below (the
 `kIndex*` constants mirror this table). Changing either side requires
 updating the other and this table.
@@ -57,6 +58,14 @@ updating the other and this table.
 | 15 | uVignetteStrength | vignette strength | [0, 1] |
 | 16 | uVignetteSoftness | vignette softness | [0, 1] |
 | 17–18 | uSize | canvas pixel size | > 0 |
+| 19 | uCameraOn | camera switch (M3 mainline, whole-canvas affine) | 0/1 |
+| 20 | uCameraMode | 0 = pushIn (round-trip cos), 1 = drift (sin) | 0/1 |
+| 21–22 | uCameraAnchorX/Y | zoom/drift focal point (uv; action = vanishing point, closeup = subject centroid) | [0, 1] |
+| 23 | uCameraZoomSpan | push-in span zoom1−zoom0 (zoom0 is always 1) | [0, 0.5] |
+| 24 | uCameraDriftAmp | drift amplitude (uv width fraction) | [0, 0.25] |
+| 25 | uCameraPhase | camera phase (host whole-cycle aligned; 0 = rest identity) | [0, 1] |
+| 26 | uFocusOn | focus upshift switch (G-3: reader focus strengthens the motion itself) | 0/1 |
+| 27 | uFocusScaleMul | amplitude multiplier for camera span + parallax | [1, 4] |
 | sampler 0–3 | uTex0..3 | layered textures (far-to-near, exportLayers order) | — |
 
 When fewer than 4 layer textures are provided, empty slots are filled with

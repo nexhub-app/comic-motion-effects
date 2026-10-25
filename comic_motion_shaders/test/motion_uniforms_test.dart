@@ -1,6 +1,7 @@
 // W7 uniform 映射逻辑单测（布局契约/钳制/时钟映射）。
 // 布局契约：toFloats() 索引序 = assets/shaders/comic_motion.frag 的
 // float uniform 声明序（见 README uniform 表）。
+import 'package:comic_motion/comic_motion.dart';
 import 'package:comic_motion_shaders/comic_motion_shaders.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -145,6 +146,112 @@ void main() {
       final end = sweepPositionFor(
           elapsed: period, period: period, halfWidth: 0.1);
       expect(end, closeTo(-0.1, 1e-9)); // elapsed % period == 0
+    });
+  });
+
+  group('M3 camera/focus（镜头主线化）', () {
+    test('默认全关：camera/focus 块恒等且 kFloatCount=28', () {
+      final f = const MotionUniforms().toFloats();
+      expect(f.length, kFloatCount);
+      expect(f[MotionUniforms.kIndexCameraOn], 0.0);
+      expect(f[MotionUniforms.kIndexCameraMode], 0.0);
+      expect(f[MotionUniforms.kIndexFocusOn], 0.0);
+      expect(f[MotionUniforms.kIndexFocusScaleMul], 1.0);
+    });
+
+    test('旧布局索引 0..18 不动（加性扩展契约）', () {
+      final f = const MotionUniforms(parallax: true, parallaxDx: 0.02)
+          .toFloats();
+      expect(f[MotionUniforms.kIndexParallaxOn], 1.0);
+      expect(f[MotionUniforms.kIndexParallaxX], closeTo(0.02, 1e-6));
+      expect(f[MotionUniforms.kIndexSizeX], greaterThan(0));
+    });
+
+    test('withPackProgram：action pushIn → camera 块按程序落位', () {
+      const program = MotionProgram(
+        camera: CameraProgram(
+            type: CameraType.pushIn, anchorX: 0.37, anchorY: 0.44,
+            zoom0: 1.0, zoom1: 1.10, periodSec: 2.0),
+        scale: 1, tempo: 1.5, subjectBoost: 1,
+      );
+      final u = withPackProgram(const MotionUniforms(), program,
+          tSec: 0.25, durationSec: 1.0);
+      final f = u.toFloats();
+      expect(f[MotionUniforms.kIndexCameraOn], 1.0);
+      expect(f[MotionUniforms.kIndexCameraMode], 0.0);
+      expect(f[MotionUniforms.kIndexCameraAnchorX], closeTo(0.37, 1e-6));
+      expect(f[MotionUniforms.kIndexCameraAnchorY], closeTo(0.44, 1e-6));
+      expect(f[MotionUniforms.kIndexCameraZoomSpan], closeTo(0.10, 1e-6));
+      // 相位整周期对齐：t=0.25, dur=1, period=2 → cycles=1 → phase 0.25。
+      expect(f[MotionUniforms.kIndexCameraPhase], closeTo(0.25, 1e-9));
+    });
+
+    test("withPackProgram：narrative none → cameraOn=0（E2' 静默语义）", () {
+      const program = MotionProgram(
+        camera: CameraProgram.none,
+        scale: 0, tempo: 1, subjectBoost: 1,
+      );
+      final u = withPackProgram(const MotionUniforms(), program,
+          tSec: 0.5, durationSec: 1.0);
+      expect(u.cameraOn, isFalse);
+      expect(u.toFloats()[MotionUniforms.kIndexCameraOn], 0.0);
+    });
+
+    test('withPackProgram：drift 程序 → mode=1 + 幅度落位', () {
+      const program = MotionProgram(
+        camera: CameraProgram(
+            type: CameraType.drift, anchorX: 0.5, anchorY: 0.5,
+            driftAmp: 0.015, periodSec: 6.0),
+        scale: 0.6, tempo: 0.75, subjectBoost: 1,
+      );
+      final u = withPackProgram(const MotionUniforms(), program,
+          tSec: 1.5, durationSec: 6.0);
+      final f = u.toFloats();
+      expect(f[MotionUniforms.kIndexCameraOn], 1.0);
+      expect(f[MotionUniforms.kIndexCameraMode], 1.0);
+      expect(f[MotionUniforms.kIndexCameraDriftAmp], closeTo(0.015, 1e-9));
+      expect(f[MotionUniforms.kIndexCameraPhase], closeTo(0.25, 1e-9));
+    });
+
+    test('focus 升档：focused=true 时乘数生效且钳制 [1, 4]', () {
+      const program = MotionProgram(
+        camera: CameraProgram(
+            type: CameraType.pushIn, anchorX: 0.5, anchorY: 0.5,
+            zoom0: 1.0, zoom1: 1.10, periodSec: 2.0),
+        scale: 1, tempo: 1, subjectBoost: 1,
+        focus: FocusProgram(scaleMul: 1.6, tempoMul: 1.25),
+      );
+      final idle = withPackProgram(const MotionUniforms(), program,
+          tSec: 0, durationSec: 1.0);
+      final focused = withPackProgram(const MotionUniforms(), program,
+          tSec: 0.4, durationSec: 1.0, focused: true);
+      expect(idle.focusOn, isFalse);
+      expect(focused.focusOn, isTrue);
+      expect(focused.focusScaleMul, closeTo(1.6, 1e-6));
+      // tempoMul 进相位：t=0.4, dur=1, period=2 → cycles=1×1.25 → phase 0.5。
+      expect(focused.cameraPhase, closeTo(0.5, 1e-6));
+      final overclamped = withPackProgram(
+          const MotionUniforms(),
+          const MotionProgram(
+            camera: CameraProgram(
+                type: CameraType.pushIn, anchorX: 0.5, anchorY: 0.5,
+                zoom0: 1.0, zoom1: 1.10, periodSec: 2.0),
+            scale: 1, tempo: 1, subjectBoost: 1,
+            focus: FocusProgram(scaleMul: 99, tempoMul: 1),
+          ),
+          tSec: 0, durationSec: 1.0, focused: true);
+      expect(overclamped.toFloats()[MotionUniforms.kIndexFocusScaleMul], 4.0);
+    });
+
+    test('cameraPhaseFor：t=dur 回 0（整周期无缝）', () {
+      expect(
+          cameraPhaseFor(
+              tSec: 1.0, durationSec: 1.0, periodSec: 2.0),
+          closeTo(0.0, 1e-9));
+      expect(
+          cameraPhaseFor(
+              tSec: 0.5, durationSec: 1.0, periodSec: 0.5),
+          closeTo(0.0, 1e-9));
     });
   });
 }
