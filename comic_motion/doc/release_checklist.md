@@ -71,6 +71,13 @@ pre-publish window 临时 wire 步骤，恢复测 pub.dev 真实产物。
 刷新 lock（analyze 无 issue、18 例测试全绿），CI 再次拆除 pre-publish
 window 的两处临时 wire 步骤。
 
+**执行记录（2026-10-27）**：engine 1.9.0 经 tag `v1.9.0` 触发 OIDC 自动发布
+至 pub.dev（pub.dev API 确认 latest = 1.9.0）；本次一次性带上从未发布的
+1.6.0 / 1.7.0 / 1.8.0（pub.dev 会提示「非增量更新」，属预期）。伴生包
+`comic_motion_flutter` 0.3.0 与 `comic_motion_shaders` 0.2.0 依赖下限提到
+`^1.9.0`，在引擎上架后各自打 tag 发布；server 同步提到 `^1.9.0` 并刷新
+lock，CI 拆除发布窗口的临时 wire 步骤。
+
 ## 四、pub.dev score 优化清单
 
 | 计分项 | 现状 | 动作 |

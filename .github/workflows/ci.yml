@@ -87,17 +87,6 @@ jobs:
         with:
           channel: stable
 
-      # comic_motion 1.9.0 发布 pub.dev 前的临时窗口：两个伴生包的依赖下限
-      # 已提到 ^1.9.0。运行时生成 path override（该文件被 .gitignore 显式
-      # 排除，不入库），发布后删除本步。
-      - name: Wire companions to workspace engine until 1.9.0 publishes
-        run: |
-          cat > pubspec_overrides.yaml <<'YAML'
-          dependency_overrides:
-            comic_motion:
-              path: ../comic_motion
-          YAML
-
       - name: Install dependencies
         run: flutter pub get
 

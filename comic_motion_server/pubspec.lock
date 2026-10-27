@@ -77,10 +77,10 @@ packages:
     dependency: "direct main"
     description:
       name: comic_motion
-      sha256: "942375c5b36b8daee7b85993ed49e77bc1aeedb6a6d54edc3dd557d30a5bae7c"
+      sha256: "43b2903b0161c7c5d5c68a0ebd1e0e7cfd374a420e100bdab2693959c5c18921"
       url: "https://pub.dev"
     source: hosted
-    version: "1.5.0"
+    version: "1.9.0"
   convert:
     dependency: transitive
     description:
