@@ -435,8 +435,18 @@ void main() {
     setUp(() {
       tmp = Directory.systemTemp.createTempSync('cm_test');
     });
-    tearDown(() {
-      tmp.deleteSync(recursive: true);
+    tearDown(() async {
+      // Windows 上文件句柄的释放比 isolate 退出稍慢（含杀毒软件扫描），
+      // 立刻递归删除会撞 errno 32。这里做有界重试，最多等 3 秒。
+      for (var attempt = 0; attempt < 30; attempt++) {
+        try {
+          if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+          return;
+        } on FileSystemException {
+          if (attempt == 29) rethrow;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
     });
 
     test('processFile 输出文件齐全且 params.json 可还原 hash', () async {
@@ -1572,8 +1582,18 @@ void main() {
     setUp(() {
       tmp = Directory.systemTemp.createTempSync('cm_cache_test');
     });
-    tearDown(() {
-      tmp.deleteSync(recursive: true);
+    tearDown(() async {
+      // Windows 上文件句柄的释放比 isolate 退出稍慢（含杀毒软件扫描），
+      // 立刻递归删除会撞 errno 32。这里做有界重试，最多等 3 秒。
+      for (var attempt = 0; attempt < 30; attempt++) {
+        try {
+          if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+          return;
+        } on FileSystemException {
+          if (attempt == 29) rethrow;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
     });
 
     /// 造一个（可能合法的）缓存条目目录：files 为 相对名 → 字节数。
@@ -1732,8 +1752,18 @@ void main() {
     setUp(() {
       tmp = Directory.systemTemp.createTempSync('cm_frame_test');
     });
-    tearDown(() {
-      tmp.deleteSync(recursive: true);
+    tearDown(() async {
+      // Windows 上文件句柄的释放比 isolate 退出稍慢（含杀毒软件扫描），
+      // 立刻递归删除会撞 errno 32。这里做有界重试，最多等 3 秒。
+      for (var attempt = 0; attempt < 30; attempt++) {
+        try {
+          if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+          return;
+        } on FileSystemException {
+          if (attempt == 29) rethrow;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
     });
 
     test('回调计数 = 帧数、严格按帧号有序、探针帧计入，PNG 与落盘帧同字节',
@@ -1824,8 +1854,18 @@ void main() {
     setUp(() {
       tmp = Directory.systemTemp.createTempSync('cm_diff_test');
     });
-    tearDown(() {
-      tmp.deleteSync(recursive: true);
+    tearDown(() async {
+      // Windows 上文件句柄的释放比 isolate 退出稍慢（含杀毒软件扫描），
+      // 立刻递归删除会撞 errno 32。这里做有界重试，最多等 3 秒。
+      for (var attempt = 0; attempt < 30; attempt++) {
+        try {
+          if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+          return;
+        } on FileSystemException {
+          if (attempt == 29) rethrow;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
     });
 
     /// GIF89a 规范合成裁判（disposal 0/1：画布跨帧保留、矩形贴盖）。

@@ -283,6 +283,7 @@ Future<Object> _runInBackground({
   Isolate? isolate;
   var bridgeAlive = false;
   final result = Completer<Object>();
+  final exited = Completer<void>();
 
   resultPort.listen((msg) {
     if (result.isCompleted) return;
@@ -311,6 +312,7 @@ Future<Object> _runInBackground({
     }
   });
   exitPort.listen((_) {
+    if (!exited.isCompleted) exited.complete();
     if (!result.isCompleted) {
       result.completeError(StateError('background isolate exited unexpectedly'));
     }
@@ -348,7 +350,15 @@ Future<Object> _runInBackground({
     resultPort.close();
     progressPort.close();
     framesPort.close();
+    final iso = isolate;
+    if (iso != null) {
+      // 等后台 isolate 真退出：它持有的文件句柄此时才归还操作系统。
+      // Windows 上立即 kill 后马上删输出目录会撞 errno 32（文件被占用），
+      // 因此这里等待一次退出信号（带超时兜底）。
+      iso.kill(priority: Isolate.immediate);
+      await exited.future
+          .timeout(const Duration(seconds: 5), onTimeout: () => null);
+    }
     exitPort.close();
-    isolate?.kill(priority: Isolate.immediate);
   }
 }
