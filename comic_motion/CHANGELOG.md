@@ -7,6 +7,31 @@ and `dart run bin/comic_motion.dart --version` share one version constant.
 > The full changelog in Chinese — including all historical entries — lives in
 > [doc/CHANGELOG_zh-CN.md](doc/CHANGELOG_zh-CN.md).
 
+## 1.9.1 (2026-10-27)
+
+Background-teardown fix on Windows. **No API change, no config change, no
+output change** — cancelling a background run now also releases its file
+handles before returning.
+
+### Background isolate handle release
+
+Cancelling (or failing) a `processFileInBackground` /
+`processBytesInBackground` run and then immediately deleting the output
+directory could fail on Windows with `errno 32` (the file is in use): the
+runner killed the isolate and returned before the isolate had actually
+exited, so the handles it held had not been handed back to the OS yet. It now
+waits for the isolate's exit signal after `kill` (5 s timeout as a backstop)
+before closing the ports. Same behaviour on every other path; rendering is
+untouched.
+
+### Test & CI robustness
+
+- Engine test teardown retries temp-directory deletion on Windows (bounded,
+  100 ms backoff) instead of failing the suite on a transient lock.
+- CI `pub get` steps retry on transient version-solving / network failures
+  inside a release window (the macOS runner once resolved a version that had
+  just been published a few minutes earlier).
+
 ## 1.9.0 (2026-10-25)
 
 Directable camera + pack hand-off, plus sharper page reading. **Additive only:

@@ -2,6 +2,26 @@
 
 本项目版本记录。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)，`pubspec.yaml`、`lib/src/version.dart` 与 `dart run bin/comic_motion.dart --version` 使用同一常量。
 
+## 1.9.1（2026-10-27）
+
+Windows 后台收尾修复。**不动 API、不动配置、不动输出**——取消后台任务后
+文件句柄及时归还。
+
+### 后台 isolate 句柄回收
+
+取消（或出错）`processFileInBackground` / `processBytesInBackground` 后立刻
+删输出目录，在 Windows 上可能报 `errno 32`（文件被占用）：此前执行器 kill
+后台 isolate 后就直接返回，隔离区还没真正退出，它持有的句柄尚未交还系统。
+现在 `kill` 之后等一次退出信号（5 秒超时兜底）再关闭端口。其他路径行为不变，
+渲染完全不受影响。
+
+### 测试与 CI 稳健性
+
+- 引擎测试的临时目录 teardown 改为有界重试（100ms 退避），不再因为瞬时
+  占用把整组测试判红。
+- CI 的 `pub get` 步骤在发布窗口内对偶发的 version solving / 网络失败重试
+  （macOS runner 曾解析不到刚上架几分钟的版本）。
+
 ## 1.9.0（2026-10-25）
 
 可指挥的镜头 + 打包交付，外加更准的页面判读。**纯加性：不进
