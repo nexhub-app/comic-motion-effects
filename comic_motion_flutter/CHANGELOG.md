@@ -19,6 +19,8 @@ previous behavior unchanged):
 - Gyro/touch parallax (`ParallaxGyroView`) is user-input-driven and
   unaffected by this switch.
 - Example app: choice chips toggle both modes live.
+- Requires `comic_motion: ^1.9.0` (the interactive layer consumes the engine
+  APIs that land in that version).
 
 ## 0.2.0 (2026-10-23)
 

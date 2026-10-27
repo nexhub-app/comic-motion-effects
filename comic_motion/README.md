@@ -384,6 +384,26 @@ render flat-depth pages as a single static frame. For on-device ML depth
 see the opt-in companion package `comic_motion_depth_onnx` (MiDaS v2.1
 small 256 via onnxruntime_v2; the core engine stays native-free).
 
+### Camera program & motion packs (v1.9, opt-in)
+
+Scene analysis can now direct the camera, not just pick effects.
+`MotionProgramTable.build()` turns per-panel judgements into a
+`CameraProgram` (`pushIn` / `drift` / `none`, anchor, zoom span, drift
+amplitude) plus a `FocusProgram`; `render/camera.dart` plays it as one
+whole-cycle waveform — identity at `t=0` (first frame == author's drawing),
+integer texel remapping under `snapMask`, edge extension instead of
+transparent bleed. `narrative` panels never get a camera, and pages without a
+program skip the pass, so default output is byte-identical.
+
+For devices that should analyse once and render many times,
+`analyzeForPack()` emits a self-describing `MotionPack` (v1: `pack.json` with
+panels / program / layers / depth16bit / masks / parts and an FNV-1a64
+`packHash` over the file manifest — no timestamps, so two runs produce the
+same bytes), and `renderPackStillFrame(t)` renders from a pack without
+re-analysing (`t=0` byte-identical to `renderStillFrame(0)`). The realtime
+path consumes the same `program.json` through
+[`comic_motion_shaders`](../comic_motion_shaders) 0.2.0.
+
 ### High-fps APNG (opt-in, 60 fps)
 
 `outputFormat: apng` supports two extra encoding knobs (see

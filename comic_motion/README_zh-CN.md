@@ -434,6 +434,22 @@ v1.5 另有两个 opt-in 能力，不进默认效果表：`effectRegions`（效�
   首帧静置一致、无缝循环、字节确定性、越足迹/改 alpha/造色三类越界，以及单部件
   形变成本。
 
+## 镜头程序与动效包（v1.9，opt-in）
+
+场景分析现在能指挥镜头，而不只是挑效果。`MotionProgramTable.build()` 把逐格
+判定变成 `CameraProgram`（`pushIn` / `drift` / `none`，锚点、缩放跨度、横移
+幅度）与 `FocusProgram`；`render/camera.dart` 用整周期波形播放——`t=0` 恒等
+（首帧 == 原画）、`snapMask` 下整纹素重映射、边缘延展代替透明渗出。
+`narrative` 格永不上镜头，没有程序的页面整段跳过，所以默认输出逐字节不变。
+
+需要「分析一次、渲染多次」的设备走 `analyzeForPack()`：产出自描述的
+`MotionPack`（v1：`pack.json` 含 panels / program / layers / depth16bit /
+masks / parts，`packHash` 是对文件清单做 FNV-1a64、无时间戳 ⇒ 双跑同字节），
+`renderPackStillFrame(t)` 直接从包渲染不再分析（`t=0` 与
+`renderStillFrame(0)` 逐字节相同）。实时路径经
+[`comic_motion_shaders`](../comic_motion_shaders) 0.2.0 消费同一份
+`program.json`。
+
 ## 内置预设（presets/）
 
 42 个现成参数组合（`EffectConfig.fromJson` 直接加载；CLI 场景可 `--config` 使用）：

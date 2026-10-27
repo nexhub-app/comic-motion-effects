@@ -7,6 +7,85 @@ and `dart run bin/comic_motion.dart --version` share one version constant.
 > The full changelog in Chinese — including all historical entries — lives in
 > [doc/CHANGELOG_zh-CN.md](doc/CHANGELOG_zh-CN.md).
 
+## 1.9.0 (2026-10-25)
+
+Directable camera + pack hand-off, plus sharper page reading. **Additive only:
+nothing enters `EffectConfig`, the `configHash` is byte-identical, no new
+required keys, and every existing entry point still renders byte-for-byte what
+it rendered before.** This release also carries the two minor versions that
+were prepared but never published (1.6.0 external depth, 1.7.0 rest-hold) and
+the 1.8.0 motion gate — their sections follow below.
+
+### `MotionProgram` — camera and focus decided per panel, rendered once
+
+`lib/src/motion_program.dart` turns the scene analysis into a per-panel
+direction: `CameraProgram` (`pushIn` / `drift` / `none`, anchor point, zoom
+span, drift amplitude) and `FocusProgram` (`scaleMul`, `tempoMul`), assembled
+by `MotionProgramTable.build()` from the strategy judgement plus the subject
+box. `narrative` panels keep their silent semantics — no camera, no new
+motion — so the table never overrides an existing "this panel rests" ruling.
+
+`render/camera.dart` consumes it: one whole-cycle waveform (period aligned to
+the GIF duration, so the loop stays seamless), an identity transform at `t=0`
+(the first frame is always the author's drawing, locked by test), integer
+texel remapping under `snapMask` so pixel-art pages do not shimmer, and edge
+extension instead of transparent bleed. Pages without a camera program skip
+the pass entirely — the identity short-circuit is what keeps the default path
+byte-identical.
+
+### `MotionPack` v1 — one analysis, many renders
+
+`analyzeForPack()` writes a self-describing pack: `pack.json` (panels,
+program, layers, depth16bit, masks, parts and a `packHash` that is an
+FNV-1a64 over the file manifest — no timestamps, so the same input produces
+the same pack twice, byte for byte), the per-panel program JSON, the layer
+plate, the 16-bit depth field, the subject/mask maps and the part sidecars.
+`renderPackStillFrame(t)` renders a single frame from a pack without
+re-analysing; its `t=0` frame is byte-identical to `renderStillFrame(0)`
+(contract test). The point is the realtime path: analyse once on device, ship
+the pack, and let the shader consume the same `program.json` the offline
+renderer would have used.
+
+### Page reading: screen-tone and focus-line blind spots
+
+Heuristic scene features gained two discriminators, both pure-Dart and
+threshold-frozen from a four-domain survey (bw / manhwa / manhua / color):
+
+- `dotPeriodicity` (dark-pixel autocorrelation, denominator preferring
+  dot-diameter-scale periods) and `speckUniformity` (blob-area std/mean) feed
+  a **screen-tone veto**: black-and-white halftone pages are no longer
+  mistaken for "static" by speck density.
+- `convergenceCoh` plus a vanishing point (`vpX`/`vpY`, coarse 23×23 search
+  then refined) recovered **focus-line action panels**: pages whose only
+  motion cue is radial concentration now judge as action, and the vanishing
+  point doubles as the push-in anchor.
+- Colour-page regression stays aligned with the previous classification on all
+  46 surveyed panels; `HeuristicSceneStrategyJudge.diagnose()` exposes a
+  `PanelDiagnosis` for callers that want the reasoning.
+
+### `ModelTierInfo` — degradation made visible
+
+The model tier (0–3) and the component manifest are written into `pack.json`,
+so a pack rendered without the intended components is self-describing instead
+of failing silently at a `existsSync` check.
+
+### Fix: camera pass sampling in clone-local coordinates
+
+A camera region whose rectangle does not start at the origin (real multi-panel
+pages, `ry/rx > 0`) mixed canvas coordinates with clone coordinates, pushing
+the sampling window out of the clone: the push-in panel showed displaced
+content and edge smearing. `y`/`x` are now converted to clone-local
+coordinates before the inverse mapping. `camera_pass_test` locks the case with
+a position-encoded gradient (anchor nearly fixed, panel corner sampling inside
+the rectangle).
+
+### Other
+
+- `comic_motion_flutter` 0.3.0 (interactive reading layer + `PageMotionMode`)
+  and `comic_motion_shaders` 0.2.0 (camera + focus uniform block) are released
+  alongside this version and both now require `comic_motion: ^1.9.0`.
+- Core test suite: 705 tests green; `dart analyze` 0 issues.
+
 ## 1.8.0 (2026-10-24)
 
 Motion gate: "render motion only when the page has depth worth animating."

@@ -2,17 +2,66 @@
 
 本项目版本记录。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)，`pubspec.yaml`、`lib/src/version.dart` 与 `dart run bin/comic_motion.dart --version` 使用同一常量。
 
-## 未发布
+## 1.9.0（2026-10-25）
 
-### 部位动作：多部件首帧静置（handMotion）
+可指挥的镜头 + 打包交付，外加更准的页面判读。**纯加性：不进
+`EffectConfig`，configHash 逐字节不变，没有新增必填键，既有入口的输出
+逐字节不变。** 本次同时带上两个写好但从未发布的次版本（1.6.0 外部深度、
+1.7.0 静息保持）与 1.8.0 动效门槛——三段正文依次列在下方。
 
-逐部件错相此前直接把 `i·π/4` 塞进正弦相位，只有 0 号部件在 `t=0` 归零——
-一页两只手时首帧已有一只预旋 `8·sin(π/4)≈5.7°`，违反「静帧 = 原画姿态」。
-现在每个部件先扣掉自身相位的静息值 `sin(φ)`，再按扣直流后的峰值
-`1+|sin φ|` 归一化：所有部件在 `t=0` 与 `t=duration` 都回到静息位，错相仍
-体现在摆动时机与方向上，`ampDeg` 依旧是峰值摆角。单部件输出不变；
-`hand_acceptance` 的双部件页由 rest=fail 转为 4/4 全绿。侧车与配置指纹
-均不受影响。
+### `MotionProgram`——逐格决定镜头与焦点，只渲染一次
+
+`lib/src/motion_program.dart` 把场景分析变成逐格导演指令：`CameraProgram`
+（`pushIn` / `drift` / `none`，锚点、缩放跨度、横移幅度）与 `FocusProgram`
+（`scaleMul`、`tempoMul`），由 `MotionProgramTable.build()` 结合策略判定与
+主体框组装。`narrative` 格保持静默语义——不上镜头、不加动效——程序表不
+翻案任何既有的「这格该静」裁定。
+
+`render/camera.dart` 消费它：整周期波形（周期与 GIF 时长对齐 ⇒ 循环无接缝）、
+`t=0` 恒等（首帧永远是原画，测试锁定）、`snapMask` 下整纹素重映射（像素画
+页不抖）、边缘延展而不是透明渗出。没有镜头程序的页面整段跳过——正是这条
+恒等短路让默认路径逐字节不变。
+
+### `MotionPack` v1——分析一次，多处复用
+
+`analyzeForPack()` 产出自描述包：`pack.json`（panels / program / layers /
+depth16bit / masks / parts，`packHash` 是对文件清单做 FNV-1a64，无时间戳
+⇒ 同输入双跑逐字节一致）、逐格程序 JSON、层版、16 位深度场、主体/掩码图
+与部件侧车。`renderPackStillFrame(t)` 直接从包渲染单帧、不再分析，其
+`t=0` 帧与 `renderStillFrame(0)` 逐字节相同（契约测试）。意义在实时路径：
+端侧分析一次、交付包，shader 消费的正是离线渲染会用的那一份
+`program.json`。
+
+### 页面判读：网点与集中线的盲点
+
+启发式场景特征补两个判别器，纯 Dart，阈值由四域语料勘察定值（黑白 / 韩漫 /
+国漫 / 彩页）：
+
+- `dotPeriodicity`（暗像素自相关，分母优先点径级周期）+ `speckUniformity`
+  （斑点面积 std/mean）组成**网点否决**：黑白网点页不再被斑点密度误判为静格。
+- `convergenceCoh` + 灭点（`vpX`/`vpY`，23×23 粗搜后精化）找回**放射集中线
+  动作格**：只靠放射线传达动势的页面现在判为动作格，灭点同时充当推镜锚点。
+- 彩页在 46 格勘察集上分类回归与旧版对齐；`HeuristicSceneStrategyJudge
+  .diagnose()` 输出 `PanelDiagnosis` 供调用方查看判定依据。
+
+### `ModelTierInfo`——降级可见
+
+模型档位（tier0–3）与组件清单写进 `pack.json`：缺组件渲染出的包自带说明，
+而不是在 `existsSync` 处静默吞掉。
+
+### 修复：镜头 pass 采样统一到克隆局部坐标
+
+镜头区域矩形起点不在原点时（真实多格页 `ry/rx > 0`），画布坐标与克隆坐标
+混用会把采样窗整体推出克隆，推镜格出现内容错位与边缘拖影。现在 `y`/`x`
+先换算到克隆局部坐标再做逆映射。`camera_pass_test` 用位置编码渐变锁死该
+用例（锚点近似不动、格角采样落在矩形内部）。
+
+### 其他
+
+- `comic_motion_flutter` 0.3.0（互动阅读层 + `PageMotionMode`）与
+  `comic_motion_shaders` 0.2.0（camera + focus uniform 块）同批发布，两者
+  依赖下限均提到 `comic_motion: ^1.9.0`。
+- 核心测试 705 例全绿；`dart analyze` 0 问题。
 
 ## 1.8.0（2026-10-24）
 
@@ -37,6 +86,75 @@
 `processFileInBackground` / `processBytesInBackground` 新增
 `motionGateFactory`，传递语义与 `depthEstimatorFactory` 完全一致：工厂在
 后台 isolate 内调用一次，必须可跨 isolate 发送。null（默认）= 永远动画。
+
+## 1.7.0（2026-10-23）
+
+容器层静息保持，服务「只在值得动的时候动」的阅读体验。**默认配置的序列化
+形状与 configHash 一字未动**——`holdSec` 默认 0，不显式抬高就不写进
+`toJson()`（条件序列化习语），既有配置哈希逐字节不变。
+
+### `EffectConfig.holdSec`——整段动效 + 首帧静息保持
+
+`holdSec > 0` 在完整动效周期之后追加**一帧静息帧**（t=0 帧，与原画逐像素
+相同），该帧延迟为 `(holdSec * 100).round()` 厘秒（GIF/APNG 的 16 位延迟可
+表达到 655.35 s）。动效帧——数量、波形、周期对齐——完全不动，只有容器写出
+变化。循环接缝是「静息 → 动效起点」（t=0 也是静息），无缝循环契约因此不必
+碰渲染路径。`reducedMotion` 维持单帧静帧契约：两者同时设置时跳过 hold。
+rect 差分模式下 hold 帧写成最小差分矩形（GIF 在 `StreamingGifBuilder
+.addHoldFrame` 内量化；APNG 与动效帧同样对 RGBA 差分，`apngRect` 模式亦然）。
+
+### APNG 精确延迟的例外放行
+
+`encoding.apngDelay == 'exact'` 此前完全忽略逐帧 `delayCs` 覆盖。现在显式
+覆盖在两种模式下都生效（按厘秒写——逐帧分母在 APNG 里合法，且静息段是
+动效相位契约之外的静态期）；没有覆盖的帧仍写 1/fps 的精确分数、逐字节不变。
+`high_fps_test.dart` 的契约随之更新——是收紧不是放松：两条分支各自钉死。
+
+### 部位动作：多部件首帧静置（handMotion）
+
+逐部件错相此前直接把 `i·π/4` 塞进正弦相位，只有 0 号部件在 `t=0` 归零——
+一页两只手时首帧已有一只预旋 `8·sin(π/4)≈5.7°`，违反「静帧 = 原画姿态」。
+现在每个部件先扣掉自身相位的静息值 `sin(φ)`，再按扣直流后的峰值
+`1+|sin φ|` 归一化：所有部件在 `t=0` 与 `t=duration` 都回到静息位，错相仍
+体现在摆动时机与方向上，`ampDeg` 依旧是峰值摆角。单部件输出不变；
+`hand_acceptance` 的双部件页由 rest=fail 转为 4/4 全绿。侧车与配置指纹
+均不受影响。
+
+## 1.6.0（2026-10-23）
+
+外部深度估算做主体/背景分层，端到端 opt-in。**默认配置的序列化形状与
+configHash 一字未动**——`DepthEstimator` 是执行期依赖，新增后处理只在注入
+实例时激活；默认路径像素逐字节不变（字节契约测试群与 v1.4.0 极性摘要锚点
+共同锁定）。
+
+### `DepthEstimator` 接口与后台 isolate 工厂
+
+`MotionPipeline` 新增可选 `depthEstimator`（模型输出 `DepthMap`，0 远 / 1 近，
+分辨率任意，引擎重采样到工作分辨率）。后台入口 `processFileInBackground` /
+`processBytesInBackground` 接收 `depthEstimatorFactory` 而不是实例：模型与
+任何原生运行时必须在管线 isolate **内部**创建，工厂抛错与管线其他错误一样
+上抛调用方。两者都不传时输出与 1.5.x 逐字节一致（测试钉住「显式启发式 ==
+默认字节」）。
+
+### `RegionCoherentDepthEstimator`——纯 Dart 区域一致后处理
+
+平滑的 ML 深度场会被三层量化切断：平涂色块（对话气泡、横幅）与线稿跨层
+碎裂，视差时文字出现重影。这个包装器让深度在同一色连通区域内分段常量
+（5 位量化，非墨像素 8 连通并查集），墨线分量从其最近的区域多源 BFS 填充；
+面积小于 `detailMinArea` 的区域（小字、网点细节）继承最近大区域的值——包括
+墨分量，因此深色横幅里的小字跟着横幅动，而不是穿透到页面背景。代价
+是每页多一遍纯 Dart 扫描（720 px 工作分辨率下桌面端数十毫秒）。30 页样本
+实测：`detailMinArea: 64` 把碎裂指标从启发式 0.221 降到均值 0.003、撕裂
+0.000，93% 的页面持平或更好（墨密子集 97%）。
+
+### `DepthMap.constantValued`——分段常量的硬阈值
+
+区域常量深度值稠密：相邻区域均值可能只差约 1e-3，分层器的 ±0.03 归属斜坡
+总会跨过阈值两侧，整块区域半透明——底图透出、文字重影（每层一个视差偏移）。
+估算器现在标记这类图（`constantValued = true`），分层器改用中点阈值 + 0/1
+硬归属，软边由既有空间羽化提供。默认（`false`）保持软斜坡、平滑场输出逐
+字节不变。产出分段常量图的外部估算器也应设置该标记（见
+`doc/external-depth.md`）。
 
 ## 1.5.0（2026-10-07）
 
