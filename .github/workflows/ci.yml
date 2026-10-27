@@ -29,6 +29,7 @@ jobs:
           sdk: 3.13.0
 
       - name: Install dependencies
+        shell: bash
         run: |
           # 发布窗口与 pub.dev CDN 传播期偶发 version solving / 网络抖动：有界重试
           for i in 1 2 3 4 5; do
@@ -65,6 +66,7 @@ jobs:
           sdk: stable
 
       - name: Install dependencies
+        shell: bash
         run: |
           for i in 1 2 3 4 5; do
             if dart pub get; then exit 0; fi
@@ -101,6 +103,7 @@ jobs:
           channel: stable
 
       - name: Install dependencies
+        shell: bash
         run: |
           for i in 1 2 3 4 5; do
             if flutter pub get; then exit 0; fi
