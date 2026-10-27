@@ -24,4 +24,6 @@ comic_motion_flutter/example/assets/*
 comic_motion_server/pubspec_overrides.yaml
 comic_motion_depth_onnx/pubspec_overrides.yaml
 comic_motion_flutter/example/pubspec_overrides.yaml
+comic_motion_flutter/pubspec_overrides.yaml
+comic_motion_shaders/pubspec_overrides.yaml
 comic_motion_depth_onnx/pubspec.lock

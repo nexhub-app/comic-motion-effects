@@ -159,11 +159,13 @@ void main() {
       final plainStill = await pipeline.renderStillFrame(input: pagePng, t: 0);
       expect(packStill, plainStill,
           reason: 't=0 镜头恒等跳过 → 首帧 = 无镜头静帧（契约锁定）');
-      // t 中段：镜头生效（与无镜头帧不同）。
+      // t 中段：镜头生效（与无镜头帧不同；PNG 字节数不必相等——内容
+      // 不同压缩率不同，逐字节比较取较短的长度即可证明画面已变）。
       final mid = pipeline.renderPackStillFrame(input: pagePng, t: 0.25);
       final plainMid = await pipeline.renderStillFrame(input: pagePng, t: 0.25);
       var diff = 0;
-      for (var i = 0; i < mid.length; i++) {
+      final n = mid.length < plainMid.length ? mid.length : plainMid.length;
+      for (var i = 0; i < n; i++) {
         if (mid[i] != plainMid[i]) diff++;
       }
       expect(diff, greaterThan(0), reason: '推镜中段改变画面（程序消费生效）');

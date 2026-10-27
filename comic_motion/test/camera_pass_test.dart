@@ -120,6 +120,36 @@ void main() {
         tier: RenderTier.standard,
       );
       expect(out.data, page.data, reason: 'camera none 恒等');
+      // 非原点格矩形：推镜采样窗朝锚点收缩（坐标换算回归锁定）。
+      // 位置编码渐变（r=x, g=y）：任意采样点的来源可从像素值反解。
+      // 格矩形不从原点出发——2026-10-25 目检真实多格页（ry=87/166/385）
+      // 抓到的画布/克隆坐标混用 bug 由本用例锁定。
+      final grad = RgbaImage(width: 200, height: 120);
+      for (var y = 0; y < 120; y++) {
+        for (var x = 0; x < 200; x++) {
+          grad.setPixel(x, y, x.clamp(0, 255), y.clamp(0, 255), 0);
+        }
+      }
+      final zoomed = grad.clone();
+      applyCameraPass(
+        frame: zoomed,
+        regions: [_pushIn(const PixelRect(100, 50, 100, 80))],
+        tSec: 1.0, // 峰值 zoom=1.10（period 2.0 == duration，整一周期）
+        durationSec: 2.0,
+        tier: RenderTier.standard,
+      );
+      // 锚点（150,90）在峰值缩放下近似不动（采样点=锚点本身）。
+      final c = zoomed.data[(90 * 200 + 150) * 4];
+      expect(c, inInclusiveRange(150 - 6, 150 + 6),
+          reason: '锚点像素近似不变（CR 在 ±0.05px 内混合）');
+      // 格左上角 (100,50)：zoom 内采样来自 a + (corner−a)/1.1 =
+      // (104.5, 53.6) —— 值必须落回矩形**内部**（bug 版会拉进矩形外
+      // 内容：r/g≈0 或边缘延展拖影）。
+      final cornerR = zoomed.data[(50 * 200 + 100) * 4];
+      expect(cornerR, inInclusiveRange(100, 109),
+          reason: 'r 通道 ≈104.5（来源在矩形内、朝锚点方向）');
+      final cornerG = zoomed.data[(50 * 200 + 100) * 4 + 1];
+      expect(cornerG, inInclusiveRange(50, 58), reason: 'g 通道 ≈53.6');
       // 下一格（y 60..120）推镜：只动本格。
       final half = page.clone();
       applyCameraPass(

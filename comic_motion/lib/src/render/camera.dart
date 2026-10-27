@@ -109,9 +109,14 @@ void applyCameraPass({
     final dst = frame.data;
     for (var y = ry; y < ry + rh; y++) {
       // dest(p) = src(a + (p − d − a)/z)，纹素中心约定（−0.5）。
-      final fy = ayl + (y + 0.5 - dy - ayl) * inv - 0.5;
+      // p 一律先换算到**克隆局部坐标**（ly/lx = 画布 − 克隆原点）：
+      // 格矩形起点不在原点时（真实多格页 ry/rx > 0），画布坐标与克隆
+      // 坐标混用会把采样窗整体推出克隆（2026-10-25 目检 0006 页抓到）。
+      final ly = y - sy0;
+      final fy = ayl + (ly + 0.5 - dy - ayl) * inv - 0.5;
       for (var x = rx; x < rx + rw; x++) {
-        final fx = axl + (x + 0.5 - dx - axl) * inv - 0.5;
+        final lx = x - sx0;
+        final fx = axl + (lx + 0.5 - dx - axl) * inv - 0.5;
         _sampleClamped(src, fx, fy, tier, snapMask, sx0, sy0, frame.width,
             (y * frame.width + x) * 4, dst);
       }
